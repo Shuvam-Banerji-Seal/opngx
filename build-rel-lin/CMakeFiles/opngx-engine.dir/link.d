@@ -11,6 +11,7 @@ opngx-engine: \
   CMakeFiles/opngx-engine.dir/src/util.c.o \
   CMakeFiles/opngx-engine.dir/src/cpu.c.o \
   CMakeFiles/opngx-engine.dir/src/port.c.o \
+  CMakeFiles/opngx-engine.dir/src/encode.c.o \
   CMakeFiles/opngx-engine.dir/src/main.c.o \
   /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/libm.a \
   /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/libm.a \
@@ -48,6 +49,8 @@ CMakeFiles/opngx-engine.dir/src/util.c.o:
 CMakeFiles/opngx-engine.dir/src/cpu.c.o:
 
 CMakeFiles/opngx-engine.dir/src/port.c.o:
+
+CMakeFiles/opngx-engine.dir/src/encode.c.o:
 
 CMakeFiles/opngx-engine.dir/src/main.c.o:
 

@@ -39,8 +39,8 @@ events:
     checks:
       - "Detecting C compiler ABI info"
     directories:
-      source: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-dvHqny"
-      binary: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-dvHqny"
+      source: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-E9F73C"
+      binary: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-E9F73C"
     cmakeVariables:
       CMAKE_C_FLAGS: ""
       CMAKE_C_FLAGS_DEBUG: "-g"
@@ -49,13 +49,13 @@ events:
       variable: "CMAKE_C_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-dvHqny'
+        Change Dir: '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-E9F73C'
         
-        Run Build Command(s): /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_f3995/fast
-        /usr/bin/make  -f CMakeFiles/cmTC_f3995.dir/build.make CMakeFiles/cmTC_f3995.dir/build
-        make[1]: Entering directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-dvHqny'
-        Building C object CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o
-        /usr/bin/cc   -v -o CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o -c /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c
+        Run Build Command(s): /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_70d06/fast
+        /usr/bin/make  -f CMakeFiles/cmTC_70d06.dir/build.make CMakeFiles/cmTC_70d06.dir/build
+        make[1]: Entering directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-E9F73C'
+        Building C object CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o
+        /usr/bin/cc   -v -o CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o -c /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c
         Using built-in specs.
         COLLECT_GCC=/usr/bin/cc
         Target: x86_64-pc-linux-gnu
@@ -63,8 +63,8 @@ events:
         Thread model: posix
         Supported LTO compression algorithms: zlib zstd
         gcc version 16.2.1 20260810 (GCC) 
-        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_f3995.dir/'
-         /usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1 -quiet -v /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_f3995.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mtune=generic -march=x86-64 -version -o /tmp/ccSNIUz5.s
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_70d06.dir/'
+         /usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1 -quiet -v /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_70d06.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mtune=generic -march=x86-64 -version -o /tmp/ccPml4qn.s
         GNU C23 (GCC) version 16.2.1 20260810 (x86_64-pc-linux-gnu)
         	compiled by GNU C version 16.2.1 20260810, GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.4.1, isl version isl-0.28-GMP
         
@@ -78,14 +78,14 @@ events:
          /usr/include
         End of search list.
         Compiler executable checksum: f931fde8682f21d1ebcf65f6b881e532
-        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_f3995.dir/'
-         as -v --64 -o CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o /tmp/ccSNIUz5.s
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_70d06.dir/'
+         as -v --64 -o CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o /tmp/ccPml4qn.s
         GNU assembler version 2.47 (x86_64-pc-linux-gnu) using BFD version (GNU Binutils) 2.47
         COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/
         LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../:/lib/:/usr/lib/
-        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.'
-        Linking C executable cmTC_f3995
-        /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_f3995.dir/link.txt --verbose=1
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.'
+        Linking C executable cmTC_70d06
+        /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_70d06.dir/link.txt --verbose=1
         Using built-in specs.
         COLLECT_GCC=/usr/bin/cc
         COLLECT_LTO_WRAPPER=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper
@@ -96,14 +96,14 @@ events:
         gcc version 16.2.1 20260810 (GCC) 
         COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/
         LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../:/lib/:/usr/lib/
-        COLLECT_GCC_OPTIONS='-static' '-v' '-o' 'cmTC_f3995' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_f3995.'
-         /usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/cchIVcSk.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_eh -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc --build-id --hash-style=gnu -m elf_x86_64 -static -o cmTC_f3995 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o --start-group -lgcc -lgcc_eh -latomic_asneeded -lc --end-group /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o
+        COLLECT_GCC_OPTIONS='-static' '-v' '-o' 'cmTC_70d06' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_70d06.'
+         /usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccvb1YV6.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_eh -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc --build-id --hash-style=gnu -m elf_x86_64 -static -o cmTC_70d06 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o --start-group -lgcc -lgcc_eh -latomic_asneeded -lc --end-group /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o
         collect2 version 16.2.1 20260810
-        /usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/cchIVcSk.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_eh -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc --build-id --hash-style=gnu -m elf_x86_64 -static -o cmTC_f3995 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o --start-group -lgcc -lgcc_eh -latomic_asneeded -lc --end-group /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o
+        /usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccvb1YV6.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_eh -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc --build-id --hash-style=gnu -m elf_x86_64 -static -o cmTC_70d06 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o --start-group -lgcc -lgcc_eh -latomic_asneeded -lc --end-group /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o
         GNU ld (GNU Binutils) 2.47
-        COLLECT_GCC_OPTIONS='-static' '-v' '-o' 'cmTC_f3995' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_f3995.'
-        /usr/bin/cc -static -v -Wl,-v CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o -o cmTC_f3995
-        make[1]: Leaving directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-dvHqny'
+        COLLECT_GCC_OPTIONS='-static' '-v' '-o' 'cmTC_70d06' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_70d06.'
+        /usr/bin/cc -static -v -Wl,-v CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o -o cmTC_70d06
+        make[1]: Leaving directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-E9F73C'
         
       exitCode: 0
   -
@@ -136,13 +136,13 @@ events:
       Parsed C implicit link information:
         link line regex: [^( *|.*[/\\])(ld[0-9]*(\\.[a-z]+)?|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
         linker tool regex: [^[ 	]*(->|")?[ 	]*(([^"]*[/\\])?(ld[0-9]*(\\.[a-z]+)?))("|,| |$)]
-        ignore line: [Change Dir: '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-dvHqny']
+        ignore line: [Change Dir: '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-E9F73C']
         ignore line: []
-        ignore line: [Run Build Command(s): /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_f3995/fast]
-        ignore line: [/usr/bin/make  -f CMakeFiles/cmTC_f3995.dir/build.make CMakeFiles/cmTC_f3995.dir/build]
-        ignore line: [make[1]: Entering directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-dvHqny']
-        ignore line: [Building C object CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o]
-        ignore line: [/usr/bin/cc   -v -o CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o -c /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c]
+        ignore line: [Run Build Command(s): /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_70d06/fast]
+        ignore line: [/usr/bin/make  -f CMakeFiles/cmTC_70d06.dir/build.make CMakeFiles/cmTC_70d06.dir/build]
+        ignore line: [make[1]: Entering directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-E9F73C']
+        ignore line: [Building C object CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o]
+        ignore line: [/usr/bin/cc   -v -o CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o -c /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c]
         ignore line: [Using built-in specs.]
         ignore line: [COLLECT_GCC=/usr/bin/cc]
         ignore line: [Target: x86_64-pc-linux-gnu]
@@ -150,8 +150,8 @@ events:
         ignore line: [Thread model: posix]
         ignore line: [Supported LTO compression algorithms: zlib zstd]
         ignore line: [gcc version 16.2.1 20260810 (GCC) ]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_f3995.dir/']
-        ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1 -quiet -v /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_f3995.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mtune=generic -march=x86-64 -version -o /tmp/ccSNIUz5.s]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_70d06.dir/']
+        ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1 -quiet -v /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_70d06.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mtune=generic -march=x86-64 -version -o /tmp/ccPml4qn.s]
         ignore line: [GNU C23 (GCC) version 16.2.1 20260810 (x86_64-pc-linux-gnu)]
         ignore line: [	compiled by GNU C version 16.2.1 20260810  GMP version 6.3.0  MPFR version 4.2.2  MPC version 1.4.1  isl version isl-0.28-GMP]
         ignore line: []
@@ -165,14 +165,14 @@ events:
         ignore line: [ /usr/include]
         ignore line: [End of search list.]
         ignore line: [Compiler executable checksum: f931fde8682f21d1ebcf65f6b881e532]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_f3995.dir/']
-        ignore line: [ as -v --64 -o CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o /tmp/ccSNIUz5.s]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_70d06.dir/']
+        ignore line: [ as -v --64 -o CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o /tmp/ccPml4qn.s]
         ignore line: [GNU assembler version 2.47 (x86_64-pc-linux-gnu) using BFD version (GNU Binutils) 2.47]
         ignore line: [COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/]
         ignore line: [LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../:/lib/:/usr/lib/]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.']
-        ignore line: [Linking C executable cmTC_f3995]
-        ignore line: [/home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_f3995.dir/link.txt --verbose=1]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o' '-c' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.']
+        ignore line: [Linking C executable cmTC_70d06]
+        ignore line: [/home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_70d06.dir/link.txt --verbose=1]
         ignore line: [Using built-in specs.]
         ignore line: [COLLECT_GCC=/usr/bin/cc]
         ignore line: [COLLECT_LTO_WRAPPER=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper]
@@ -183,13 +183,13 @@ events:
         ignore line: [gcc version 16.2.1 20260810 (GCC) ]
         ignore line: [COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/]
         ignore line: [LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../:/lib/:/usr/lib/]
-        ignore line: [COLLECT_GCC_OPTIONS='-static' '-v' '-o' 'cmTC_f3995' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_f3995.']
-        link line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/cchIVcSk.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_eh -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc --build-id --hash-style=gnu -m elf_x86_64 -static -o cmTC_f3995 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o --start-group -lgcc -lgcc_eh -latomic_asneeded -lc --end-group /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
+        ignore line: [COLLECT_GCC_OPTIONS='-static' '-v' '-o' 'cmTC_70d06' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_70d06.']
+        link line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccvb1YV6.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_eh -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc --build-id --hash-style=gnu -m elf_x86_64 -static -o cmTC_70d06 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o --start-group -lgcc -lgcc_eh -latomic_asneeded -lc --end-group /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2] ==> ignore
           arg [-plugin] ==> ignore
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so] ==> ignore
           arg [-plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper] ==> ignore
-          arg [-plugin-opt=-fresolution=/tmp/cchIVcSk.res] ==> ignore
+          arg [-plugin-opt=-fresolution=/tmp/ccvb1YV6.res] ==> ignore
           arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
           arg [-plugin-opt=-pass-through=-lgcc_eh] ==> ignore
           arg [-plugin-opt=-pass-through=-latomic_asneeded] ==> ignore
@@ -200,7 +200,7 @@ events:
           arg [elf_x86_64] ==> ignore
           arg [-static] ==> ignore
           arg [-o] ==> ignore
-          arg [cmTC_f3995] ==> ignore
+          arg [cmTC_70d06] ==> ignore
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o]
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o]
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o]
@@ -212,7 +212,7 @@ events:
           arg [-L/lib] ==> dir [/lib]
           arg [-L/usr/lib] ==> dir [/usr/lib]
           arg [-v] ==> ignore
-          arg [CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o] ==> ignore
+          arg [CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o] ==> ignore
           arg [--start-group] ==> ignore
           arg [-lgcc] ==> lib [gcc]
           arg [-lgcc_eh] ==> lib [gcc_eh]
@@ -222,7 +222,7 @@ events:
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o]
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
         ignore line: [collect2 version 16.2.1 20260810]
-        ignore line: [/usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/cchIVcSk.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_eh -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc --build-id --hash-style=gnu -m elf_x86_64 -static -o cmTC_f3995 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_f3995.dir/CMakeCCompilerABI.c.o --start-group -lgcc -lgcc_eh -latomic_asneeded -lc --end-group /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
+        ignore line: [/usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccvb1YV6.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_eh -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc --build-id --hash-style=gnu -m elf_x86_64 -static -o cmTC_70d06 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginT.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_70d06.dir/CMakeCCompilerABI.c.o --start-group -lgcc -lgcc_eh -latomic_asneeded -lc --end-group /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
         linker tool for 'C': /usr/bin/ld
         remove lib [gcc_eh]
         collapse obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o] ==> [/usr/lib/crt1.o]
@@ -258,12 +258,12 @@ events:
       - "/home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CheckCSourceCompiles.cmake:58 (cmake_check_source_compiles)"
       - "/home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/FindThreads.cmake:97 (CHECK_C_SOURCE_COMPILES)"
       - "/home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/FindThreads.cmake:163 (_threads_check_libc)"
-      - "CMakeLists.txt:24 (find_package)"
+      - "CMakeLists.txt:26 (find_package)"
     checks:
       - "Performing Test CMAKE_HAVE_LIBC_PTHREAD"
     directories:
-      source: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-kmhfjZ"
-      binary: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-kmhfjZ"
+      source: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-Lq4srM"
+      binary: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-Lq4srM"
     cmakeVariables:
       CMAKE_C_FLAGS: ""
       CMAKE_C_FLAGS_DEBUG: "-g"
@@ -272,17 +272,17 @@ events:
       variable: "CMAKE_HAVE_LIBC_PTHREAD"
       cached: true
       stdout: |
-        Change Dir: '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-kmhfjZ'
+        Change Dir: '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-Lq4srM'
         
-        Run Build Command(s): /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_2e66f/fast
-        /usr/bin/make  -f CMakeFiles/cmTC_2e66f.dir/build.make CMakeFiles/cmTC_2e66f.dir/build
-        make[1]: Entering directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-kmhfjZ'
-        Building C object CMakeFiles/cmTC_2e66f.dir/src.c.o
-        /usr/bin/cc -DCMAKE_HAVE_LIBC_PTHREAD  -std=gnu17 -o CMakeFiles/cmTC_2e66f.dir/src.c.o -c /home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-kmhfjZ/src.c
-        Linking C executable cmTC_2e66f
-        /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_2e66f.dir/link.txt --verbose=1
-        /usr/bin/cc -static  CMakeFiles/cmTC_2e66f.dir/src.c.o -o cmTC_2e66f
-        make[1]: Leaving directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-kmhfjZ'
+        Run Build Command(s): /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_c964b/fast
+        /usr/bin/make  -f CMakeFiles/cmTC_c964b.dir/build.make CMakeFiles/cmTC_c964b.dir/build
+        make[1]: Entering directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-Lq4srM'
+        Building C object CMakeFiles/cmTC_c964b.dir/src.c.o
+        /usr/bin/cc -DCMAKE_HAVE_LIBC_PTHREAD  -std=gnu17 -o CMakeFiles/cmTC_c964b.dir/src.c.o -c /home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-Lq4srM/src.c
+        Linking C executable cmTC_c964b
+        /home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_c964b.dir/link.txt --verbose=1
+        /usr/bin/cc -static  CMakeFiles/cmTC_c964b.dir/src.c.o -o cmTC_c964b
+        make[1]: Leaving directory '/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/CMakeScratch/TryCompile-Lq4srM'
         
       exitCode: 0
   -
@@ -290,7 +290,7 @@ events:
     backtrace:
       - "/home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CheckIPOSupported.cmake:138 (try_compile)"
       - "/home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/share/cmake-3.31/Modules/CheckIPOSupported.cmake:261 (_ipo_run_language_check)"
-      - "CMakeLists.txt:28 (check_ipo_supported)"
+      - "CMakeLists.txt:30 (check_ipo_supported)"
     directories:
       source: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/_CMakeLTOTest-C/src"
       binary: "/home/shuvam/codes/ayush_opt/opngx/build-rel-lin/CMakeFiles/_CMakeLTOTest-C/bin"

@@ -4,7 +4,7 @@
 # compile C with /usr/bin/cc
 C_DEFINES = -DOPNGX_HAVE_LIBDEFLATE -Dopngx_EXPORTS
 
-C_INCLUDES = -I/home/shuvam/codes/ayush_opt/opngx/src -I/home/shuvam/codes/ayush_opt/opngx/vendor/win
+C_INCLUDES = -I/home/shuvam/codes/ayush_opt/opngx/vendor/stb -I/home/shuvam/codes/ayush_opt/opngx/src -I/home/shuvam/codes/ayush_opt/opngx/vendor/win
 
 C_FLAGS = -O3 -DNDEBUG -std=gnu17 -flto=auto -fno-fat-lto-objects -fPIC -Wall -Wextra -Werror -Wno-error=unknown-pragmas
 

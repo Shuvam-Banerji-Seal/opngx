@@ -4,6 +4,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/opngx.dir/src/compress.c.o.d"
   "CMakeFiles/opngx.dir/src/cpu.c.o"
   "CMakeFiles/opngx.dir/src/cpu.c.o.d"
+  "CMakeFiles/opngx.dir/src/encode.c.o"
+  "CMakeFiles/opngx.dir/src/encode.c.o.d"
   "CMakeFiles/opngx.dir/src/extract.c.o"
   "CMakeFiles/opngx.dir/src/extract.c.o.d"
   "CMakeFiles/opngx.dir/src/footage.c.o"

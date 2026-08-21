@@ -196,6 +196,33 @@ src/cpu.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/opngx.dir/build.make CMakeFiles/opngx.dir/src/cpu.c.s
 .PHONY : src/cpu.c.s
 
+src/encode.o: src/encode.c.o
+.PHONY : src/encode.o
+
+# target to build an object file
+src/encode.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/opngx-engine.dir/build.make CMakeFiles/opngx-engine.dir/src/encode.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/opngx.dir/build.make CMakeFiles/opngx.dir/src/encode.c.o
+.PHONY : src/encode.c.o
+
+src/encode.i: src/encode.c.i
+.PHONY : src/encode.i
+
+# target to preprocess a source file
+src/encode.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/opngx-engine.dir/build.make CMakeFiles/opngx-engine.dir/src/encode.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/opngx.dir/build.make CMakeFiles/opngx.dir/src/encode.c.i
+.PHONY : src/encode.c.i
+
+src/encode.s: src/encode.c.s
+.PHONY : src/encode.s
+
+# target to generate assembly for a file
+src/encode.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/opngx-engine.dir/build.make CMakeFiles/opngx-engine.dir/src/encode.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/opngx.dir/build.make CMakeFiles/opngx.dir/src/encode.c.s
+.PHONY : src/encode.c.s
+
 src/extract.o: src/extract.c.o
 .PHONY : src/extract.o
 
@@ -449,6 +476,9 @@ help:
 	@echo "... src/cpu.o"
 	@echo "... src/cpu.i"
 	@echo "... src/cpu.s"
+	@echo "... src/encode.o"
+	@echo "... src/encode.i"
+	@echo "... src/encode.s"
 	@echo "... src/extract.o"
 	@echo "... src/extract.i"
 	@echo "... src/extract.s"

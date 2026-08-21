@@ -10,6 +10,7 @@ libopngx.so: \
   CMakeFiles/opngx.dir/src/util.c.o \
   CMakeFiles/opngx.dir/src/cpu.c.o \
   CMakeFiles/opngx.dir/src/port.c.o \
+  CMakeFiles/opngx.dir/src/encode.c.o \
   CMakeFiles/opngx.dir/src/libapi.c.o \
   /home/shuvam/codes/ayush_opt/opngx/vendor/linux/libdeflate.a \
   /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/libm.so \
@@ -69,6 +70,8 @@ CMakeFiles/opngx.dir/src/util.c.o:
 CMakeFiles/opngx.dir/src/cpu.c.o:
 
 CMakeFiles/opngx.dir/src/port.c.o:
+
+CMakeFiles/opngx.dir/src/encode.c.o:
 
 CMakeFiles/opngx.dir/src/libapi.c.o:
 

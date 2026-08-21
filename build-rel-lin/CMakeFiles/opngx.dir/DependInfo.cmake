@@ -10,6 +10,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/shuvam/codes/ayush_opt/opngx/src/compress.c" "CMakeFiles/opngx.dir/src/compress.c.o" "gcc" "CMakeFiles/opngx.dir/src/compress.c.o.d"
   "/home/shuvam/codes/ayush_opt/opngx/src/cpu.c" "CMakeFiles/opngx.dir/src/cpu.c.o" "gcc" "CMakeFiles/opngx.dir/src/cpu.c.o.d"
+  "/home/shuvam/codes/ayush_opt/opngx/src/encode.c" "CMakeFiles/opngx.dir/src/encode.c.o" "gcc" "CMakeFiles/opngx.dir/src/encode.c.o.d"
   "/home/shuvam/codes/ayush_opt/opngx/src/extract.c" "CMakeFiles/opngx.dir/src/extract.c.o" "gcc" "CMakeFiles/opngx.dir/src/extract.c.o.d"
   "/home/shuvam/codes/ayush_opt/opngx/src/footage.c" "CMakeFiles/opngx.dir/src/footage.c.o" "gcc" "CMakeFiles/opngx.dir/src/footage.c.o.d"
   "/home/shuvam/codes/ayush_opt/opngx/src/libapi.c" "CMakeFiles/opngx.dir/src/libapi.c.o" "gcc" "CMakeFiles/opngx.dir/src/libapi.c.o.d"
