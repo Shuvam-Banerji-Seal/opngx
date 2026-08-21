@@ -332,7 +332,7 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
                     atomic_fetch_add(&sh->hard, 8);
                     continue;
                 }
-progress_bump:
+progress_bump:;
                 long long done_now =
                     atomic_fetch_add_explicit(&j->done, 1,
                                               memory_order_relaxed) + 1;
