@@ -29,3 +29,5 @@ dist/
 build-win/
 vendor/win/*.a
 python/.venv/
+build-rel-lin/
+build-win/
