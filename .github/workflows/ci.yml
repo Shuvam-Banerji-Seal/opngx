@@ -32,6 +32,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libdeflate-dev zlib1g-dev python3-pip
+          pip3 install --quiet numpy pillow
 
       - name: Configure & build (portable flags — no march=native)
         run: |
@@ -43,7 +44,7 @@ jobs:
 
       - name: Python package tests
         run: |
-          pip3 install --quiet numpy pytest pillow
+          pip3 install --quiet pytest
           pip3 install --quiet -e ./python[dev]
           python3 -m pytest python/tests -q
 
