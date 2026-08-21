@@ -30,7 +30,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
 # python package (wraps the C engine via ctypes; numpy fallback included)
-pip install ./python          # adds `opngx` and `opngx-ui` commands
+cd python && uv sync --all-extras      # adds `opngx` and `opngx-ui` commands
+source .venv/bin/activate              # or prefix with `uv run`
 ```
 
 No `-march=native` is used: one binary runs on any x86-64 (Intel or AMD, any
@@ -100,7 +101,7 @@ layout. The full 50 000-frame reference set passes with zero mismatches.
 
 ```bash
 bash tests/test_engine.sh            # 16 end-to-end + edge-case gates
-python -m pytest python/tests -q     # 12 package tests
+(cd python && uv sync --all-extras && uv run pytest tests -q)
 ./build/opngx-engine bench --bin X.bin --frames 4000 -j 16
 ```
 

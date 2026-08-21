@@ -31,22 +31,29 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdeflate-dev zlib1g-dev python3-pip
-          pip3 install --quiet numpy pillow
+          sudo apt-get install -y libdeflate-dev zlib1g-dev
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
 
       - name: Configure & build (portable flags — no march=native)
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j"$(nproc)"
 
-      - name: Engine test suite
-        run: bash tests/test_engine.sh
+      - name: Engine test suite (uv-managed env)
+        run: |
+          cd python
+          uv sync --all-extras
+          uv run python ../tests/gen_fixture.py /tmp/opngx-ci-fixture
+          cd ..
+          PATH="$PWD/python/.venv/bin:$PATH" bash tests/test_engine.sh
 
       - name: Python package tests
         run: |
-          pip3 install --quiet pytest
-          pip3 install --quiet -e ./python[dev]
-          python3 -m pytest python/tests -q
+          cd python && uv sync --all-extras && uv run pytest ../python/tests -q
 
   abi-guard:
     runs-on: ubuntu-latest
