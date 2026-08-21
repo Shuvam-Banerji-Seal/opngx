@@ -1,4 +1,0 @@
-/home/shuvam/codes/ayush_opt/opngx/build-win/CMakeFiles/opngx-engine.dir
-/home/shuvam/codes/ayush_opt/opngx/build-win/CMakeFiles/opngx.dir
-/home/shuvam/codes/ayush_opt/opngx/build-win/CMakeFiles/edit_cache.dir
-/home/shuvam/codes/ayush_opt/opngx/build-win/CMakeFiles/rebuild_cache.dir

@@ -94,6 +94,22 @@ int port_detect_gpus(char *buf, size_t cap) {
     return found;
 }
 
+int port_remove_flat_dir(const char *path) {
+    WIN32_FIND_DATAA fd;
+    char pattern[1100];
+    snprintf(pattern, sizeof pattern, "%s\\*", path);
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    do {
+        if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+        char full[1200];
+        snprintf(full, sizeof full, "%s\\%s", path, fd.cFileName);
+        DeleteFileA(full);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return RemoveDirectoryA(path) ? 0 : -1;
+}
+
 double port_now_s(void) {
     LARGE_INTEGER f, t;
     QueryPerformanceFrequency(&f);
@@ -221,6 +237,20 @@ int port_detect_gpus(char *buf, size_t cap) {
     (void)buf; (void)cap;
     return 0;
 #endif
+}
+
+int port_remove_flat_dir(const char *path) {
+    DIR *d = opendir(path);
+    if (!d) return -1;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char full[1200];
+        snprintf(full, sizeof full, "%s/%s", path, e->d_name);
+        unlink(full);
+    }
+    closedir(d);
+    return rmdir(path);
 }
 
 double port_now_s(void) {

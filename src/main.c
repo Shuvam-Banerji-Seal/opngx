@@ -12,6 +12,7 @@
 #include "footage.h"
 #include "verify.h"
 #include "cpu.h"
+#include "port.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -167,9 +168,16 @@ static int cmd_extract(int argc, char **argv) {
 
     int rc = opngx_job_run(job);
     print_stats(opngx_job_stats(job));
+    const char *joberr = opngx_job_errstr(job);
+    char errtxt[512] = "";
+    strncpy(errtxt, err, sizeof errtxt - 1);
     opngx_job_free(job);
     if (rc == 2) { fprintf(stderr, "opngx: cancelled\n"); return 130; }
-    if (rc != 0) { fprintf(stderr, "opngx: error: %s\n", err[0] ? err : "run failed"); return 1; }
+    if (rc != 0) {
+        fprintf(stderr, "opngx: error: %s\n",
+                joberr[0] ? joberr : (errtxt[0] ? errtxt : "run failed"));
+        return 1;
+    }
     return 0;
 }
 
@@ -363,9 +371,20 @@ static int cmd_bench(int argc, char **argv) {
     }
 
     printf("jobs,level,backend,frames,seconds,frames_per_s,mib_per_s_in\n");
+    const char *tmpbase = getenv("TEMP");
+    if (!tmpbase) tmpbase = getenv("TMPDIR");
+    if (!tmpbase) tmpbase = ".";
     double best = 0;
     for (int r = 0; r < repeat; r++) {
-        char outdir[64]; snprintf(outdir, sizeof outdir, "/tmp/opngxbench-%d-%d", getpid(), r);
+        char outdir[512];
+#ifdef _WIN32
+        snprintf(outdir, sizeof outdir, "%s\\opngxbench-%lu-%d", tmpbase,
+                 (unsigned long)GetCurrentProcessId(), r);
+#else
+        snprintf(outdir, sizeof outdir, "%s/opngxbench-%ld-%d", tmpbase,
+                 (long)getpid(), r);
+#endif
+        port_mkdir_p(outdir);
         opngx_params p; memset(&p, 0, sizeof p);
         p.bin_path = bin; p.footage_path = footpath; p.out_dir = outdir;
         p.mode = OPNGX_MODE_REFERENCE; p.jobs = jobs; p.level = level; p.backend = be;
@@ -378,9 +397,7 @@ static int cmd_bench(int argc, char **argv) {
         printf("%d,%d,%s,%lld,%.3f,%.1f,%.1f\n", jobs, level, st.backend_used,
                (long long)st.frames_written, st.seconds, st.frames_per_s, st.mib_per_s_in);
         if (st.frames_per_s > best) best = st.frames_per_s;
-        /* cleanup */
-        char cmd[128]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", outdir);
-        if (system(cmd)) {}
+        port_remove_flat_dir(outdir);
     }
     fprintf(stderr, "best: %.1f frames/s\n", best);
     return 0;

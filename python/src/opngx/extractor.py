@@ -14,6 +14,8 @@ from ._engine import (
     OpngxParams,
     OpngxStats,
     BACKEND_AUTO,
+    BACKEND_LIBDEFLATE,
+    BACKEND_ZLIB,
     MODE_CUSTOM,
     MODE_RAW,
     load_library,
@@ -61,6 +63,7 @@ class Extractor:
         gamma: Optional[float] = None,
         bit_depth: int = 8,
         channels: int = 6,  # 6 RGBA or 0 grayscale fast path
+        backend: str = "auto",  # auto | libdeflate | zlib
         jobs: int = 0,
         level: int = 6,
         prefix: str = "brow_",
@@ -78,6 +81,20 @@ class Extractor:
         if self.meta.width == 0 or self.meta.height == 0:
             raise ValueError("unknown geometry; provide a .footage sidecar")
 
+        # Resolve transform defaults ONCE so native and fallback paths
+        # always produce identical pixels for the same call (audit #13).
+        if mode is QualityMode.RAW:
+            brightness = contrast = 0.0
+            gamma = 1.0
+        elif mode is QualityMode.CUSTOM:
+            brightness = brightness if brightness is not None else 0.0
+            contrast = contrast if contrast is not None else 0.0
+            gamma = gamma if gamma is not None else 1.0
+        else:  # REFERENCE
+            brightness = self.meta.brightness
+            contrast = self.meta.contrast
+            gamma = self.meta.gamma
+
         lib = load_library()
         if lib is not None:
             return self._run_native(
@@ -89,6 +106,7 @@ class Extractor:
                 gamma,
                 bit_depth,
                 channels,
+                backend,
                 jobs,
                 level,
                 prefix,
@@ -108,6 +126,7 @@ class Extractor:
             gamma,
             bit_depth,
             channels,
+            backend,
             jobs,
             prefix,
             ext,
@@ -130,6 +149,7 @@ class Extractor:
         gamma,
         bit_depth,
         channels,
+        backend,
         jobs,
         level,
         prefix,
@@ -149,9 +169,9 @@ class Extractor:
         p.num_frames = -1
         p.frame_stride = -1
         p.mode = {"reference": 0, "raw": 1, "custom": 2}[mode.value]
-        p.brightness = brightness if brightness is not None else self.meta.brightness
-        p.contrast = contrast if contrast is not None else self.meta.contrast
-        p.gamma = gamma if gamma is not None else self.meta.gamma
+        p.brightness = brightness
+        p.contrast = contrast
+        p.gamma = gamma
         p.bit_depth = bit_depth
         p.channels = channels
         p.out_dir = str(out_dir).encode()
@@ -159,7 +179,8 @@ class Extractor:
         p.ext = ext.encode()
         p.jobs = jobs or os.cpu_count() or 1
         p.level = level
-        p.backend = BACKEND_AUTO
+        p.backend = {"auto": BACKEND_AUTO, "libdeflate": BACKEND_LIBDEFLATE,
+                     "zlib": BACKEND_ZLIB}.get(backend, BACKEND_AUTO)
         p.export_timestamps = int(export_timestamps)
         p.export_metadata = int(export_metadata)
         p.verbose = 0
@@ -190,14 +211,22 @@ class Extractor:
 
             t = threading.Thread(target=runner, name="opngx-engine", daemon=True)
             t.start()
-            while t.is_alive():
-                t.join(timeout=0.1)
-                if progress:
-                    progress(
-                        lib.opngx_progress_done(job), lib.opngx_progress_total(job)
-                    )
-                if should_cancel is not None and should_cancel():
-                    lib.opngx_cancel(job)
+            try:
+                while t.is_alive():
+                    t.join(timeout=0.1)
+                    if progress:
+                        progress(
+                            lib.opngx_progress_done(job),
+                            lib.opngx_progress_total(job),
+                        )
+                    if should_cancel is not None and should_cancel():
+                        lib.opngx_cancel(job)
+            except BaseException:
+                # never free the job while the engine thread still runs:
+                # request a clean stop, wait, then re-raise on this thread
+                lib.opngx_cancel(job)
+                t.join(timeout=5.0)
+                raise
             if progress:
                 progress(lib.opngx_progress_done(job), total)
 
@@ -233,6 +262,7 @@ class Extractor:
         gamma,
         bit_depth,
         channels,
+        backend,
         jobs,
         prefix,
         ext,
@@ -297,9 +327,9 @@ class Extractor:
 
             with open(Path(out_dir) / f"{prefix}timestamps.csv", "w", newline="") as f:
                 wcsv = csv.writer(f)
-                wcsv.writerow(["frame_index", "timestamp_raw"])
+                wcsv.writerow(["frame_index", "timestamp_raw", "timestamp_hex"])
                 for i, t in enumerate(ts):
-                    wcsv.writerow([start + i, int(t)])
+                    wcsv.writerow([start + i, int(t), f"0x{int(t):016X}"])
         if export_metadata:
             meta = dict(self.meta.to_dict())
             meta.update(engine="python-fallback", frames_extracted=written)

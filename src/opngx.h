@@ -87,6 +87,7 @@ typedef struct opngx_job opngx_job;
 opngx_job *opngx_job_create(const opngx_params *p, char *err, size_t err_cap);
 int        opngx_job_run(opngx_job *job);              /* 0 = ok */
 void       opngx_job_free(opngx_job *job);
+const char *opngx_job_errstr(const opngx_job *job);
 int64_t    opngx_progress_done(const opngx_job *job);
 int64_t    opngx_progress_total(const opngx_job *job);
 void       opngx_cancel(opngx_job *job);               /* cooperative, thread-safe */
@@ -98,6 +99,7 @@ int opngx_extract(const opngx_params *p, opngx_stats *stats,
 
 /* Utilities */
 const char *opngx_version(void);
+int opngx_abi_version(void);   /* ABI handshake for ctypes bindings */
 int opngx_detect_gpus(char *buf, size_t cap);   /* newline-separated GPU descriptions */
 int opngx_cpu_count(void);
 

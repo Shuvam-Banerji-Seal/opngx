@@ -93,6 +93,11 @@ if (OPNGX_BUILD_SHARED)
   add_library(opngx SHARED ${CORE_SOURCES} src/libapi.c)
   target_include_directories(opngx PRIVATE src)
   set_target_properties(opngx PROPERTIES OUTPUT_NAME opngx)
+  if(WIN32)
+    # ctypes needs the job API exported; one explicit dllexport would
+    # otherwise disable GNU auto-export for everything else
+    set_target_properties(opngx PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  endif()
   opngx_apply_backend(opngx)
   if(OpenMP_C_FOUND)
     target_link_libraries(opngx PRIVATE OpenMP::OpenMP_C)

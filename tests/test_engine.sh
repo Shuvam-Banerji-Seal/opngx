@@ -188,6 +188,38 @@ assert ct==6, ct
 "
 check "default channels remain RGBA"
 
+echo "== T-16: zlib backend end-to-end (audit #1/#2 regression) =="
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/zout" --prefix cam_ -j 4 --backend zlib 2>/dev/null
+[ "$(ls "$TMP/zout" | wc -l)" -eq 200 ]
+check "explicit --backend zlib extracts all frames on libdeflate builds"
+python3 -c "
+import struct, zlib
+import numpy as np
+from PIL import Image
+a=np.array(Image.open('$TMP/fix/ref_pngs/cam_00003.Png'))
+b=np.array(Image.open('$TMP/zout/cam_00003.Png'))
+assert np.array_equal(a,b), 'zlib-backend pixels differ'
+d=open('$TMP/zout/cam_00003.Png','rb').read()
+pos,idat=8,b''
+while pos<len(d):
+    ln=struct.unpack('>I',d[pos:pos+4])[0]; typ=d[pos+4:pos+8]
+    if typ==b'IDAT': idat+=d[pos+8:pos+8+ln]
+    pos+=12+ln
+raw=zlib.decompress(idat)
+assert len(raw)==48*(64*4+1)
+"
+check "zlib backend output decodes cleanly (no double wrapper)"
+
+echo "== T-17: --start subrange parity (audit #5) =="
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/full" --prefix cam_ -j 4 2>/dev/null
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/sub" --prefix cam_ --start 100 --frames 50 2>/dev/null
+ok=1
+for i in $(seq 100 149); do
+  cmp -s "$TMP/full/cam_$(printf %05d $i).Png" "$TMP/sub/cam_$(printf %05d $i).Png" || { ok=0; break; }
+done
+[ $ok -eq 1 ]
+check "--start 100 --frames 50 produces byte-identical slice of full run"
+
 echo
 echo "RESULTS: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

@@ -1,1 +1,0 @@
- /home/shuvam/codes/ayush_opt/opngx/vendor/win/libdeflate.a -lm "/usr/x86_64-w64-mingw32/lib/libgomp.dll.a" "/usr/x86_64-w64-mingw32/lib/libmingwthrd.a" -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 

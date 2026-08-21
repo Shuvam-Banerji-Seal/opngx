@@ -1,3 +1,0 @@
-/home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E rm -f CMakeFiles/boo.dir/objects.a
-/usr/bin/x86_64-w64-mingw32-ar qc CMakeFiles/boo.dir/objects.a @CMakeFiles/boo.dir/objects1.rsp
-/usr/bin/x86_64-w64-mingw32-gcc -flto=auto -fno-fat-lto-objects -Wl,--whole-archive CMakeFiles/boo.dir/objects.a -Wl,--no-whole-archive -o boo.exe -Wl,--out-implib,libboo.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles/boo.dir/linkLibs.rsp

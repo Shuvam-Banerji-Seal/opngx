@@ -73,11 +73,14 @@ def _candidates() -> list[Path]:
     if env:
         cands.append(Path(env))
     here = Path(__file__).resolve().parent
+    names = ["libopngx.so", "opngx.dll", "libopngx.dll", "libopngx.dylib"]
+    for n in names:
+        cands.append(here / "_native" / n)
+        cands.append(here.parent.parent.parent / "build" / n.replace(".dll", ".dll"))
     cands += [
-        here / "_native" / "libopngx.so",
-        here.parent.parent.parent / "build" / "libopngx.so",
         Path("/usr/local/lib/libopngx.so"),
         Path("/usr/lib/libopngx.so"),
+        here.parent.parent.parent / "build-win" / "libopngx.dll",
     ]
     return cands
 
@@ -96,7 +99,7 @@ def load_library() -> Optional[ctypes.CDLL]:
             try:
                 lib = ctypes.CDLL(str(cand))
                 _wire_prototypes(lib)
-            except OSError:
+            except (OSError, AttributeError):
                 continue
             abi = lib.opngx_abi_version()
             if abi != ABI_VERSION:
@@ -129,6 +132,8 @@ def _wire_prototypes(lib: ctypes.CDLL) -> None:
     lib.opngx_job_run.argtypes = [ctypes.c_void_p]
     lib.opngx_job_run.restype = ctypes.c_int
     lib.opngx_job_free.argtypes = [ctypes.c_void_p]
+    lib.opngx_job_errstr.argtypes = [ctypes.c_void_p]
+    lib.opngx_job_errstr.restype = ctypes.c_char_p
     lib.opngx_progress_done.argtypes = [ctypes.c_void_p]
     lib.opngx_progress_done.restype = ctypes.c_int64
     lib.opngx_progress_total.argtypes = [ctypes.c_void_p]

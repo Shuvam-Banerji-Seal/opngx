@@ -93,6 +93,7 @@ def _render_frame(args):
     (
         bin_path,
         frame_index,
+        start,
         stride,
         w,
         h,
@@ -102,19 +103,20 @@ def _render_frame(args):
         bit_depth,
         channels,
     ) = args
+    absolute = start + frame_index
     lut = build_lut(brightness, contrast, gamma)
     with open(bin_path, "rb") as f:
-        f.seek(frame_index * stride + 8)
+        f.seek(absolute * stride + 8)
         gray = np.frombuffer(f.read(w * h), dtype=np.uint8).reshape(h, w)
     mapped = lut[gray]
     if channels == 0:
-        return frame_index, encode_png(mapped, bit_depth, channels=0)
+        return absolute, encode_png(mapped, bit_depth, channels=0)
     rgba = np.empty((h, w, 4), dtype=np.uint8)
     rgba[..., 0] = mapped
     rgba[..., 1] = mapped
     rgba[..., 2] = mapped
     rgba[..., 3] = 255
-    return frame_index, encode_png(rgba, bit_depth, channels=6)
+    return absolute, encode_png(rgba, bit_depth, channels=6)
 
 
 def extract_frames(
@@ -132,6 +134,7 @@ def extract_frames(
     bit_depth: int = 8,
     jobs: int = 0,
     channels: int = 6,
+    start: int = 0,
     progress=None,
     cancelled=None,
 ) -> dict:
@@ -143,6 +146,7 @@ def extract_frames(
         (
             str(bin_path),
             i,
+            start,
             stride,
             width,
             height,

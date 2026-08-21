@@ -39,6 +39,10 @@ int port_mkdir_p(const char *path);
  * Portable: sysfs (Linux) / EnumDisplayDevices (Windows) / stub elsewhere. */
 int port_detect_gpus(char *buf, size_t cap);
 
+/* Remove a directory that contains only regular files (bench scratch dirs).
+ * Returns 0 on success. */
+int port_remove_flat_dir(const char *path);
+
 /* Monotonic seconds for timing. */
 double port_now_s(void);
 

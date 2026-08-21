@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
+from PIL import Image  # noqa: E402
 
 sys.path.insert(0, str(REPO / "tests"))
 from gen_fixture import build_lut  # noqa: E402
@@ -138,10 +139,13 @@ def test_fallback_engine_matches_native_formula(fixture_dir):
     """Fallback engine output must equal independently computed pixels."""
     from opngx._fallback import encode_png, _render_frame
 
+    from PIL import Image as _PILImage
+    Image = _PILImage  # noqa: F841 — used by later assertions in this module scope
     _, blob = _render_frame(
         (
             str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
             3,
+            0,
             8 + 64 * 48,
             64,
             48,
@@ -209,3 +213,59 @@ def test_cli_info_on_sample():
     )
     assert r.returncode == 0
     assert "width: 256" in r.stdout
+
+
+# ------------------------------------------------- audit regressions
+def test_backend_reported_truthfully(fixture_dir):
+    """stats.backend_used must reflect the engine actually used (audit #9)."""
+    out = fixture_dir / "be_out"
+    st = opngx.extract(str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
+                       str(out), jobs=2, prefix="cam_", backend="zlib")
+    assert st.backend in ("zlib", "libdeflate")   # never the literal 'auto'
+    st2 = opngx.extract(str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
+                        str(out) + "_2", jobs=2, prefix="cam_")
+    assert st2.backend == st.backend  # same binary => same real backend
+
+
+def test_fallback_start_offset_matches_native(fixture_dir):
+    """fallback engine must honor --start like native (audit #5)."""
+    from opngx import _fallback
+    binp = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    out = fixture_dir / "fb_start"
+    _fallback.extract_frames(binp, str(out), 64, 48, 10,
+                             8 + 64 * 48, "cam_", ".Png",
+                             49.0, 18.0, 1.0, 8, jobs=1, channels=6,
+                             start=100)
+    # with start=100 files are numbered by ABSOLUTE frame index
+    ref = fixture_dir / "ref_pngs" / "cam_00100.Png"
+    got = out / "cam_00100.Png"
+    a = np.array(Image.open(ref))
+    b = np.array(Image.open(got))
+    assert np.array_equal(a, b)
+
+
+def test_native_start_parity(fixture_dir):
+    """native --start slice must be byte-identical to full run slice."""
+    if not Path(SAMPLE_BIN).exists():
+        pytest.skip("real sample data not present")
+    if opngx.engine_backend() == "python-fallback":
+        pytest.skip("native engine missing")
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        s1 = opngx.extract(SAMPLE_BIN, td + "/a", frames=8, jobs=4)
+        s2 = opngx.extract(SAMPLE_BIN, td + "/b", start=7, frames=4, jobs=4)
+        f_a = Path(td, "a", "brow_00007.Png").read_bytes()
+        f_b = Path(td, "b", "brow_00007.Png").read_bytes()
+        assert s2.frames_written == 4 and f_a == f_b
+
+
+def test_zlib_backend_roundtrip(fixture_dir):
+    """explicit zlib backend decodes identically via PIL (CRC strict)."""
+    from PIL import Image
+    out = fixture_dir / "zb_out"
+    st = opngx.extract(str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
+                       str(out), jobs=2, prefix="cam_", backend="zlib",
+                       frames=20)
+    assert st.frames_written == 20
+    rep = opngx.verify(fixture_dir / "ref_pngs", out, prefix="cam_")
+    assert rep.passed, rep.first_error

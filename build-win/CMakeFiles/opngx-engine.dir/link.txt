@@ -1,3 +1,0 @@
-/home/shuvam/.global-pymaster/lib/python3.14/site-packages/cmake/data/bin/cmake -E rm -f CMakeFiles/opngx-engine.dir/objects.a
-/usr/bin/x86_64-w64-mingw32-ar qc CMakeFiles/opngx-engine.dir/objects.a @CMakeFiles/opngx-engine.dir/objects1.rsp
-/usr/bin/x86_64-w64-mingw32-gcc -O3 -DNDEBUG -flto=auto -fno-fat-lto-objects -static -static-libgcc -Wl,--whole-archive CMakeFiles/opngx-engine.dir/objects.a -Wl,--no-whole-archive -o opngx-engine.exe -Wl,--out-implib,libopngx-engine.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles/opngx-engine.dir/linkLibs.rsp

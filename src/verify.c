@@ -13,6 +13,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <errno.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 
 #ifdef _OPENMP
@@ -33,7 +34,8 @@ static int zinflate(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_l
 #include <zlib.h>
 static int zinflate(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_len) {
     uLongf dst = (uLongf)out_len;
-    return uncompress(out, &dst, in, in_len) == Z_OK ? 0 : -1;
+    if (uncompress(out, &dst, in, in_len) != Z_OK) return -1;
+    return dst == out_len ? 0 : -1;   /* reject short/garbage tails */
 }
 #endif
 
@@ -205,6 +207,7 @@ int opngx_verify(const char *ref_dir, const char *out_dir,
     int64_t common = rn_n < on_n ? rn_n : on_n;
     int64_t mism = 0;
     uint64_t bytes_ok = 0;
+    _Atomic int err_taken = 0;   /* only the FIRST failure records its text */
 
     #pragma omp parallel for schedule(dynamic, 64) reduction(+:mism,bytes_ok)
     for (int64_t i = 0; i < common; i++) {
@@ -214,14 +217,27 @@ int opngx_verify(const char *ref_dir, const char *out_dir,
         snprintf(p2, sizeof p2, "%s/%s", out_dir, on[i]);
         FILE *f1 = fopen(p1, "rb"), *f2 = fopen(p2, "rb");
         if (!f1 || !f2) {
-            #pragma omp critical
-            { if (!rep->mismatched_files) snprintf(rep->first_error, sizeof rep->first_error, "open failed: %.400s", p1); }
+            if (!atomic_exchange(&err_taken, 1))
+                snprintf(rep->first_error, sizeof rep->first_error,
+                         "open failed: %.400s", f1 ? p2 : p1);
             mism++; if (f1) fclose(f1); if (f2) fclose(f2);
             continue;
         }
         fseek(f1, 0, SEEK_END); long l1 = ftell(f1); fseek(f1, 0, SEEK_SET);
         fseek(f2, 0, SEEK_END); long l2 = ftell(f2); fseek(f2, 0, SEEK_SET);
+        if (l1 <= 0 || l2 <= 0) {
+            #pragma omp critical
+            { if (!atomic_load(&err_taken)) { atomic_store(&err_taken, 1);
+              snprintf(rep->first_error, sizeof rep->first_error, "empty file: %.300s", p1); } }
+            mism++; if (f1) fclose(f1); if (f2) fclose(f2);
+            continue;
+        }
         uint8_t *b1 = malloc((size_t)l1), *b2 = malloc((size_t)l2);
+        if (!b1 || !b2) {
+            free(b1); free(b2); fclose(f1); fclose(f2);
+            mism++;
+            continue;
+        }
         size_t rd1 = fread(b1, 1, (size_t)l1, f1);
         size_t rd2 = fread(b2, 1, (size_t)l2, f2);
         fclose(f1); fclose(f2);
@@ -276,8 +292,9 @@ int opngx_verify(const char *ref_dir, const char *out_dir,
         free(v1.idat); free(v2.idat);
         free(b1); free(b2);
         if (bad) {
-            #pragma omp critical
-            { if (!rep->mismatched_files) snprintf(rep->first_error, sizeof rep->first_error, "pixel mismatch: %.200s vs %.200s", p1, p2); }
+            if (!atomic_exchange(&err_taken, 1))
+                snprintf(rep->first_error, sizeof rep->first_error,
+                         "pixel mismatch: %.200s vs %.200s", p1, p2);
             mism++;
         }
     }
@@ -285,11 +302,11 @@ int opngx_verify(const char *ref_dir, const char *out_dir,
     rep->files_compared = common;
     rep->bytes_compared = bytes_ok;
     rep->mismatched_files = mism;
-    if (mism && rep->set_equal) {
-        char tmp[sizeof rep->first_error];
-        memcpy(tmp, rep->first_error, sizeof tmp);
+    if (mism && !atomic_load(&err_taken)) {
         snprintf(rep->first_error, sizeof rep->first_error,
-                 "%lld file(s) differ; first: %.460s", (long long)mism, tmp);
+                 "%lld file(s) differ", (long long)mism);
+    } else if (mism && atomic_load(&err_taken) && rep->set_equal) {
+        /* keep recorded first_error as-is */
     }
 
     for (int64_t i = 0; i < rn_n; i++) { free(rn[i]); }

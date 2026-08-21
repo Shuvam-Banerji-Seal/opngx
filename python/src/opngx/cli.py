@@ -57,6 +57,10 @@ def main(argv: list[str] | None = None) -> int:
     pv.add_argument("out_dir")
     pv.add_argument("--prefix", default="brow_")
     pv.add_argument("--ext", default=".Png")
+    pv.add_argument("--subset", action="store_true", default=True,
+                    help="out may be a subset of ref (default on)")
+    pv.add_argument("--full-set", dest="subset", action="store_false",
+                    help="require identical name sets")
 
     pi = sub.add_parser("info", help="show metadata + machine capabilities")
     pi.add_argument("bin", nargs="?")

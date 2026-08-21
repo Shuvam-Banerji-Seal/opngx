@@ -19,6 +19,7 @@ size_t cctx_compress(cctx *c, const uint8_t *in, size_t in_len,
                      uint8_t *out, size_t out_cap);
 
 const char *cctx_backend_name(const cctx *c);
+int         cctx_backend_id(const cctx *c);   /* C_BACKEND_* */
 int cctx_max_level(const cctx *c);
 
 #endif

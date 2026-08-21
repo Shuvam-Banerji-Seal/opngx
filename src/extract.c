@@ -47,6 +47,7 @@ struct opngx_job {
 
     _Atomic int64_t done;
     _Atomic int     cancel;
+    _Atomic int     backend_seen;   /* first worker reports real backend */
 
     opngx_stats stats;
     char err[512];
@@ -102,9 +103,6 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
             fprintf(stderr, "opngx: WARNING: footage settings (B=%.0f C=%.0f G=%g) differ from the "
                     "verified operating point (B=49 C=18 G=1); pixel fidelity not guaranteed.\n",
                     ft.brightness, ft.contrast, ft.gamma);
-    } else if (have_ft && j->p.mode == OPNGX_MODE_CUSTOM &&
-               j->p.brightness == 0 && j->p.contrast == 0 && !pin->brightness && !pin->contrast) {
-        /* defaults for custom left as given (0,0) = identity-ish */
     }
 
     j->stride = j->p.frame_stride > 0 ? j->p.frame_stride : (int64_t)(8 + (size_t)j->p.width * j->p.height);
@@ -130,7 +128,7 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     if (j->color_type == 0) bytes_per_px = (j->p.bit_depth == 16) ? 2 : 1;
     else                    bytes_per_px = (j->p.bit_depth == 16) ? 8 : 4;
     j->raw_len = (size_t)j->p.height * ((size_t)j->p.width * bytes_per_px + 1);
-    j->idat_cap = j->raw_len + 4096;
+    j->idat_cap = j->raw_len + j->raw_len / 8 + 256; /* >= any deflate bound */
     j->file_cap = j->idat_cap + 128;
 
     fill_luts(j);
@@ -230,6 +228,7 @@ int opngx_job_run(opngx_job *j) {
 
     double t0 = port_now_s();
     atomic_store(&j->done, 0);
+    atomic_store(&j->backend_seen, 0);
     int hard_fail = 0;
 
     #pragma omp parallel num_threads(j->p.jobs > 0 ? j->p.jobs : opngx_cpu_count()) \
@@ -275,6 +274,9 @@ int opngx_job_run(opngx_job *j) {
             snprintf(path, sizeof path, "%s/%s%05lld%s", j->out_dir, j->prefix,
                      (long long)(base + i), j->ext);
             if (port_write_whole_file(path, filebuf, flen)) { hard_fail |= 8; continue; }
+            int expected = 0;
+            atomic_compare_exchange_strong(&j->backend_seen, &expected,
+                                           cctx_backend_id(c));
             atomic_fetch_add_explicit(&j->done, 1, memory_order_relaxed);
         }
 
@@ -284,9 +286,8 @@ int opngx_job_run(opngx_job *j) {
 
     double dt = port_now_s() - t0;
     snprintf(j->stats.backend_used, sizeof j->stats.backend_used, "%s",
-             j->p.backend == OPNGX_BACKEND_ZLIB ? "zlib" :
-             j->p.backend == OPNGX_BACKEND_LIBDEFLATE ? "libdeflate" :
-             "auto");
+             atomic_load(&j->backend_seen) == C_BACKEND_ZLIB ? "zlib" :
+             "libdeflate");
     j->stats.seconds = dt;
     j->stats.frames_written = atomic_load(&j->done);
     j->stats.bytes_written = j->stats.frames_written *
@@ -315,6 +316,7 @@ void opngx_job_free(opngx_job *j) {
     free(j);
 }
 
+const char *opngx_job_errstr(const opngx_job *j) { return j ? j->err : ""; }
 int64_t opngx_progress_done(const opngx_job *j) { return j ? atomic_load(&j->done) : 0; }
 int64_t opngx_progress_total(const opngx_job *job) { return job ? job->frames_total : 0; }
 void opngx_cancel(opngx_job *j) { if (j) atomic_store(&j->cancel, 1); }

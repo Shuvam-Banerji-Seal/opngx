@@ -172,6 +172,7 @@ def verify(
             mism += 1
         else:
             bytes_ok += a.size
+    names_ok = set_equal or (subset and len(on) <= len(rn))
     return VerifyReport(
         len(rn),
         len(on),
@@ -180,5 +181,5 @@ def verify(
         mism,
         set_equal,
         first_err,
-        passed=(mism == 0 and common > 0),
+        passed=(mism == 0 and common > 0 and names_ok),
     )

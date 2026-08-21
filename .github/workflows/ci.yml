@@ -12,6 +12,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         compiler: [gcc, clang]
+        backend: [with-libdeflate, zlib-only]
         include:
           - os: ubuntu-latest
             compiler: gcc
@@ -21,6 +22,9 @@ jobs:
             compiler: clang
             cc: clang
             cxx: clang++
+        exclude:
+          - compiler: clang
+            backend: zlib-only
     runs-on: ${{ matrix.os }}
     env:
       CC: ${{ matrix.cc }}
@@ -38,9 +42,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Configure & build (portable flags — no march=native)
+      - name: Configure & build (${{ matrix.backend }})
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          if [ "${{ matrix.backend }}" = "zlib-only" ]; then
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOPNGX_WITH_LIBDEFLATE=OFF
+          else
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          fi
           cmake --build build -j"$(nproc)"
 
       - name: Engine test suite (uv-managed env)
@@ -75,3 +83,41 @@ jobs:
           assert not (c_fields - py_fields), f"struct drift! C-only fields: {c_fields - py_fields}"
           print('ABI mirror OK:', sorted(c_fields))
           EOF
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: false
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            make
+
+      - name: Build libdeflate (static, MinGW)
+        run: |
+          git clone --depth 1 --branch v1.22 https://github.com/ebiggers/libdeflate.git /tmp/ld
+          cmake -S /tmp/ld -B /tmp/ldb -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_BUILD_SHARED_LIB=OFF -DLIBDEFLATE_BUILD_TESTS=OFF
+          cmake --build /tmp/ldb -j
+          mkdir -p vendor/win
+          cp /tmp/ld/libdeflate.h vendor/win/
+          find /tmp/ldb -name 'libdeflate.a' -exec cp {} vendor/win/ \;
+
+      - name: Configure & build engine
+        run: |
+          cmake -S . -B build-win \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-w64-mingw32.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_LIB=$PWD/vendor/win/libdeflate.a \
+            -DLIBDEFLATE_INC=$PWD/vendor/win \
+            -DOPNGX_WITH_ZLIB=OFF -G Ninja
+          cmake --build build-win -j
+          ./build-win/opngx-engine.exe --version
