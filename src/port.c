@@ -110,6 +110,47 @@ int port_remove_flat_dir(const char *path) {
     return RemoveDirectoryA(path) ? 0 : -1;
 }
 
+
+/* ------------------------- worker pool (Win32) ------------------- */
+typedef struct {
+    void (*fn)(const port_worker_ctx *, void *);
+    void *shared;
+    int index;
+} win_job;
+
+static DWORD WINAPI win_worker(LPVOID p) {
+    win_job *j = (win_job *)p;
+    port_worker_ctx ctx = { j->index };
+    j->fn(&ctx, j->shared);
+    return 0;
+}
+
+void port_spawn_workers(int jobs,
+                        void (*fn)(const port_worker_ctx *, void *),
+                        void *shared) {
+    if (jobs < 1) jobs = 1;
+    if (jobs == 1) {
+        port_worker_ctx ctx = { 0 };
+        fn(&ctx, shared);
+        return;
+    }
+    HANDLE *th = (HANDLE *)calloc((size_t)jobs, sizeof(HANDLE));
+    win_job *jb = (win_job *)calloc((size_t)jobs, sizeof(win_job));
+    if (!th || !jb) { free(th); free(jb);
+        port_worker_ctx ctx = { 0 }; fn(&ctx, shared); return; }
+    long started = 0;
+    for (int i = 1; i < jobs; i++) {
+        jb[i].fn = fn; jb[i].shared = shared; jb[i].index = i;
+        th[i] = CreateThread(NULL, 0, win_worker, &jb[i], 0, NULL);
+        if (th[i]) started++; else th[i] = NULL;
+    }
+    port_worker_ctx root = { 0 };          /* main thread joins the pool */
+    fn(&root, shared);
+    WaitForMultipleObjects((DWORD)started, th + 1, TRUE, INFINITE);
+    for (long k = 1; k <= started; k++) CloseHandle(th[k]);
+    free(th); free(jb);
+}
+
 double port_now_s(void) {
     LARGE_INTEGER f, t;
     QueryPerformanceFrequency(&f);
@@ -202,11 +243,29 @@ int port_detect_gpus(char *buf, size_t cap) {
     };
     int found = 0;
     size_t off = 0;
+    char seen[16][32];
+    int nseen = 0;
+    FILE *nv = fopen("/proc/driver/nvidia/version", "r");
+    if (nv) {
+        char line[256];
+        if (fgets(line, sizeof line, nv)) {
+            char *p = strstr(line, " NVRM: ");
+            if (!p) p = line;
+            int n = snprintf(buf + off, cap - off, "  nvidia (%.180s)\n",
+                             p + (p != line ? 7 : 0));
+            if (n > 0 && off + (size_t)n < cap) { off += (size_t)n; found++; }
+        }
+        fclose(nv);
+    }
+
     DIR *d = opendir("/sys/class/drm");
-    if (!d) return 0;
+    if (!d) return found;
     struct dirent *e;
     while ((e = readdir(d))) {
-        if (strncmp(e->d_name, "card", 4)) continue;
+        /* accept both cardN and renderD* nodes: some setups expose only
+         * render nodes for iGPUs */
+        if (strncmp(e->d_name, "card", 4) &&
+            strncmp(e->d_name, "renderD", 7)) continue;
         char base[512], vpath[600];
         snprintf(base, sizeof base, "/sys/class/drm/%s/device", e->d_name);
         snprintf(vpath, sizeof vpath, "%s/vendor", base);
@@ -222,6 +281,18 @@ int port_detect_gpus(char *buf, size_t cap) {
         if (!vname) continue;
 
         char devid[32] = "";
+        snprintf(vpath, sizeof vpath, "%s/device", base);
+        f = fopen(vpath, "r");
+        if (f) { if (fscanf(f, "%31s", devid) != 1) devid[0] = '\0'; fclose(f); }
+        {
+            char sig[64];
+            snprintf(sig, sizeof sig, "%s:%s", vname, devid);
+            int dup = 0;
+            for (int k = 0; k < nseen; k++)
+                if (!strcmp(seen[k], sig)) { dup = 1; break; }
+            if (dup) continue;
+            if (nseen < 16) snprintf(seen[nseen++], 32, "%s", sig);
+        }
         snprintf(vpath, sizeof vpath, "%s/device", base);
         f = fopen(vpath, "r");
         if (f) { if (fscanf(f, "%31s", devid) != 1) devid[0] = '\0'; fclose(f); }
@@ -251,6 +322,48 @@ int port_remove_flat_dir(const char *path) {
     }
     closedir(d);
     return rmdir(path);
+}
+
+
+/* ------------------------ worker pool (pthreads) ----------------- */
+#include <pthread.h>
+typedef struct {
+    void (*fn)(const port_worker_ctx *, void *);
+    void *shared;
+    int index;
+} px_job;
+
+static void *px_worker(void *p) {
+    px_job *j = (px_job *)p;
+    port_worker_ctx ctx = { j->index };
+    j->fn(&ctx, j->shared);
+    return NULL;
+}
+
+void port_spawn_workers(int jobs,
+                        void (*fn)(const port_worker_ctx *, void *),
+                        void *shared) {
+    if (jobs < 1) jobs = 1;
+    if (jobs == 1) {
+        port_worker_ctx ctx = { 0 };
+        fn(&ctx, shared);
+        return;
+    }
+    pthread_t *th = calloc((size_t)jobs, sizeof(pthread_t));
+    px_job *jb = calloc((size_t)jobs, sizeof(px_job));
+    if (!th || !jb) { free(th); free(jb);
+        port_worker_ctx ctx = { 0 }; fn(&ctx, shared); return; }
+    long started = 0;
+    for (int i = 1; i < jobs; i++) {
+        jb[i].fn = fn; jb[i].shared = shared; jb[i].index = i;
+        if (pthread_create(&th[i], NULL, px_worker, &jb[i]) == 0) started++;
+        else th[i] = (pthread_t)0;
+    }
+    port_worker_ctx root = { 0 };          /* main thread joins the pool */
+    fn(&root, shared);
+    for (long k = 1; k <= started; k++)
+        if (th[k]) pthread_join(th[k], NULL);
+    free(th); free(jb);
 }
 
 double port_now_s(void) {

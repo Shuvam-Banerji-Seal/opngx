@@ -13,6 +13,7 @@
 #include "pngout.h"
 #include "compress.h"
 #include "port.h"
+#include "encode.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,9 +22,6 @@
 #include <stdatomic.h>
 #include <ctype.h>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 struct opngx_job {
     /* owned copies */
@@ -40,6 +38,8 @@ struct opngx_job {
     int      color_type;     /* PNG color type in use (6 or 0) */
     size_t   idat_cap;
     size_t   file_cap;
+    uint8_t *enc;            /* RGB scratch for non-PNG encoders */
+    size_t   enc_cap;
 
     opngx_mapped_file mf;
     uint8_t *map;            /* == mf.map (convenience) */
@@ -124,6 +124,19 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     if (j->frames_total <= 0) { snprintf(j->err, sizeof j->err, "no frames to extract"); goto fail; }
 
     /* --- buffers sizing --- */
+    if (j->p.format < 0 || j->p.format > 3) j->p.format = OPNGX_FMT_PNG;
+    if (j->p.jpeg_quality <= 0) j->p.jpeg_quality = 90;
+    if (j->p.format != OPNGX_FMT_PNG && j->p.bit_depth == 16) {
+        fprintf(stderr, "opngx: note: 16-bit container requires PNG; using 8-bit.\n");
+        j->p.bit_depth = 8;
+    }
+    /* default extension per format unless caller set one explicitly */
+    if (!pin->ext || !pin->ext[0]) {
+        static const char *defs[] = { ".Png", ".bmp", ".tif", ".jpg" };
+        free(j->ext);
+        j->ext = strdup(defs[j->p.format]);
+        j->p.ext = j->ext;
+    }
     j->color_type = (j->p.channels == 0) ? 0 : 6;   /* 0 = gray fast path */
     size_t bytes_per_px;
     if (j->color_type == 0) bytes_per_px = (j->p.bit_depth == 16) ? 2 : 1;
@@ -131,6 +144,12 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     j->raw_len = (size_t)j->p.height * ((size_t)j->p.width * bytes_per_px + 1);
     j->idat_cap = j->raw_len + j->raw_len / 8 + 256; /* >= any deflate bound */
     j->file_cap = j->idat_cap + 128;
+    j->enc = NULL;
+    j->enc_cap = 0;
+    if (j->p.format != OPNGX_FMT_PNG) {
+        j->enc_cap = (size_t)j->p.width * j->p.height * 3 + 65536;
+        j->enc = malloc(j->enc_cap);
+    }
 
     fill_luts(j);
     atomic_store(&j->done, 0);
@@ -140,6 +159,7 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     return j;
 
 fail:
+    free(j->enc); j->enc = NULL;
     if (err && err_cap) { strncpy(err, j->err, err_cap - 1); err[err_cap-1] = '\0'; }
     if (j->mf.map || j->mf._handle) port_unmap_file(&j->mf);
     free(j->bin_path); free(j->out_dir); free(j->prefix); free(j->ext); free(j->footage_path);
@@ -206,7 +226,142 @@ static int write_metadata(opngx_job *j, const footage_t *ft) {
     return 0;
 }
 
-/* ---- parallel extraction core ---- */
+/* ---- parallel extraction core (portable worker pool) ---- */
+typedef struct {
+    opngx_job      *job;
+    _Atomic int64_t cursor;   /* dynamic chunk claimer */
+    _Atomic int     hard;
+    long long       start_ms;
+} extract_shared_t;
+
+static void extract_worker(const port_worker_ctx *w, void *ud) {
+    (void)w;
+    extract_shared_t *sh = (extract_shared_t *)ud;
+    opngx_job *j = sh->job;
+
+    const int64_t N = j->frames_total;
+    const uint32_t W = j->p.width, H = j->p.height;
+    const int64_t stride = j->stride;
+    const int64_t base = j->start_index;
+    const int bits16 = (j->p.bit_depth == 16);
+    const int fmt = j->p.format;
+    const uint8_t *lut8 = j->lut8;
+
+    cctx *c = cctx_create(
+        j->p.backend == OPNGX_BACKEND_ZLIB ? C_BACKEND_ZLIB :
+        j->p.backend == OPNGX_BACKEND_LIBDEFLATE ? C_BACKEND_LIBDEFLATE :
+        C_BACKEND_AUTO, j->p.level);
+    uint8_t *scan = malloc(j->raw_len);
+    uint8_t *idat = malloc(j->idat_cap);
+    uint8_t *filebuf = malloc(j->file_cap);
+    char path[1200];
+
+    if (!c || !scan || !idat || !filebuf)
+        atomic_fetch_add(&sh->hard, 1);
+
+    if (c && scan && idat && filebuf) {
+        const int64_t G = 32;   /* dynamic chunk size */
+        for (;;) {
+            int64_t i = atomic_fetch_add_explicit(&sh->cursor, G,
+                                                  memory_order_relaxed);
+            if (i >= N) break;
+            int64_t end = i + G < N ? i + G : N;
+            for (; i < end; i++) {
+                if (atomic_load_explicit(&j->cancel, memory_order_relaxed))
+                    continue;
+                if (atomic_load_explicit(&sh->hard, memory_order_relaxed))
+                    continue;
+
+                const uint8_t *frame = j->map +
+                    (size_t)(base + i) * (size_t)stride + 8;
+
+                if (fmt != OPNGX_FMT_PNG) {
+                    /* map then hand to the non-PNG encoder */
+                    for (uint32_t k = 0; k < W * H; k++)
+                        scan[k] = lut8[frame[k]];
+                    size_t flen2 = 0;
+                    switch (fmt) {
+                    case OPNGX_FMT_BMP:
+                        flen2 = opngx_encode_bmp_gray(scan, W, H,
+                                                      filebuf, j->file_cap);
+                        break;
+                    case OPNGX_FMT_TIF:
+                        flen2 = opngx_encode_tiff(scan, W, H, 1,
+                                                  filebuf, j->file_cap);
+                        break;
+                    case OPNGX_FMT_JPG:
+                        flen2 = opngx_encode_jpg(scan, W, H,
+                                                 j->p.jpeg_quality,
+                                                 filebuf, j->file_cap);
+                        break;
+                    }
+                    if (flen2 == 0) { atomic_fetch_add(&sh->hard, 16); continue; }
+                    snprintf(path, sizeof path, "%s/%s%05lld%s", j->out_dir,
+                             j->prefix, (long long)(base + i), j->ext);
+                    if (port_write_whole_file(path, filebuf, flen2)) {
+                        atomic_fetch_add(&sh->hard, 8);
+                        continue;
+                    }
+                    goto progress_bump;
+                }
+
+                if (j->color_type == 0) {
+                    if (bits16) opngx_expand_gray16(frame, W, H, j->lut16, scan);
+                    else        opngx_expand_gray8 (frame, W, H, j->lut8,  scan);
+                } else {
+                    if (bits16) opngx_expand_rgba16(frame, W, H, j->lut16, scan);
+                    else        opngx_expand_rgba8 (frame, W, H, j->lut8,  scan);
+                }
+
+                size_t idat_len = cctx_compress(c, scan, j->raw_len,
+                                                idat + 6, j->idat_cap - 6);
+                if (idat_len == 0) { atomic_fetch_add(&sh->hard, 2); continue; }
+
+                size_t zlen = opngx_zlib_wrap(idat, j->idat_cap,
+                                              idat + 6, idat_len,
+                                              scan, j->raw_len);
+                if (zlen != idat_len + 6) { atomic_fetch_add(&sh->hard, 4); continue; }
+
+                size_t flen = opngx_png_assemble(filebuf, W, H,
+                                                 bits16 ? 16 : 8,
+                                                 j->color_type, idat, zlen);
+
+                snprintf(path, sizeof path, "%s/%s%05lld%s", j->out_dir,
+                         j->prefix, (long long)(base + i), j->ext);
+                if (port_write_whole_file(path, filebuf, flen)) {
+                    atomic_fetch_add(&sh->hard, 8);
+                    continue;
+                }
+progress_bump:
+                long long done_now =
+                    atomic_fetch_add_explicit(&j->done, 1,
+                                              memory_order_relaxed) + 1;
+
+                /* live progress: any worker may claim the next 250ms slot */
+                if (j->p.verbose) {
+                    long long ms = (long long)(port_now_s() * 1000.0);
+                    long long exp_ms = atomic_load(&j->last_ms);
+                    if (ms - exp_ms >= 250 &&
+                        atomic_compare_exchange_strong(&j->last_ms,
+                                                       &exp_ms, ms)) {
+                        double el = (ms - sh->start_ms) / 1000.0;
+                        double frac = (double)done_now / (double)N;
+                        double eta = frac > 0.004 ? el / frac - el : 0.0;
+                        fprintf(stderr,
+                                "\ropngx: %lld/%lld (%5.1f%%)  %7.0f fps  eta %4.0fs",
+                                done_now, (long long)N, 100.0 * frac,
+                                el > 0 ? done_now / el : 0.0, eta);
+                        fflush(stderr);
+                    }
+                }
+            }
+        }
+    }
+    cctx_free(c);
+    free(scan); free(idat); free(filebuf);
+}
+
+
 int opngx_job_run(opngx_job *j) {
     if (!j) return -1;
     if (port_mkdir_p(j->out_dir)) { snprintf(j->err, sizeof j->err, "mkdir %.300s failed", j->out_dir); return -1; }
@@ -214,13 +369,11 @@ int opngx_job_run(opngx_job *j) {
     /* optional sidecars first (cheap) */
     if (j->p.export_timestamps && write_timestamps(j)) return -1;
 
-    const int64_t N = j->frames_total;
-    const int64_t stride = j->stride;
-    const int64_t base = j->start_index;
-    const uint32_t W = j->p.width, H = j->p.height;
-    const int bits16 = (j->p.bit_depth == 16);
 
     /* geometry sanity for mmap reads */
+    const int64_t N = j->frames_total;
+    const int64_t stride = j->stride;
+    const uint32_t W = j->p.width, H = j->p.height;
     if ((uint64_t)N * (uint64_t)stride > j->map_len) {
         snprintf(j->err, sizeof j->err, "file truncated: need %lld bytes, have %zu",
                  (long long)(N*stride), j->map_len);
@@ -231,76 +384,19 @@ int opngx_job_run(opngx_job *j) {
     atomic_store(&j->done, 0);
     atomic_store(&j->backend_seen, 0);
     atomic_store(&j->last_ms, 0);
-    const long long start_ms = (long long)(port_now_s() * 1000.0);
-    int hard_fail = 0;
+    int jobs_effective = j->p.jobs > 0 ? j->p.jobs : port_cpu_count();
 
-    #pragma omp parallel num_threads(j->p.jobs > 0 ? j->p.jobs : opngx_cpu_count()) \
-                         reduction(|:hard_fail)
-    {
-        cctx *c = cctx_create(
-            j->p.backend == OPNGX_BACKEND_ZLIB ? C_BACKEND_ZLIB :
-            j->p.backend == OPNGX_BACKEND_LIBDEFLATE ? C_BACKEND_LIBDEFLATE :
-            C_BACKEND_AUTO, j->p.level);
-        uint8_t *scan = malloc(j->raw_len);
-        uint8_t *idat = malloc(j->idat_cap);
-        uint8_t *filebuf = malloc(j->file_cap);
-        char path[1200];
+    extract_shared_t sh;
+    sh.job = j;
+    sh.cursor = 0;
+    sh.hard = 0;
+    sh.start_ms = (long long)(t0 * 1000.0);
 
-        if (!c || !scan || !idat || !filebuf) hard_fail |= 1;
+    port_spawn_workers(jobs_effective, extract_worker, &sh);
+    if (j->p.verbose)
+        fprintf(stderr, "\n");
 
-        #pragma omp for schedule(dynamic, 32)
-        for (int64_t i = 0; i < N; i++) {
-            if (atomic_load_explicit(&j->cancel, memory_order_relaxed)) continue;
-            if (hard_fail || !c || !scan || !idat || !filebuf) continue;
-
-            const uint8_t *frame = j->map + (size_t)(base + i) * (size_t)stride + 8;
-
-            if (j->color_type == 0) {
-                if (bits16) opngx_expand_gray16(frame, W, H, j->lut16, scan);
-                else        opngx_expand_gray8 (frame, W, H, j->lut8,  scan);
-            } else {
-                if (bits16) opngx_expand_rgba16(frame, W, H, j->lut16, scan);
-                else        opngx_expand_rgba8 (frame, W, H, j->lut8,  scan);
-            }
-
-            size_t idat_len = cctx_compress(c, scan, j->raw_len, idat + 6, j->idat_cap - 6);
-            if (idat_len == 0) { hard_fail |= 2; continue; }
-
-            /* wrap raw deflate into zlib stream; adler over uncompressed scan */
-            size_t zlen = opngx_zlib_wrap(idat, j->idat_cap, idat + 6, idat_len,
-                                          scan, j->raw_len);
-            if (zlen != idat_len + 6) { hard_fail |= 4; continue; }
-
-            size_t flen = opngx_png_assemble(filebuf, W, H, bits16 ? 16 : 8,
-                                             j->color_type, idat, zlen);
-
-            snprintf(path, sizeof path, "%s/%s%05lld%s", j->out_dir, j->prefix,
-                     (long long)(base + i), j->ext);
-            if (port_write_whole_file(path, filebuf, flen)) { hard_fail |= 8; continue; }
-            long long done_now =
-                atomic_fetch_add_explicit(&j->done, 1, memory_order_relaxed) + 1;
-
-            /* live progress: any worker may claim the next 250ms slot */
-            if (j->p.verbose) {
-                long long ms = (long long)(port_now_s() * 1000.0);
-                long long expected_ms = atomic_load(&j->last_ms);
-                if (ms - expected_ms >= 250 &&
-                    atomic_compare_exchange_strong(&j->last_ms, &expected_ms, ms)) {
-                    double el = (ms - start_ms) / 1000.0;
-                    double frac = (double)done_now / (double)N;
-                    double eta = frac > 0.004 ? el / frac - el : 0.0;
-                    fprintf(stderr, "\ropngx: %lld/%lld (%5.1f%%)  %7.0f fps  eta %4.0fs",
-                            (long long)done_now, (long long)N, 100.0 * frac,
-                            el > 0 ? done_now / el : 0.0, eta);
-                    fflush(stderr);
-                }
-            }
-        }
-
-        cctx_free(c);
-        free(scan); free(idat); free(filebuf);
-    }
-
+    int hard_fail = atomic_load(&sh.hard);
     double dt = port_now_s() - t0;
     snprintf(j->stats.backend_used, sizeof j->stats.backend_used, "%s",
              atomic_load(&j->backend_seen) == C_BACKEND_ZLIB ? "zlib" :
@@ -331,6 +427,7 @@ int opngx_job_run(opngx_job *j) {
 
 void opngx_job_free(opngx_job *j) {
     if (!j) return;
+    free(j->enc);
     if (j->mf.map || j->mf._handle) port_unmap_file(&j->mf);
     free(j->bin_path); free(j->out_dir); free(j->prefix); free(j->ext); free(j->footage_path);
     free(j);
@@ -366,10 +463,4 @@ int64_t opngx__set_range(opngx_job *j, int64_t start, int64_t frames) {
     return j->frames_total;
 }
 
-int opngx_cpu_count(void) {
-#ifdef _OPENMP
-    return omp_get_max_threads();
-#else
-    return port_cpu_count();
-#endif
-}
+int opngx_cpu_count(void) { return port_cpu_count(); }

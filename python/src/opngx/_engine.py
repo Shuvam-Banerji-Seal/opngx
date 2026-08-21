@@ -17,10 +17,11 @@ import struct
 from pathlib import Path
 from typing import Optional
 
-ABI_VERSION = 2
+ABI_VERSION = 3
 
 MODE_REFERENCE, MODE_RAW, MODE_CUSTOM = 0, 1, 2
 BACKEND_AUTO, BACKEND_LIBDEFLATE, BACKEND_ZLIB = 0, 1, 2
+FMT_PNG, FMT_BMP, FMT_TIF, FMT_JPG = 0, 1, 2, 3
 
 
 class OpngxParams(ctypes.Structure):
@@ -39,6 +40,8 @@ class OpngxParams(ctypes.Structure):
         ("gamma", ctypes.c_double),
         ("bit_depth", ctypes.c_int),
         ("channels", ctypes.c_int),      # 6 = RGBA (default), 0 = gray
+        ("format", ctypes.c_int),        # 0 png, 1 bmp, 2 tif, 3 jpg
+        ("jpeg_quality", ctypes.c_int),
         ("out_dir", ctypes.c_char_p),
         ("prefix", ctypes.c_char_p),
         ("ext", ctypes.c_char_p),

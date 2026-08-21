@@ -102,21 +102,36 @@ def _render_frame(args):
         gamma,
         bit_depth,
         channels,
+        fmt,
+        jpeg_quality,
     ) = args
+    ext = {"png": ".Png", "bmp": ".bmp", "tif": ".tif", "jpg": ".jpg"}[fmt]
     absolute = start + frame_index
     lut = build_lut(brightness, contrast, gamma)
     with open(bin_path, "rb") as f:
         f.seek(absolute * stride + 8)
         gray = np.frombuffer(f.read(w * h), dtype=np.uint8).reshape(h, w)
     mapped = lut[gray]
+    if fmt != "png":
+        from io import BytesIO
+        from PIL import Image as PILImage
+        im = PILImage.fromarray(mapped, mode="L")
+        buf = BytesIO()
+        if fmt == "jpg":
+            im.convert("RGB").save(buf, format="JPEG", quality=jpeg_quality)
+        elif fmt == "bmp":
+            im.save(buf, format="BMP")
+        else:
+            im.save(buf, format="TIFF")
+        return absolute, (ext, buf.getvalue())
     if channels == 0:
-        return absolute, encode_png(mapped, bit_depth, channels=0)
+        return absolute, (".Png", encode_png(mapped, bit_depth, channels=0))
     rgba = np.empty((h, w, 4), dtype=np.uint8)
     rgba[..., 0] = mapped
     rgba[..., 1] = mapped
     rgba[..., 2] = mapped
     rgba[..., 3] = 255
-    return absolute, encode_png(rgba, bit_depth, channels=6)
+    return absolute, (".Png", encode_png(rgba, bit_depth, channels=6))
 
 
 def extract_frames(
@@ -135,6 +150,8 @@ def extract_frames(
     jobs: int = 0,
     channels: int = 6,
     start: int = 0,
+    fmt: str = "png",
+    jpeg_quality: int = 90,
     progress=None,
     cancelled=None,
 ) -> dict:
@@ -155,13 +172,16 @@ def extract_frames(
             gamma,
             bit_depth,
             channels,
+            fmt,
+            jpeg_quality,
         )
         for i in range(num_frames)
     ]
     if jobs > 1 and num_frames > 32:
         with ProcessPoolExecutor(max_workers=jobs) as ex:
-            for frame_index, blob in ex.map(_render_frame, args, chunksize=16):
-                (out / f"{prefix}{frame_index:05d}{ext}").write_bytes(blob)
+            for frame_index, (fext, blob) in ex.map(_render_frame, args,
+                                                    chunksize=16):
+                (out / f"{prefix}{frame_index:05d}{fext}").write_bytes(blob)
                 done += 1
                 if progress:
                     progress(done)
@@ -169,8 +189,8 @@ def extract_frames(
                     break
     else:
         for a in args:
-            frame_index, blob = _render_frame(a)
-            (out / f"{prefix}{frame_index:05d}{ext}").write_bytes(blob)
+            frame_index, (fext, blob) = _render_frame(a)
+            (out / f"{prefix}{frame_index:05d}{fext}").write_bytes(blob)
             done += 1
             if progress:
                 progress(done)

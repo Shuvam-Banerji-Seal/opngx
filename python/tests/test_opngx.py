@@ -141,7 +141,7 @@ def test_fallback_engine_matches_native_formula(fixture_dir):
 
     from PIL import Image as _PILImage
     Image = _PILImage  # noqa: F841 — used by later assertions in this module scope
-    _, blob = _render_frame(
+    _, (_ext, blob) = _render_frame(
         (
             str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
             3,
@@ -154,6 +154,8 @@ def test_fallback_engine_matches_native_formula(fixture_dir):
             1.0,
             8,
             6,
+            "png",
+            90,
         )
     )
     # decode our own PNG via zlib and compare against expected RGBA matrix

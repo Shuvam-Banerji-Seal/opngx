@@ -1,0 +1,21 @@
+101 RCDATA "opngx-engine.exe"
+1 VERSIONINFO
+FILEVERSION     1,2,0,0
+PRODUCTVERSION  1,2,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "opngx setup"
+      VALUE "ProductName",     "opngx"
+      VALUE "FileVersion",     "1.2.0"
+      VALUE "ProductVersion",  "1.2.0"
+      VALUE "LegalCopyright",  "MIT License"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

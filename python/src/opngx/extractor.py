@@ -63,6 +63,8 @@ class Extractor:
         gamma: Optional[float] = None,
         bit_depth: int = 8,
         channels: int = 6,  # 6 RGBA or 0 grayscale fast path
+        fmt: str = "png",   # png | bmp | tif | jpg
+        jpeg_quality: int = 90,
         backend: str = "auto",  # auto | libdeflate | zlib
         jobs: int = 0,
         level: int = 6,
@@ -106,6 +108,8 @@ class Extractor:
                 gamma,
                 bit_depth,
                 channels,
+                fmt,
+                jpeg_quality,
                 backend,
                 jobs,
                 level,
@@ -127,6 +131,8 @@ class Extractor:
             bit_depth,
             channels,
             backend,
+            fmt,
+            jpeg_quality,
             jobs,
             prefix,
             ext,
@@ -149,6 +155,8 @@ class Extractor:
         gamma,
         bit_depth,
         channels,
+        fmt,
+        jpeg_quality,
         backend,
         jobs,
         level,
@@ -174,9 +182,15 @@ class Extractor:
         p.gamma = gamma
         p.bit_depth = bit_depth
         p.channels = channels
+        p.format = {"png": 0, "bmp": 1, "tif": 2, "tiff": 2,
+                    "jpg": 3, "jpeg": 3}.get(str(fmt).lower(), 0)
+        p.jpeg_quality = jpeg_quality
+        if p.format != 0:
+            p.bit_depth = min(p.bit_depth, 8)   # 16-bit container is PNG-only
         p.out_dir = str(out_dir).encode()
         p.prefix = prefix.encode()
-        p.ext = ext.encode()
+        p.ext = ("" if (ext == ".Png" and str(fmt).lower() != "png")
+                 else ext.encode())
         p.jobs = jobs or os.cpu_count() or 1
         p.level = level
         p.backend = {"auto": BACKEND_AUTO, "libdeflate": BACKEND_LIBDEFLATE,
@@ -263,6 +277,8 @@ class Extractor:
         bit_depth,
         channels,
         backend,
+        fmt,
+        jpeg_quality,
         jobs,
         prefix,
         ext,

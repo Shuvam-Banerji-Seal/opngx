@@ -49,4 +49,13 @@ double port_now_s(void);
 /* Number of online CPUs. */
 int port_cpu_count(void);
 
+/* ---- cooperative worker pool (replaces the OpenMP dependency) ----
+ * Runs `jobs` OS threads (>=1). Each invocation of `fn` receives a stable
+ * worker index [0..jobs) plus the caller's shared pointer. Threads that
+ * throw nothing and simply return end their shift. */
+typedef struct { int index; } port_worker_ctx;
+void port_spawn_workers(int jobs,
+                        void (*fn)(const port_worker_ctx *, void *shared),
+                        void *shared);
+
 #endif

@@ -18,8 +18,16 @@
 extern "C" {
 #endif
 
-#define OPNGX_VERSION "1.1.0"
-#define OPNGX_ABI_VERSION 2
+#define OPNGX_VERSION "1.2.0"
+#define OPNGX_ABI_VERSION 3
+
+/* Output formats */
+typedef enum {
+    OPNGX_FMT_PNG = 0,
+    OPNGX_FMT_BMP = 1,
+    OPNGX_FMT_TIF = 2,
+    OPNGX_FMT_JPG = 3
+} opngx_format;
 
 /* Quality modes */
 typedef enum {
@@ -49,8 +57,10 @@ typedef struct {
     double      brightness;     /* used by REFERENCE (from XML) / CUSTOM */
     double      contrast;       /* multiplier = 1 + contrast/50          */
     double      gamma;          /* 1.0 = off                             */
-    int         bit_depth;      /* 8 (default) or 16 (values scaled x257)*/
+    int         bit_depth;      /* 8 (default) or 16 (PNG only)          */
     int         channels;       /* 6 = RGBA (default), 0 = grayscale     */
+    int         format;         /* OPNGX_FMT_*                            */
+    int         jpeg_quality;   /* 1..100, used when format == JPEG       */
 
     /* output */
     const char *out_dir;

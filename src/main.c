@@ -44,6 +44,8 @@ static void usage(void) {
 "      --gamma F          custom gamma (1 = off)       (default 1)\n"
 "      --bit-depth N      8 or 16                      (default 8)\n"
 "      --channels C       rgba (6, default) or gray (0 fast path)\n"
+"      -F, --format F     png | bmp | tif | jpg                (default: png)\n"
+"      -q, --jpeg-quality N                                (default: 90)\n"
 "      --prefix S         output filename prefix       (default: brow_)\n"
 "      --ext S            output extension             (default: .Png)\n"
 "  -j, --jobs N           worker threads               (default: all cores)\n"
@@ -97,6 +99,7 @@ static int cmd_extract(int argc, char **argv) {
     const char *bin = NULL, *footage = NULL, *outdir = NULL;
     range_t rng = {0, -1};
     int verbose = 0;
+    int ext_given = 0;   /* set when --ext/--format provided */
 
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
@@ -128,7 +131,7 @@ static int cmd_extract(int argc, char **argv) {
             else { fprintf(stderr, "bad channels: %s\n", argv[i]); return 2; }
         }
         else if (!strcmp(a, "--prefix")) NEXTSTR(p.prefix);
-        else if (!strcmp(a, "--ext")) NEXTSTR(p.ext);
+        else if (!strcmp(a, "--ext")) { NEXTSTR(p.ext); ext_given = 1; }
         else if (!strcmp(a, "--jobs") || !strcmp(a, "-j")) NEXTFUN(p.jobs, atoi);
         else if (!strcmp(a, "--level") || !strcmp(a, "-l")) NEXTFUN(p.level, atoi);
         else if (!strcmp(a, "--backend")) NEXTPARSE(p.backend, parse_backend);
@@ -136,6 +139,19 @@ static int cmd_extract(int argc, char **argv) {
         else if (!strcmp(a, "--height")) { int64_t t; NEXTPARSE(t, parse_i64); p.height = (uint32_t)t; }
         else if (!strcmp(a, "--start")) NEXTPARSE(rng.start, parse_i64);
         else if (!strcmp(a, "--frames")) NEXTPARSE(rng.frames, parse_i64);
+        else if (!strcmp(a, "--format") || !strcmp(a, "-F")) {
+            if (++i >= argc) { fprintf(stderr, "missing value after %s\n", a); return 2; }
+            const char *f = argv[i];
+            if      (!strcasecmp(f, "png")) p.format = OPNGX_FMT_PNG;
+            else if (!strcasecmp(f, "bmp")) p.format = OPNGX_FMT_BMP;
+            else if (!strcasecmp(f, "tif") || !strcasecmp(f, "tiff")) p.format = OPNGX_FMT_TIF;
+            else if (!strcasecmp(f, "jpg") || !strcasecmp(f, "jpeg")) p.format = OPNGX_FMT_JPG;
+            else { fprintf(stderr, "bad format: %s\n", f); return 2; }
+            if (!p.ext || !p.ext[0] || !ext_given) { ext_given = 1; }
+            p.ext = "";   /* sentinel: derive per-format default */
+        }
+        else if (!strcmp(a, "--jpeg-quality") || !strcmp(a, "-q"))
+            NEXTFUN(p.jpeg_quality, atoi);
         else if (!strcmp(a, "--timestamps")) p.export_timestamps = 1;
         else if (!strcmp(a, "--metadata")) p.export_metadata = 1;
         else if (!strcmp(a, "--verbose") || !strcmp(a, "-v")) verbose = 1;

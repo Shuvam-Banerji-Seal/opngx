@@ -10,7 +10,8 @@ endif()
 
 # Portability: NEVER -march=native in shipped binaries. Runtime dispatch
 # (target_clones on GCC/glibc x86-64) selects AVX-512/AVX2 when present.
-add_compile_options(-Wall -Wextra -Werror)
+add_compile_options(-Wall -Wextra -Werror -Wno-error=unknown-pragmas)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/vendor/stb)
 
 option(OPNGX_WITH_LIBDEFLATE "Use libdeflate backend" ON)
 option(OPNGX_WITH_ZLIB       "Allow zlib fallback backend" ON)
@@ -19,7 +20,8 @@ option(OPNGX_LTO             "Link-time optimization for Release" ON)
 
 set(CORE_SOURCES
   src/footage.c src/transform.c src/pngout.c src/compress.c
-  src/extract.c src/verify.c src/util.c src/cpu.c src/port.c)
+  src/extract.c src/verify.c src/util.c src/cpu.c src/port.c
+  src/encode.c)
 
 find_package(Threads REQUIRED)
 
@@ -69,23 +71,13 @@ target_include_directories(opngx-engine PRIVATE src)
 target_link_libraries(opngx-engine PRIVATE Threads::Threads m)
 opngx_apply_backend(opngx-engine)
 
-find_package(OpenMP)
-if(OpenMP_C_FOUND)
-  target_link_libraries(opngx-engine PRIVATE OpenMP::OpenMP_C)
-endif()
+# Parallelism is provided by the in-house portable worker pool
+# (src/port.c: pthreads / Win32) — no OpenMP runtime dependency at all.
+# This enables fully-static single-file executables on every platform.
 
 if(WIN32)
-  # fully static-ish CLI: no runtime DLL hunting (incl. OpenMP runtime)
+  # fully static CLI: no runtime DLL hunting whatsoever
   target_link_options(opngx-engine PRIVATE -static -static-libgcc)
-  if(OpenMP_C_FOUND)
-    # mingw gcc lacks -static-openmp; link the static libgomp archive
-    find_library(MINGW_LIBGOMP_AR NAMES libgomp.a
-                 PATHS /usr/x86_64-w64-mingw32/lib NO_DEFAULT_PATH)
-    if(MINGW_LIBGOMP_AR)
-      target_link_libraries(opngx-engine PRIVATE ${MINGW_LIBGOMP_AR})
-      message(STATUS "static libgomp: ${MINGW_LIBGOMP_AR}")
-    endif()
-  endif()
 endif()
 
 # ---------- shared library for Python bindings ----------
@@ -99,8 +91,5 @@ if (OPNGX_BUILD_SHARED)
     set_target_properties(opngx PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
   endif()
   opngx_apply_backend(opngx)
-  if(OpenMP_C_FOUND)
-    target_link_libraries(opngx PRIVATE OpenMP::OpenMP_C)
-  endif()
   target_link_libraries(opngx PRIVATE Threads::Threads m)
 endif()
