@@ -12,17 +12,13 @@
 #include "transform.h"
 #include "pngout.h"
 #include "compress.h"
+#include "port.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <time.h>
 #include <stdatomic.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <ctype.h>
 
 #ifdef _OPENMP
@@ -45,9 +41,9 @@ struct opngx_job {
     size_t   idat_cap;
     size_t   file_cap;
 
-    uint8_t *map;
-    size_t   map_len;
-    int      fd;
+    opngx_mapped_file mf;
+    uint8_t *map;            /* == mf.map (convenience) */
+    size_t   map_len;        /* == mf.len               */
 
     _Atomic int64_t done;
     _Atomic int     cancel;
@@ -55,25 +51,6 @@ struct opngx_job {
     opngx_stats stats;
     char err[512];
 };
-
-static double now_s(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + 1e-9 * (double)ts.tv_nsec;
-}
-
-static int mkdir_p(const char *path) {
-    char tmp[1024];
-    size_t len = strlen(path);
-    if (len == 0 || len >= sizeof tmp) return -1;
-    memcpy(tmp, path, len + 1);
-    while (len > 1 && tmp[len-1] == '/') tmp[--len] = '\0';
-    for (char *q = tmp + 1; *q; q++) {
-        if (*q == '/') { *q = '\0'; if (mkdir(tmp, 0755) && errno != EEXIST) return -1; *q = '/'; }
-    }
-    if (mkdir(tmp, 0755) && errno != EEXIST) return -1;
-    return 0;
-}
 
 static void fill_luts(opngx_job *j) {
     double b, c, g;
@@ -133,18 +110,12 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     j->stride = j->p.frame_stride > 0 ? j->p.frame_stride : (int64_t)(8 + (size_t)j->p.width * j->p.height);
 
     /* --- map input --- */
-    j->fd = open(j->bin_path, O_RDONLY | O_CLOEXEC);
-    if (j->fd < 0) { snprintf(j->err, sizeof j->err, "open '%s': %s", j->bin_path, strerror(errno)); goto fail; }
-    struct stat st;
-    if (fstat(j->fd, &st) || st.st_size <= 0) { snprintf(j->err, sizeof j->err, "fstat failed"); goto fail; }
-    j->map_len = (size_t)st.st_size;
-    j->map = mmap(NULL, j->map_len, PROT_READ, MAP_PRIVATE, j->fd, 0);
-    if (j->map == MAP_FAILED) { snprintf(j->err, sizeof j->err, "mmap: %s", strerror(errno)); j->map = NULL; goto fail; }
-    madvise(j->map, j->map_len, MADV_SEQUENTIAL);
-#ifdef MADV_HUGEPAGE
-    /* Best-effort THP hint; harmless where transparent hugepages are off. */
-    madvise(j->map, j->map_len, MADV_HUGEPAGE);
-#endif
+    if (port_map_file(j->bin_path, &j->mf)) {
+        snprintf(j->err, sizeof j->err, "cannot map '%s'", j->bin_path);
+        goto fail;
+    }
+    j->map = (uint8_t *)j->mf.map;
+    j->map_len = j->mf.len;
 
     /* --- frame count --- */
     int64_t cap_frames = (int64_t)(j->map_len / (size_t)j->stride);
@@ -171,8 +142,7 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
 
 fail:
     if (err && err_cap) { strncpy(err, j->err, err_cap - 1); err[err_cap-1] = '\0'; }
-    if (j->map) munmap(j->map, j->map_len);
-    if (j->fd >= 0) close(j->fd);
+    if (j->mf.map || j->mf._handle) port_unmap_file(&j->mf);
     free(j->bin_path); free(j->out_dir); free(j->prefix); free(j->ext); free(j->footage_path);
     free(j);
     return NULL;
@@ -240,7 +210,7 @@ static int write_metadata(opngx_job *j, const footage_t *ft) {
 /* ---- parallel extraction core ---- */
 int opngx_job_run(opngx_job *j) {
     if (!j) return -1;
-    if (mkdir_p(j->out_dir)) { snprintf(j->err, sizeof j->err, "mkdir %s: %s", j->out_dir, strerror(errno)); return -1; }
+    if (port_mkdir_p(j->out_dir)) { snprintf(j->err, sizeof j->err, "mkdir %.300s failed", j->out_dir); return -1; }
 
     /* optional sidecars first (cheap) */
     if (j->p.export_timestamps && write_timestamps(j)) return -1;
@@ -258,7 +228,7 @@ int opngx_job_run(opngx_job *j) {
         return -1;
     }
 
-    double t0 = now_s();
+    double t0 = port_now_s();
     atomic_store(&j->done, 0);
     int hard_fail = 0;
 
@@ -304,15 +274,7 @@ int opngx_job_run(opngx_job *j) {
 
             snprintf(path, sizeof path, "%s/%s%05lld%s", j->out_dir, j->prefix,
                      (long long)(base + i), j->ext);
-            int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-            if (fd < 0) { hard_fail |= 8; continue; }
-            size_t off = 0;
-            while (off < flen) {
-                ssize_t w = write(fd, filebuf + off, flen - off);
-                if (w <= 0) { if (errno == EINTR) continue; hard_fail |= 8; break; }
-                off += (size_t)w;
-            }
-            close(fd);
+            if (port_write_whole_file(path, filebuf, flen)) { hard_fail |= 8; continue; }
             atomic_fetch_add_explicit(&j->done, 1, memory_order_relaxed);
         }
 
@@ -320,7 +282,7 @@ int opngx_job_run(opngx_job *j) {
         free(scan); free(idat); free(filebuf);
     }
 
-    double dt = now_s() - t0;
+    double dt = port_now_s() - t0;
     snprintf(j->stats.backend_used, sizeof j->stats.backend_used, "%s",
              j->p.backend == OPNGX_BACKEND_ZLIB ? "zlib" :
              j->p.backend == OPNGX_BACKEND_LIBDEFLATE ? "libdeflate" :
@@ -348,8 +310,7 @@ int opngx_job_run(opngx_job *j) {
 
 void opngx_job_free(opngx_job *j) {
     if (!j) return;
-    if (j->map) munmap(j->map, j->map_len);
-    if (j->fd >= 0) close(j->fd);
+    if (j->mf.map || j->mf._handle) port_unmap_file(&j->mf);
     free(j->bin_path); free(j->out_dir); free(j->prefix); free(j->ext); free(j->footage_path);
     free(j);
 }
@@ -387,7 +348,6 @@ int opngx_cpu_count(void) {
 #ifdef _OPENMP
     return omp_get_max_threads();
 #else
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
-    return n > 0 ? (int)n : 1;
+    return port_cpu_count();
 #endif
 }

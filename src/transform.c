@@ -9,7 +9,9 @@
 #include <math.h>
 #include <string.h>
 
-#if defined(__GNUC__) && !defined(__clang__)
+#if defined(__GNUC__) && !defined(__clang__) && defined(__ELF__) && defined(__x86_64__)
+   /* ifunc-based runtime dispatch: glibc/Linux x86-64 only.
+    * Other platforms run the portable -O3 autovectorized version. */
 #  define OPNGX_MULTIVERSION(fn) \
      __attribute__((target_clones("arch=x86-64-v4","arch=x86-64-v3","default")))
 #else

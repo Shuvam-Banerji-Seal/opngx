@@ -11,13 +11,18 @@
 #include "opngx.h"
 #include "footage.h"
 #include "verify.h"
+#include "cpu.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <dirent.h>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#include <process.h>
+#endif
 
 static void usage(void) {
     fputs(
@@ -286,7 +291,9 @@ static int cmd_info(int argc, char **argv) {
         else if (!strcmp(argv[i], "--footage")) footage = argv[++i];
     }
     printf("opngx-engine %s\n", opngx_version());
-    printf("cpus:         %d\n", opngx_cpu_count());
+    char cpusum[128];
+    opngx_cpu_summary(cpusum, sizeof cpusum);
+    printf("cpus:         %d (%s)\n", opngx_cpu_count(), cpusum);
     char gpus[2048];
     if (opngx_detect_gpus(gpus, sizeof gpus) > 0) {
         printf("gpus:\n%s", gpus);

@@ -78,3 +78,21 @@ Reproduce any table:
 ./build/opngx-engine bench --bin <file>.bin --frames 4000 -j 16 -l 6 [--backend zlib]
 bash tests/test_engine.sh          # correctness gates used before timing
 ```
+
+## Cross-platform builds (cycle 2)
+
+| Target | Toolchain | Backend | Status |
+|---|---|---|---|
+| Linux x86-64 | gcc 16, LTO, runtime AVX-512/AVX2 dispatch | libdeflate 1.25 | 16/16 tests, full-bin verify PASS |
+| Windows x86-64 | mingw-w64 gcc 16.1, LTO, static libgomp+libdeflate | static libdeflate | fixture + real-data subset PASS under Wine |
+
+Windows CLI is fully static apart from system DLLs (KERNEL32/USER32/UCRT) —
+no `libgomp-1.dll` hunting. Runtime CPU feature detection reports the host's
+capabilities (`opngx info`), e.g. `SSE2 SSSE3 SSE4.1 AVX AVX2 AVX512BW`.
+
+## Grayscale fast path — measured on real footage (4000 frames, L6, 16 jobs)
+
+| mode | fps | size/frame |
+|---|---:|---:|
+| rgba | 882 | 56 KB |
+| gray | **2245** | 36 KB |
