@@ -1,0 +1,28 @@
+# --- data: never commit footage or extracted images ---
+*.bin
+*.footage
+*.Png
+*.png
+!docs/**/*.png
+sbs/
+
+# --- build ---
+build/
+cmake-build-*/
+*.o
+*.so
+*.a
+
+# --- python ---
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+dist/
+.pytest_cache/
+.venv/
+
+# --- editors / OS ---
+.vscode/
+.idea/
+.DS_Store

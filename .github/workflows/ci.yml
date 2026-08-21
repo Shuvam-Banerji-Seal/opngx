@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        compiler: [gcc, clang]
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+            cc: gcc
+            cxx: g++
+          - os: ubuntu-latest
+            compiler: clang
+            cc: clang
+            cxx: clang++
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdeflate-dev zlib1g-dev python3-pip
+
+      - name: Configure & build (portable flags — no march=native)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+
+      - name: Engine test suite
+        run: bash tests/test_engine.sh
+
+      - name: Python package tests
+        run: |
+          pip3 install --quiet numpy pytest pillow
+          pip3 install --quiet -e ./python[dev]
+          python3 -m pytest python/tests -q
+
+  abi-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ctypes struct mirrors opngx_params (field-name diff guard)
+        run: |
+          sudo apt-get update && sudo apt-get install -y python3
+          python3 - << 'EOF'
+          import re
+          h = open('src/opngx.h').read()
+          m = re.search(r'typedef struct \{(.*?)\} opngx_params;', h, re.S)
+          c_fields = set(re.findall(r'^\s*(?:const char \*|int64_t\s+|uint32_t\s+|double\s+|opngx_\w+\s+|int\s+)(\w+);', m.group(1), re.M))
+          p = open('python/src/opngx/_engine.py').read()
+          m2 = re.search(r'_fields_ = \[(.*?)\]', p, re.S)
+          py_fields = set(re.findall(r'\("(\w+)",', m2.group(1)))
+          missing_py = {f for f in c_fields if f not in py_fields and f != 'footage_path'}
+          # footage_path is nullable char* kept in both; report real drift only
+          assert not (c_fields - py_fields), f"struct drift! C-only fields: {c_fields - py_fields}"
+          print('ABI mirror OK:', sorted(c_fields))
+          EOF
