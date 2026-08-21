@@ -48,6 +48,7 @@ struct opngx_job {
     _Atomic int64_t done;
     _Atomic int     cancel;
     _Atomic int     backend_seen;   /* first worker reports real backend */
+    _Atomic long long last_ms;      /* progress throttle (monotonic ms)   */
 
     opngx_stats stats;
     char err[512];
@@ -229,6 +230,8 @@ int opngx_job_run(opngx_job *j) {
     double t0 = port_now_s();
     atomic_store(&j->done, 0);
     atomic_store(&j->backend_seen, 0);
+    atomic_store(&j->last_ms, 0);
+    const long long start_ms = (long long)(port_now_s() * 1000.0);
     int hard_fail = 0;
 
     #pragma omp parallel num_threads(j->p.jobs > 0 ? j->p.jobs : opngx_cpu_count()) \
@@ -274,10 +277,24 @@ int opngx_job_run(opngx_job *j) {
             snprintf(path, sizeof path, "%s/%s%05lld%s", j->out_dir, j->prefix,
                      (long long)(base + i), j->ext);
             if (port_write_whole_file(path, filebuf, flen)) { hard_fail |= 8; continue; }
-            int expected = 0;
-            atomic_compare_exchange_strong(&j->backend_seen, &expected,
-                                           cctx_backend_id(c));
-            atomic_fetch_add_explicit(&j->done, 1, memory_order_relaxed);
+            long long done_now =
+                atomic_fetch_add_explicit(&j->done, 1, memory_order_relaxed) + 1;
+
+            /* live progress: any worker may claim the next 250ms slot */
+            if (j->p.verbose) {
+                long long ms = (long long)(port_now_s() * 1000.0);
+                long long expected_ms = atomic_load(&j->last_ms);
+                if (ms - expected_ms >= 250 &&
+                    atomic_compare_exchange_strong(&j->last_ms, &expected_ms, ms)) {
+                    double el = (ms - start_ms) / 1000.0;
+                    double frac = (double)done_now / (double)N;
+                    double eta = frac > 0.004 ? el / frac - el : 0.0;
+                    fprintf(stderr, "\ropngx: %lld/%lld (%5.1f%%)  %7.0f fps  eta %4.0fs",
+                            (long long)done_now, (long long)N, 100.0 * frac,
+                            el > 0 ? done_now / el : 0.0, eta);
+                    fflush(stderr);
+                }
+            }
         }
 
         cctx_free(c);
@@ -294,6 +311,9 @@ int opngx_job_run(opngx_job *j) {
         (uint64_t)(8 + (int64_t)W * H); /* input bytes consumed */
     j->stats.mib_per_s_in = dt > 0 ? (double)j->stats.bytes_written / (1048576.0 * dt) : 0;
     j->stats.frames_per_s = dt > 0 ? (double)j->stats.frames_written / dt : 0;
+    if (j->p.verbose)
+        fprintf(stderr, "\ropngx: %lld/%lld (100.0%%)%*s\n",
+                (long long)j->stats.frames_written, (long long)N, 20, "");
 
     if (hard_fail) {
         snprintf(j->err, sizeof j->err, "extraction failed (mask 0x%x): see errno messages above", hard_fail);
