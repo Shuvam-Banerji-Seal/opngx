@@ -67,6 +67,7 @@ struct cctx {
 };
 
 cctx *cctx_create(int want_backend, int level) {
+    (void)want_backend;  /* zlib is the only backend in this build */
     cctx *c = calloc(1, sizeof(*c));
     if (!c) return NULL;
     c->backend = C_BACKEND_ZLIB;
