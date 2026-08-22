@@ -37,139 +37,147 @@ except Exception:  # pragma: no cover
 QSS = """
 * { font-family: 'Segoe UI', 'Ubuntu', 'DejaVu Sans', sans-serif; }
 
-QMainWindow, QDialog { background: #0f172a; }
-QWidget#root        { background: #0f172a; }
+QMainWindow, QDialog { background: #050505; }
+QWidget#root        { background: #050505; }
 
 /* ---------- header ---------- */
-QLabel#title {
-    color: #f8fafc; font-size: 21px; font-weight: 700;
-}
-QLabel#subtitle { color: #64748b; font-size: 11px; }
+QLabel#title { color: #ffffff; font-size: 21px; font-weight: 700; }
+QLabel#subtitle { color: #7d8a7d; font-size: 11px; }
 QLabel#chip {
-    background: #1e293b; color: #94a3b8;
-    border: 1px solid #334155; border-radius: 11px;
+    background: #0d120d; color: #a8c9a3;
+    border: 1px solid #2f4a2c; border-radius: 11px;
     padding: 3px 12px; font-size: 11px;
 }
 
 /* ---------- cards ---------- */
 QFrame#card {
-    background: #1e293b;
-    border: 1px solid #334155;
+    background: #0d0f0d;
+    border: 1px solid #1f261f;
     border-radius: 14px;
 }
 QLabel#cardtitle {
-    color: #94a3b8; font-size: 11px; font-weight: 600;
-    letter-spacing: 1px;
+    color: #7fa277; font-size: 11px; font-weight: 600; letter-spacing: 1px;
 }
-QLabel#hint { color: #64748b; font-size: 11px; }
+QLabel#hint { color: #8a948a; font-size: 11px; }
+QLabel#fieldlabel { color: #9ab294; font-size: 11px; }
 
 /* ---------- inputs ---------- */
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-    background: #0b1220; color: #e2e8f0;
-    border: 1px solid #334155; border-radius: 8px;
-    padding: 7px 10px; selection-background-color: #3b82f6;
+    background: #070807; color: #ffffff;
+    border: 1px solid #2a332a; border-radius: 8px;
+    padding: 7px 10px; selection-background-color: #4d8248;
 }
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
-    border: 1px solid #3b82f6;
+    border: 1px solid #588157;
 }
 QComboBox::drop-down { border: none; width: 22px; }
 QComboBox QAbstractItemView {
-    background: #0b1220; color: #e2e8f0;
-    selection-background-color: #3b82f6;
-    border: 1px solid #334155;
+    background: #0d0f0d; color: #ffffff;
+    selection-background-color: #4d8248;
+    border: 1px solid #2f4a2c;
 }
 
 /* ---------- buttons ---------- */
 QPushButton {
-    background: #273449; color: #e2e8f0;
-    border: 1px solid #334155; border-radius: 9px;
+    background: #10140f; color: #ffffff;
+    border: 1px solid #2a332a; border-radius: 9px;
     padding: 9px 18px; font-weight: 500;
 }
-QPushButton:hover  { background: #334155; }
-QPushButton:pressed{ background: #3b4a63; }
-QPushButton:disabled { color: #475569; background: #16202f; }
+QPushButton:hover  { background: #182018; border-color: #3e6b3a; }
+QPushButton:pressed{ background: #22301f; }
+QPushButton:disabled { color: #4a554a; background: #0a0c0a; }
 QPushButton#accent {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                stop:0 #3b82f6, stop:1 #2563eb);
+                stop:0 #4d8248, stop:1 #3e6b3a);
     color: white; border: none; font-weight: 700; padding: 10px 26px;
 }
-QPushButton#accent:hover { background: #2563eb; }
+QPushButton#accent:hover { background: #57914f; }
 QPushButton#danger {
-    background: #dc2626; color: white; border: none; font-weight: 700;
+    background: #7a2222; color: #ffecec; border: none; font-weight: 700;
 }
-QPushButton#danger:hover { background: #b91c1c; }
-QPushButton#danger:disabled { background: #3f1d1d; color: #7f5252; }
+QPushButton#danger:hover { background: #962b2b; }
+QPushButton#danger:disabled { background: #2a1414; color: #6b4444; }
 
 /* ---------- radio / check ---------- */
-QRadioButton, QCheckBox { color: #cbd5e1; spacing: 7px; }
+QRadioButton, QCheckBox { color: #e8ede8; spacing: 7px; }
 QRadioButton::indicator, QCheckBox::indicator {
     width: 16px; height: 16px; border-radius: 8px;
-    border: 2px solid #475569; background: #0b1220;
+    border: 2px solid #3a4a38; background: #070807;
 }
 QRadioButton::indicator:checked, QCheckBox::indicator:checked {
     background: qradialgradient(cx:0.5, cy:0.5, radius:0.6, fx:0.5, fy:0.5,
-                stop:0 #93c5fd, stop:0.55 #3b82f6, stop:0.56 #3b82f6);
-    border-color: #60a5fa;
+                stop:0 #d9ead3, stop:0.55 #588157, stop:0.56 #588157);
+    border-color: #7fb069;
 }
-QRadioButton:hover, QCheckBox:hover { color: #e2e8f0; }
+QRadioButton:hover, QCheckBox:hover { color: #ffffff; }
 
 /* ---------- sliders ---------- */
 QSlider::groove:horizontal {
-    height: 6px; background: #0b1220; border-radius: 3px;
+    height: 6px; background: #0a0c0a; border-radius: 3px;
 }
-QSlider::sub-page:horizontal { background: #3b82f6; border-radius: 3px; }
+QSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                stop:0 #4d8248, stop:1 #7fb069);
+    border-radius: 3px;
+}
 QSlider::handle:horizontal {
     width: 16px; height: 16px; margin: -5px 0; border-radius: 8px;
-    background: #e2e8f0; border: 2px solid #3b82f6;
+    background: #ffffff; border: 2px solid #588157;
 }
-QSlider::handle:horizontal:hover { background: white; }
+QSlider::handle:horizontal:hover { background: #f0fff0; }
 
 /* ---------- progress ---------- */
 QProgressBar {
-    background: #0b1220; border-radius: 7px; height: 14px;
-    text-align: center; color: transparent; border: 1px solid #334155;
+    background: #0a0c0a; border-radius: 7px; height: 14px;
+    text-align: center; color: transparent; border: 1px solid #1f261f;
 }
 QProgressBar::chunk {
     background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                stop:0 #3b82f6, stop:1 #60a5fa);
+                stop:0 #4d8248, stop:1 #8fbf7f);
     border-radius: 6px;
 }
 
 /* ---------- table / log / splitters ---------- */
 QTableWidget {
-    background: #0b1220; color: #dbe4f0; gridline-color: #1e293b;
-    border: 1px solid #334155; border-radius: 10px;
-    selection-background-color: #1d4ed8;
+    background: #070807; color: #f0f4f0; gridline-color: #161b16;
+    border: 1px solid #1f261f; border-radius: 10px;
+    selection-background-color: #35542f;
 }
 QHeaderView::section {
-    background: #16202f; color: #94a3b8; border: none;
+    background: #0d0f0d; color: #9ab294; border: none;
     padding: 6px; font-size: 11px;
 }
 QPlainTextEdit, QTextBrowser {
-    background: #0b1220; color: #cbd5e1;
-    border: 1px solid #334155; border-radius: 10px;
+    background: #070807; color: #e6ece6;
+    border: 1px solid #1f261f; border-radius: 10px;
     font-family: 'Cascadia Mono', Consolas, monospace; font-size: 12px;
 }
-QSplitter::handle { background: #0f172a; width: 5px; height: 5px; }
-QSplitter::handle:hover { background: #3b82f6; }
+QSplitter::handle { background: #050505; width: 5px; height: 5px; }
+QSplitter::handle:hover { background: #4d8248; }
+
+/* ---------- image viewer ---------- */
+QLabel#viewer {
+    background: #000000; color: #4a554a;
+    border: 1px solid #1f261f; border-radius: 10px;
+}
 
 /* ---------- scrollbars ---------- */
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
-QScrollBar::handle:vertical { background: #334155; border-radius: 5px; min-height: 30px; }
-QScrollBar::handle:vertical:hover { background: #475569; }
+QScrollBar::handle:vertical { background: #22301f; border-radius: 5px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #3e6b3a; }
 QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
-QScrollBar::handle:horizontal { background: #334155; border-radius: 5px; min-width: 30px; }
+QScrollBar::handle:horizontal { background: #22301f; border-radius: 5px; min-width: 30px; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 
 /* ---------- menus ---------- */
-QMenuBar { background: #0f172a; color: #cbd5e1; }
-QMenuBar::item:selected { background: #1e293b; border-radius: 6px; }
-QMenu { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; }
-QMenu::item:selected { background: #3b82f6; }
+QMenuBar { background: #050505; color: #dfe6df; }
+QMenuBar::item:selected { background: #14200f; border-radius: 6px; }
+QMenu { background: #0d0f0d; color: #ffffff; border: 1px solid #2f4a2c; }
+QMenu::item:selected { background: #35542f; }
 
 QToolTip {
-    background: #0b1220; color: #dbe4f0;
-    border: 1px solid #3b82f6; border-radius: 8px; padding: 8px;
+    background: #070807; color: #eaf2ea;
+    border: 1px solid #588157; border-radius: 8px; padding: 8px;
 }
 """
 
@@ -263,6 +271,13 @@ def chip(text: str) -> "QtWidgets.QLabel":
     lbl = QtWidgets.QLabel(text)
     lbl.setObjectName("chip")
     return lbl
+
+
+def opnx_ffmpeg_ok() -> bool:
+    try:
+        return opngx.ffmpeg_available()
+    except Exception:
+        return False
 
 
 def _detect_gpus() -> list[str]:
@@ -494,6 +509,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.modes["custom"], "custom mode", "Your brightness/contrast/gamma below."
         )
 
+        def mini_label(text: str) -> QtWidgets.QLabel:
+            lab = QtWidgets.QLabel(text)
+            lab.setObjectName("fieldlabel")
+            lab.setMinimumWidth(78)  # never clip, even when squeezed
+            return lab
+
         bcg = QtWidgets.QHBoxLayout()
         self.b_spin = QtWidgets.QDoubleSpinBox()
         self.b_spin.setRange(-255, 255)
@@ -506,37 +527,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.g_spin.setValue(1.0)
         self.g_spin.setSingleStep(0.05)
         for lbl, w, tip_t, tip_b in (
-            (
-                "B",
-                self.b_spin,
-                "Brightness",
-                "Offset added to every raw byte before scaling.",
-            ),
-            (
-                "C",
-                self.c_spin,
-                "Contrast",
-                "Multiplier = 1 + C/50. Vendor default 18 → 1.36×.",
-            ),
-            ("γ", self.g_spin, "Gamma", "Applied after B/C. 1.0 = off."),
+            ("brightness", self.b_spin, "Brightness", "Offset added to every raw byte before scaling."),
+            ("contrast", self.c_spin, "Contrast", "Multiplier = 1 + C/50. Vendor default 18 → 1.36×."),
+            ("gamma", self.g_spin, "Gamma", "Applied after B/C. 1.0 = off."),
         ):
             box = QtWidgets.QHBoxLayout()
-            lab = QtWidgets.QLabel(lbl)
-            box.addWidget(lab)
-            box.addWidget(w)
+            box.addWidget(mini_label(lbl))
+            box.addWidget(w, 1)
             bcg.addLayout(box)
             self._tip(w, tip_t, tip_b)
-        bcg.addStretch(1)
         tv.addLayout(bcg)
 
         # range
         rng = QtWidgets.QHBoxLayout()
-        rng.addWidget(QtWidgets.QLabel("start"))
+        rng.addWidget(mini_label("start"))
         self.start_spin = QtWidgets.QSpinBox()
         self.start_spin.setRange(0, 10**9)
         rng.addWidget(self.start_spin)
         rng.addSpacing(12)
-        rng.addWidget(QtWidgets.QLabel("count"))
+        rng.addWidget(mini_label("count"))
         self.count_spin = QtWidgets.QSpinBox()
         self.count_spin.setRange(0, 10**9)
         self.count_spin.setSpecialValueText("all")
@@ -550,82 +559,66 @@ class MainWindow(QtWidgets.QMainWindow):
             "Frames to extract from start. 0 (= “all”) takes everything remaining.",
         )
 
-        # container grid
-        cont = QtWidgets.QGridLayout()
-        cont.setHorizontalSpacing(14)
-        self.depth_combo = QtWidgets.QComboBox()
-        self.depth_combo.addItems(["8", "16"])
-        self.chan_combo = QtWidgets.QComboBox()
-        self.chan_combo.addItems(["rgba", "gray"])
-        self.fmt_combo = QtWidgets.QComboBox()
-        self.fmt_combo.addItems(["png", "jpg", "bmp", "tif"])
-        self.jpg_slider = QtWidgets.QSlider(Qt.Horizontal)
-        self.jpg_slider.setRange(40, 100)
-        self.jpg_slider.setValue(90)
-        self.jpg_label = QtWidgets.QLabel("90")
-        rows = (
-            (
-                "bit depth",
-                self.depth_combo,
-                "Bit depth",
-                "8 matches vendor exports; 16 stores values ×257 "
-                "(no extra detail; PNG only).",
-            ),
-            (
-                "channels",
-                self.chan_combo,
-                "Channels",
-                "rgba = vendor-like container; gray = single channel, "
-                "identical pixels, ~2.5× faster.",
-            ),
-            (
-                "format",
-                self.fmt_combo,
-                "Format",
-                "png lossless · jpg lossy+small · bmp/tif lossless. "
-                "Extension follows automatically.",
-            ),
-            (
-                "jpeg q",
-                self.jpg_slider,
-                "JPEG quality",
-                "40–100. Higher = better fidelity, bigger files.",
-            ),
-        )
-        for r, (lbl, w, tt, tb_) in enumerate(rows):
-            cont.addWidget(QtWidgets.QLabel(lbl), r, 0)
-            if isinstance(w, QtWidgets.QSlider):
-                h = QtWidgets.QHBoxLayout()
-                h.addWidget(w, 1)
-                h.addWidget(self.jpg_label)
-                cont.addLayout(h, r, 1)
-            else:
-                cont.addWidget(w, r, 1)
+        # container rows (hbox pairs — labels can never clip)
+        def field_row(lbl, w, tt, tb_):
+            h = QtWidgets.QHBoxLayout()
+            lab = QtWidgets.QLabel(lbl)
+            lab.setObjectName("fieldlabel")
+            lab.setFixedWidth(78)
+            h.addWidget(lab)
+            h.addWidget(w, 1)
+            tv.addLayout(h)
             self._tip(w, tt, tb_)
+
+        self.depth_combo = QtWidgets.QComboBox(); self.depth_combo.addItems(["8", "16"])
+        self.chan_combo = QtWidgets.QComboBox(); self.chan_combo.addItems(["rgba", "gray"])
+        self.fmt_combo = QtWidgets.QComboBox(); self.fmt_combo.addItems(["png", "jpg", "bmp", "tif"])
+        self.jpg_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.jpg_slider.setRange(40, 100); self.jpg_slider.setValue(90)
+        self.jpg_label = QtWidgets.QLabel("90")
+        self.jpg_label.setFixedWidth(30)
+        field_row("bit depth", self.depth_combo, "Bit depth",
+                  "8 matches vendor exports; 16 stores values ×257 "
+                  "(no extra detail; PNG only).")
+        field_row("channels", self.chan_combo, "Channels",
+                  "rgba = vendor-like container; gray = single channel, "
+                  "identical pixels, ~2.5× faster.")
+        field_row("format", self.fmt_combo, "Format",
+                  "png lossless · jpg lossy+small · bmp/tif lossless. "
+                  "Extension follows automatically.")
+        jrow = QtWidgets.QHBoxLayout()
+        jlab = QtWidgets.QLabel("jpeg q"); jlab.setObjectName("fieldlabel")
+        jlab.setFixedWidth(78)
+        jrow.addWidget(jlab)
+        jrow.addWidget(self.jpg_slider, 1)
+        jrow.addWidget(self.jpg_label)
+        tv.addLayout(jrow)
+        self._tip(self.jpg_slider, "JPEG quality",
+                  "40–100. Higher = better fidelity, bigger files.")
         self.jpg_slider.valueChanged.connect(
             lambda v_: self.jpg_label.setText(str(int(v_)))
         )
-        tv.addLayout(cont)
 
-        # engine sliders
-        eng = QtWidgets.QGridLayout()
+        # engine rows
         maxcores = max((os.cpu_count() or 4) * 2, 8)
         self.jobs_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.jobs_slider.setRange(1, maxcores)
         self.jobs_slider.setValue(os.cpu_count() or 4)
         self.jobs_label = QtWidgets.QLabel(str(self.jobs_slider.value()))
+        self.jobs_label.setFixedWidth(30)
         self.level_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.level_slider.setRange(1, 12)
         self.level_slider.setValue(6)
         self.level_label = QtWidgets.QLabel("6")
-        eng.addWidget(QtWidgets.QLabel("jobs"), 0, 0)
-        eng.addWidget(self.jobs_slider, 0, 1)
-        eng.addWidget(self.jobs_label, 0, 2)
-        eng.addWidget(QtWidgets.QLabel("level"), 1, 0)
-        eng.addWidget(self.level_slider, 1, 1)
-        eng.addWidget(self.level_label, 1, 2)
-        eng.setColumnStretch(1, 1)
-        tv.addLayout(eng)
+        self.level_label.setFixedWidth(30)
+        field_row("jobs", self.jobs_slider, "Worker threads (auto-detected)",
+                  f"This machine reports {os.cpu_count()} logical cores. "
+                  "Expect ≈(cores×100)% total CPU while extracting.")
+        field_row("level", self.level_slider, "Compression level",
+                  "DEFLATE effort: 1–2 fast/large · 3 sweet spot · "
+                  "6 default · 9+ smallest/slowest.")
+        tv.addStretch(1)
+
         self.jobs_slider.valueChanged.connect(
             lambda v_: self.jobs_label.setText(str(int(v_)))
         )
@@ -678,12 +671,12 @@ class MainWindow(QtWidgets.QMainWindow):
         orow.addWidget(obrowse)
         ov.addLayout(orow)
         nrow = QtWidgets.QHBoxLayout()
-        nrow.addWidget(QtWidgets.QLabel("prefix"))
+        nrow.addWidget(mini_label("prefix"))
         self.prefix_edit = QtWidgets.QLineEdit("brow_")
         self.prefix_edit.setMaximumWidth(90)
         nrow.addWidget(self.prefix_edit)
         nrow.addSpacing(10)
-        nrow.addWidget(QtWidgets.QLabel("ext"))
+        nrow.addWidget(mini_label("ext"))
         self.ext_edit = QtWidgets.QLineEdit(".Png")
         self.ext_edit.setMaximumWidth(70)
         nrow.addWidget(self.ext_edit)
@@ -733,6 +726,38 @@ class MainWindow(QtWidgets.QMainWindow):
             "guaranteed pixel-identical to vendor exports.",
         )
 
+        viewer_card, wv = self._card("frame viewer")
+        self.viewer_img = QtWidgets.QLabel("probe a recording, then scrub")
+        self.viewer_img.setObjectName("viewer")
+        self.viewer_img.setAlignment(Qt.AlignCenter)
+        self.viewer_img.setMinimumHeight(210)
+        wv.addWidget(self.viewer_img, 1)
+        vrow = QtWidgets.QHBoxLayout()
+        self.prev_btn = QtWidgets.QPushButton("◀")
+        self.prev_btn.setFixedWidth(44)
+        self.next_btn = QtWidgets.QPushButton("▶")
+        self.next_btn.setFixedWidth(44)
+        self.frame_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.frame_slider.setRange(0, 0)
+        self.frame_lbl = QtWidgets.QLabel("frame —")
+        self.frame_lbl.setMinimumWidth(150)
+        self.frame_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        vrow.addWidget(self.prev_btn)
+        vrow.addWidget(self.frame_slider, 1)
+        vrow.addWidget(self.next_btn)
+        vrow.addWidget(self.frame_lbl)
+        wv.addLayout(vrow)
+        rv.addWidget(viewer_card)
+        self._tip(self.viewer_img, "Frame preview",
+                  "Renders the selected frame with the CURRENT quality "
+                  "settings — move the sliders to see the transform live.")
+        self._tip(self.frame_slider, "Scrubber",
+                  "Drag to scrub through the recording. ◀/▶ step one frame.")
+        self.prev_btn.clicked.connect(lambda: self._step_frame(-1))
+        self.next_btn.clicked.connect(lambda: self._step_frame(+1))
+        self.frame_slider.valueChanged.connect(
+            lambda v_: self._show_frame(int(v_)))
+
         log_card, gv = self._card("log")
         self.log_view = QtWidgets.QPlainTextEdit()
         self.log_view.setReadOnly(True)
@@ -752,9 +777,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cancel_btn = QtWidgets.QPushButton("■  Cancel")
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.setEnabled(False)
+        video_btn = QtWidgets.QPushButton("🎬  Render video…")
         verify = QtWidgets.QPushButton("✓  Verify against reference dir…")
         bar.addWidget(self.extract_btn)
         bar.addWidget(self.cancel_btn)
+        bar.addWidget(video_btn)
         bar.addWidget(verify)
         self.progress = QtWidgets.QProgressBar()
         self.progress.setFixedHeight(16)
@@ -770,6 +797,7 @@ class MainWindow(QtWidgets.QMainWindow):
         obrowse.clicked.connect(self._pick_out)
         self.extract_btn.clicked.connect(self._start)
         self.cancel_btn.clicked.connect(self._cancel)
+        video_btn.clicked.connect(self._render_video_dialog)
         verify.clicked.connect(self._verify)
 
         self._log(
@@ -790,6 +818,122 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bin_edit.setText(p)
         self.rb_single.setChecked(True)
         self._probe()
+
+
+    # ------------------------------------------------------ frame viewer
+    def _current_lut_kwargs(self) -> dict[str, Any]:
+        mode = next((k for k, rb in self.modes.items() if rb.isChecked()),
+                    "reference")
+        return dict(mode=mode,
+                    brightness=self.b_spin.value(),
+                    contrast=self.c_spin.value(),
+                    gamma=self.g_spin.value())
+
+    def _show_frame(self, idx: int) -> None:
+        m = self.meta
+        if not m or m.capacity_frames == 0:
+            return
+        idx = max(0, min(idx, m.capacity_frames - 1))
+        from opngx.video import read_frame_gray
+        buf = opngx.read_frame_gray(m.bin_path, m, idx,
+                                    **self._current_lut_kwargs())
+        img = QtGui.QImage(buf, m.width, m.height,
+                           m.width, QtGui.QImage.Format_Grayscale8).copy()
+        pm = QtGui.QPixmap.fromImage(img)
+        scaled = pm.scaled(self.viewer_img.width() - 2,
+                           self.viewer_img.height() - 2,
+                           Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.viewer_img.setPixmap(scaled)
+        self.frame_lbl.setText(f"frame {idx:,} / {m.capacity_frames - 1:,}")
+
+    def _step_frame(self, delta: int) -> None:
+        v = int(self.frame_slider.value()) + delta
+        self.frame_slider.setValue(max(self.frame_slider.minimum(),
+                                       min(self.frame_slider.maximum(), v)))
+
+    # ------------------------------------------------------- video render
+    def _render_video_dialog(self) -> None:
+        if not self.meta:
+            QtWidgets.QMessageBox.warning(
+                self, "opngx", "Probe a bin first.")
+            return
+        if not opnx_ffmpeg_ok():
+            QtWidgets.QMessageBox.warning(
+                self, "opngx",
+                "ffmpeg was not found on PATH.\n"
+                "Install it (winget install ffmpeg / pacman -S ffmpeg) "
+                "and reopen the dialog.")
+            return
+        d = QtWidgets.QDialog(self)
+        d.setWindowTitle("Render video")
+        d.setMinimumWidth(420)
+        v = QtWidgets.QVBoxLayout(d)
+        grid = QtWidgets.QGridLayout()
+        fps = QtWidgets.QSpinBox(); fps.setRange(1, 500); fps.setValue(30)
+        crf = QtWidgets.QSpinBox(); crf.setRange(14, 28); crf.setValue(18)
+        out_edit = QtWidgets.QLineEdit(os.path.join(
+            self.out_edit.text().strip() or ".",
+            (self.meta.camera_name or "video").replace(".", "_") + ".mp4"))
+        save = QtWidgets.QPushButton("…")
+        save.setFixedWidth(36)
+
+        def pick():
+            pth, _ = QtWidgets.QFileDialog.getSaveFileName(
+                d, "Output video", out_edit.text(), "MP4 video (*.mp4)")
+            if pth:
+                out_edit.setText(pth)
+        save.clicked.connect(pick)
+
+        grid.addWidget(QtWidgets.QLabel("fps"), 0, 0);  grid.addWidget(fps, 0, 1)
+        grid.addWidget(QtWidgets.QLabel("crf"), 1, 0);  grid.addWidget(crf, 1, 1)
+        grid.addWidget(QtWidgets.QLabel("file"), 2, 0); grid.addWidget(out_edit, 2, 1)
+        grid.addWidget(save, 2, 2)
+        v.addLayout(grid)
+        note = QtWidgets.QLabel(
+            "Uses the quality mode + range settings from the main window.\n"
+            "lower crf = higher quality / bigger file.")
+        note.setObjectName("hint")
+        v.addWidget(note)
+        bb = QtWidgets.QHBoxLayout()
+        go = QtWidgets.QPushButton("▶  Render"); go.setObjectName("accent")
+        cancel = QtWidgets.QPushButton("Cancel"); cancel.clicked.connect(d.reject)
+        bb.addWidget(go); bb.addWidget(cancel); bb.addStretch(1)
+        v.addLayout(bb)
+
+        def run() -> None:
+            opts = self._collect_opts()
+            n = opts["frames"] if opts["frames"] is not None \
+                else self.meta.capacity_frames - opts["start"]
+            n = max(0, n)
+            self._sig.log.emit(
+                f"rendering video: frames={n} fps={fps.value()} "
+                f"crf={crf.value()} → {out_edit.text()}", "info")
+            try:
+                st = opngx.render_video(
+                    self.meta.bin_path, out_edit.text(),
+                    mode=opts["mode"], brightness=opts["brightness"],
+                    contrast=opts["contrast"], gamma=opts["gamma"],
+                    start=opts["start"], count=n,
+                    fps=fps.value(), crf=crf.value(),
+                    progress=lambda a, b_: self._sig.progress.emit(a, b_, 0.0),
+                    should_cancel=lambda: self._cancel_requested)
+                tail = "  — CANCELLED" if st.get("cancelled") else ""
+                self._sig.log.emit(
+                    f"video done: {st['frames_written']:,} frames in "
+                    f"{st['seconds']:.1f}s → {st['output']}{tail}", "ok")
+            except Exception as exc:                       # noqa: BLE001
+                self._sig.error.emit(str(exc))
+            finally:
+                d.accept()
+
+        def start_render():
+            go.setEnabled(False)
+            self._running = True
+            threading.Thread(target=run, daemon=True).start()
+
+        go.clicked.connect(start_render)
+        d.exec()
+        self._running = False
 
     # ------------------------------------------------------------- actions
     def _fmt_changed(self, fmt: str) -> None:
@@ -867,6 +1011,12 @@ class MainWindow(QtWidgets.QMainWindow):
             ]
         )
         self._log(f"probed {os.path.basename(m.bin_path)}")
+        self.frame_slider.blockSignals(True)
+        self.frame_slider.setRange(0, max(0, m.capacity_frames - 1))
+        start_at = int(self.start_spin.value())
+        self.frame_slider.setValue(start_at)
+        self.frame_slider.blockSignals(False)
+        self._show_frame(start_at)
         if not self.out_edit.text():
             self.out_edit.setText(
                 os.path.join(

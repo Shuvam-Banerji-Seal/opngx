@@ -62,6 +62,17 @@ def main(argv: list[str] | None = None) -> int:
     pv.add_argument("--full-set", dest="subset", action="store_false",
                     help="require identical name sets")
 
+    pv2 = sub.add_parser("video", help="render an MP4 straight from a .bin")
+    pv2.add_argument("bin")
+    pv2.add_argument("-o", "--out", required=True)
+    pv2.add_argument("--fps", type=int, default=30)
+    pv2.add_argument("--crf", type=int, default=18)
+    pv2.add_argument("--start", type=int, default=0)
+    pv2.add_argument("--frames", type=int, default=None)
+    pv2.add_argument("--footage", default=None)
+    pv2.add_argument("-m", "--mode", choices=["reference", "raw", "custom"],
+                     default="reference")
+
     pi = sub.add_parser("info", help="show metadata + machine capabilities")
     pi.add_argument("bin", nargs="?")
 
@@ -90,6 +101,15 @@ def main(argv: list[str] | None = None) -> int:
                 "verified_operating_point",
             ):
                 print(f"{k}: {getattr(m, k)}")
+        return 0
+
+    if args.cmd == "video":
+        st = opngx.render_video(
+            args.bin, args.out, mode=args.mode,
+            start=args.start, count=args.frames,
+            fps=args.fps, crf=args.crf)
+        print(f"opngx: wrote {st['frames_written']:,} frames → {st['output']} "
+              f"in {st['seconds']:.1f}s")
         return 0
 
     if args.cmd == "verify":

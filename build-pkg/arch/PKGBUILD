@@ -1,0 +1,10 @@
+pkgname=opngx
+pkgver=1.3.0
+pkgrel=1
+pkgdesc='Ultra-fast pixel-exact Optronis .bin footage extractor'
+arch=('x86_64')
+url='https://github.com/Shuvam-Banerji-Seal/opngx'
+license=(MIT)
+package() {
+  install -Dm755 "$srcdir/../opngx-engine" "$pkgdir/usr/bin/opngx-engine"
+}

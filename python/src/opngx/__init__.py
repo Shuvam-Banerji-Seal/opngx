@@ -11,6 +11,7 @@ from .footage import FootageMetadata, probe, read_timestamps
 from .extractor import ExtractStats, Extractor, extract
 from .quality import QualityMode
 from .verify import VerifyReport, verify
+from .video import render_video, read_frame_gray, ffmpeg_available
 
 __version__ = "1.2.1"
 
