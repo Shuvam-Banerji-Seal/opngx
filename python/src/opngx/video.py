@@ -17,8 +17,28 @@ from .footage import probe
 from .quality import build_lut
 
 
+_FFCACHE: Optional[str] = None
+
+
+def resolve_ffmpeg() -> Optional[str]:
+    """Path to an ffmpeg executable: PATH first, then the one shipped
+    inside imageio-ffmpeg (bundled in the Windows build)."""
+    global _FFCACHE
+    if _FFCACHE:
+        return _FFCACHE
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        try:
+            import imageio_ffmpeg
+            exe = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            exe = None
+    _FFCACHE = exe
+    return exe
+
+
 def ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return resolve_ffmpeg() is not None
 
 
 def read_frame_gray(bin_path: str, meta, index: int,
@@ -128,29 +148,50 @@ def render_video(
     t0 = time.perf_counter()
     written = 0
     try:
+        # Bulk pipeline: mmap once, LUT big runs of frames with one
+        # bytes.translate per chunk (C speed), few large pipe writes.
+        import mmap
+
+        CHUNK = 256  # frames per LUT/write batch
+        px = meta.width * meta.height
         with open(bin_path, "rb") as f:
-            f.seek(start * meta.frame_stride + 8)
-            stride_data = meta.width * meta.height
-            for i in range(n):
-                buf = f.read(stride_data)
-                if len(buf) < stride_data:
-                    raise IOError(f"unexpected EOF at frame {start + i}")
-                try:
-                    proc.stdin.write(
-                        buf.translate(lut)
-                    )  # LUT via bytes.translate — C speed
-                    written += 1
-                except BrokenPipeError:
-                    err = (
-                        proc.stderr.read().decode(errors="replace")
-                        if proc.stderr
-                        else "encoder died"
-                    )
-                    raise RuntimeError(f"ffmpeg failed: {err}") from None
-                if progress and (i % 128 == 0 or i == n - 1):
-                    progress(i + 1, n)
-                if should_cancel is not None and should_cancel():
-                    break
+            mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                base_off = start * meta.frame_stride + 8
+                i = 0
+                while i < n:
+                    if should_cancel is not None and should_cancel():
+                        break
+                    take = min(CHUNK, n - i)
+                    off0 = base_off + i * meta.frame_stride
+                    span = (take - 1) * meta.frame_stride + 8 + px
+                    raw = mm[off0 : off0 + span]
+                    if len(raw) < span:
+                        raise IOError(
+                            f"unexpected EOF at frame {start + i + take - 1}"
+                        )
+                    lutted = raw.translate(lut)
+                    view = memoryview(lutted)
+                    parts = [
+                        view[k * meta.frame_stride + 8 :
+                             k * meta.frame_stride + 8 + px]
+                        for k in range(take)
+                    ]
+                    try:
+                        proc.stdin.write(b"".join(parts))
+                    except BrokenPipeError:
+                        err = (
+                            proc.stderr.read().decode(errors="replace")
+                            if proc.stderr
+                            else "encoder died"
+                        )
+                        raise RuntimeError(f"ffmpeg failed: {err}") from None
+                    written += take
+                    i += take
+                    if progress:
+                        progress(min(i, n), n)
+            finally:
+                mm.close()
     finally:
         try:
             proc.stdin.close()

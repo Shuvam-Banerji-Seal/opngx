@@ -154,7 +154,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --quiet pyinstaller numpy pillow PySide6
-          pip install --quiet ./python
+          pip install --quiet "./python[qt]"
           Copy-Item build-win/libopngx.dll .
           pyinstaller --noconfirm opngx.spec
           Get-ChildItem dist

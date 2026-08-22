@@ -8,6 +8,7 @@ sample tree is absent (CI-safe).
 from __future__ import annotations
 
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -140,6 +141,7 @@ def test_fallback_engine_matches_native_formula(fixture_dir):
     from opngx._fallback import encode_png, _render_frame
 
     from PIL import Image as _PILImage
+
     Image = _PILImage  # noqa: F841 — used by later assertions in this module scope
     _, (_ext, blob) = _render_frame(
         (
@@ -221,23 +223,46 @@ def test_cli_info_on_sample():
 def test_backend_reported_truthfully(fixture_dir):
     """stats.backend_used must reflect the engine actually used (audit #9)."""
     out = fixture_dir / "be_out"
-    st = opngx.extract(str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
-                       str(out), jobs=2, prefix="cam_", backend="zlib")
-    assert st.backend in ("zlib", "libdeflate")   # never the literal 'auto'
-    st2 = opngx.extract(str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
-                        str(out) + "_2", jobs=2, prefix="cam_")
+    st = opngx.extract(
+        str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
+        str(out),
+        jobs=2,
+        prefix="cam_",
+        backend="zlib",
+    )
+    assert st.backend in ("zlib", "libdeflate")  # never the literal 'auto'
+    st2 = opngx.extract(
+        str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
+        str(out) + "_2",
+        jobs=2,
+        prefix="cam_",
+    )
     assert st2.backend == st.backend  # same binary => same real backend
 
 
 def test_fallback_start_offset_matches_native(fixture_dir):
     """fallback engine must honor --start like native (audit #5)."""
     from opngx import _fallback
+
     binp = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
     out = fixture_dir / "fb_start"
-    _fallback.extract_frames(binp, str(out), 64, 48, 10,
-                             8 + 64 * 48, "cam_", ".Png",
-                             49.0, 18.0, 1.0, 8, jobs=1, channels=6,
-                             start=100)
+    _fallback.extract_frames(
+        binp,
+        str(out),
+        64,
+        48,
+        10,
+        8 + 64 * 48,
+        "cam_",
+        ".Png",
+        49.0,
+        18.0,
+        1.0,
+        8,
+        jobs=1,
+        channels=6,
+        start=100,
+    )
     # with start=100 files are numbered by ABSOLUTE frame index
     ref = fixture_dir / "ref_pngs" / "cam_00100.Png"
     got = out / "cam_00100.Png"
@@ -253,6 +278,7 @@ def test_native_start_parity(fixture_dir):
     if opngx.engine_backend() == "python-fallback":
         pytest.skip("native engine missing")
     import tempfile
+
     with tempfile.TemporaryDirectory() as td:
         s1 = opngx.extract(SAMPLE_BIN, td + "/a", frames=8, jobs=4)
         s2 = opngx.extract(SAMPLE_BIN, td + "/b", start=7, frames=4, jobs=4)
@@ -264,10 +290,59 @@ def test_native_start_parity(fixture_dir):
 def test_zlib_backend_roundtrip(fixture_dir):
     """explicit zlib backend decodes identically via PIL (CRC strict)."""
     from PIL import Image
+
     out = fixture_dir / "zb_out"
-    st = opngx.extract(str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
-                       str(out), jobs=2, prefix="cam_", backend="zlib",
-                       frames=20)
+    st = opngx.extract(
+        str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
+        str(out),
+        jobs=2,
+        prefix="cam_",
+        backend="zlib",
+        frames=20,
+    )
     assert st.frames_written == 20
     rep = opngx.verify(fixture_dir / "ref_pngs", out, prefix="cam_")
     assert rep.passed, rep.first_error
+
+
+def test_sidecarless_bin_with_manual_geometry(fixture_dir):
+    """A .bin without .footage works when W×H are supplied (user report)."""
+    import shutil
+
+    bin_only = fixture_dir / "nosidecar.bin"
+    shutil.copy(fixture_dir / "cam_9.9" / "cam_9.9.bin", bin_only)
+    # probe: no geometry
+    m = opngx.probe(bin_only)
+    assert m.width == 0 and m.height == 0
+    # extractor with explicit geometry
+    ex = opngx.Extractor(bin_only, width=64, height=48)
+    assert ex.meta.capacity_frames == 200
+    out = fixture_dir / "noside_out"
+    st = ex.extract(str(out), mode="raw", jobs=2, prefix="ns_")
+    assert st.frames_written == 200
+    rep = opnx_verify_raw(bin_only, out)
+    assert rep
+
+
+def opnx_verify_raw(bin_path, out):
+    import numpy as np
+    from PIL import Image
+
+    data = Path(bin_path).read_bytes()
+    stride = 8 + 64 * 48
+    for idx in (0, 137, 199):
+        off = idx * stride + 8
+        gray = np.frombuffer(data[off : off + 64 * 48], dtype=np.uint8).reshape(48, 64)
+        img = np.array(Image.open(out / f"ns_{idx:05d}.Png"))
+        if not np.array_equal(img[..., 0], gray):
+            return False
+    return True
+
+
+def test_ffmpeg_resolution():
+    from opngx.video import resolve_ffmpeg
+
+    p = resolve_ffmpeg()
+    if not shutil.which("ffmpeg") and p is None:
+        pytest.skip("no ffmpeg anywhere")
+    assert p and Path(p).exists()

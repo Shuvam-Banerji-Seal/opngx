@@ -49,8 +49,18 @@ class Extractor:
     Uses the native engine when available; falls back to a numpy/zlib engine.
     """
 
-    def __init__(self, bin_path: str | Path, footage_path: str | Path | None = None):
+    def __init__(self, bin_path: str | Path,
+                 footage_path: str | Path | None = None,
+                 *, width: int = 0, height: int = 0):
         self.meta: FootageMetadata = probe(bin_path, footage_path)
+        # manual geometry override — for recordings without a .footage
+        # sidecar the user supplies width/height (remembered by the UI)
+        if width and height:
+            self.meta.width = int(width)
+            self.meta.height = int(height)
+            self.meta.frame_stride = 8 + self.meta.width * self.meta.height
+            self.meta.capacity_frames = (
+                self.meta.file_size // self.meta.frame_stride)
 
     # ------------------------------------------------------------------ #
     def extract(

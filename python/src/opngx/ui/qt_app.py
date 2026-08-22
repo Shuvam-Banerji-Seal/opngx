@@ -452,7 +452,28 @@ class MainWindow(QtWidgets.QMainWindow):
         scope_row.addWidget(self.rb_batch)
         scope_row.addStretch(1)
         sv.addLayout(scope_row)
+
+        geom = QtWidgets.QHBoxLayout()
+        glabel = QtWidgets.QLabel("width × height")
+        glabel.setObjectName("fieldlabel")
+        geom.addWidget(glabel)
+        self.w_spin = QtWidgets.QSpinBox(); self.w_spin.setRange(0, 100000)
+        self.h_spin = QtWidgets.QSpinBox(); self.h_spin.setRange(0, 100000)
+        self.w_spin.setSpecialValueText("auto"); self.h_spin.setSpecialValueText("auto")
+        self.w_spin.setValue(0); self.h_spin.setValue(0)
+        geom.addWidget(self.w_spin)
+        geom.addWidget(QtWidgets.QLabel("×"))
+        geom.addWidget(self.h_spin)
+        self.geom_hint = QtWidgets.QLabel("")
+        self.geom_hint.setObjectName("hint")
+        geom.addWidget(self.geom_hint, 1)
+        sv.addLayout(geom)
         lv.addWidget(src_card)
+        self._tip(self.w_spin, "Width",
+                  "Needed only when the recording has NO .footage sidecar.\n"
+                  "0/auto = take geometry from the sidecar. Values are "
+                  "remembered per recording.")
+        self._tip(self.h_spin, "Height", "See width.")
 
         self._tip(
             self.bin_edit,
@@ -1085,6 +1106,15 @@ class MainWindow(QtWidgets.QMainWindow):
             bins = [self.meta.bin_path]
 
         opts = self._collect_opts()
+        from PySide6.QtCore import QSettings
+        st = QSettings("opngx", "studio")
+        if self.meta and self.meta.width == 0 and \
+                int(self.w_spin.value()) and int(self.h_spin.value()):
+            key = ("geometry/" +
+                   (self.meta.camera_name or
+                    os.path.basename(self.meta.bin_path)))
+            st.setValue(key + "/w", int(self.w_spin.value()))
+            st.setValue(key + "/h", int(self.h_spin.value()))
         self._running = True
         self._cancel_requested = False
         self._sig.state.emit(True)
@@ -1109,7 +1139,10 @@ class MainWindow(QtWidgets.QMainWindow):
                         f"ch={o['channels']} jobs={o['jobs']} level={o['level']}]",
                         "info",
                     )
-                    ex = opngx.Extractor(b)
+                    ex = opngx.Extractor(
+                        b,
+                        width=int(self.w_spin.value()) or 0,
+                        height=int(self.h_spin.value()) or 0)
                     last = ex.extract(
                         od,
                         progress=lambda d_, t_, dt=time.perf_counter(): (

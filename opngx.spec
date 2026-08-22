@@ -14,10 +14,24 @@ hidden = collect_submodules("opngx") + [
     "opngx.ui.qt_app", "opngx.video",
 ]
 
+# bundle an ffmpeg binary so Render-video works out of the box
+ffbin = None
+try:
+    import imageio_ffmpeg
+    ffbin = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    pass
+
+binaries = [(dll, ".")] if os.path.exists(dll) else []
+if ffbin:
+    binaries.append((ffbin, "."))
+
+hidden += ["imageio_ffmpeg"]
+
 a = Analysis(
     ["python/opngx_ui_entry.py"],
     pathex=[os.path.join(root, "python")],
-    binaries=[(dll, ".")] if os.path.exists(dll) else [],
+    binaries=binaries,
     datas=[
         (os.path.join(root, "README.md"), "docs"),
         (os.path.join(root, "docs", "FORMAT.md"), "docs"),
