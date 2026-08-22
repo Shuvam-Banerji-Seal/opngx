@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: false
+          install: >-
+            git mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja make
+
+      - name: Build libdeflate (static)
+        run: |
+          git clone --depth 1 --branch v1.22 https://github.com/ebiggers/libdeflate.git /tmp/ld
+          cmake -S /tmp/ld -B /tmp/ldb -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_BUILD_SHARED_LIB=OFF -DLIBDEFLATE_BUILD_TESTS=OFF
+          cmake --build /tmp/ldb -j
+          mkdir -p vendor/win
+          cp /tmp/ld/libdeflate.h vendor/win/
+          find /tmp/ldb -name 'libdeflate.a' -exec cp {} vendor/win/ \;
+
+      - name: Build engine
+        run: |
+          cmake -S . -B build-win \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-w64-mingw32.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_LIB=$PWD/vendor/win/libdeflate.a \
+            -DLIBDEFLATE_INC=$PWD/vendor/win \
+            -DOPNGX_WITH_ZLIB=OFF -G Ninja
+          cmake --build build-win -j
+
+      - name: Build opngx-studio.exe (Qt + ffmpeg bundled)
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pyinstaller numpy pillow PySide6 imageio-ffmpeg
+          pip install --quiet "./python[qt]"
+          Copy-Item build-win/libopngx.dll .
+          pyinstaller --noconfirm opngx.spec
+
+      - name: Build one-click setup.exe
+        shell: pwsh
+        run: |
+          Compress-Archive -Path README.md, docs/FORMAT.md, docs/BENCHMARKS.md `
+            -DestinationPath installer/docs.zip -Force
+          Copy-Item build-win/opngx-engine.exe installer/
+          Copy-Item dist/opngx-studio.exe installer/
+          windres installer/app.rc -O coff -o installer/apprc.o
+          gcc -O2 -mwindows installer/installer.c installer/apprc.o `
+            -o dist/opngx-setup.exe -lole32 -luuid -lshell32 -ladvapi32 -static
+
+      - name: Smoke-test silent install
+        shell: cmd
+        run: |
+          dist\opngx-setup.exe /S
+          if not exist "%LOCALAPPDATA%\opngx\opngx-engine.exe" exit 1
+          if not exist "%LOCALAPPDATA%\opngx\opngx-studio.exe" exit 1
+          "%LOCALAPPDATA%\opngx\opngx-engine.exe" --version
+
+      - name: Stage assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage | Out-Null
+          Copy-Item dist/opngx-setup.exe stage/opngx-setup-${{ github.ref_name }}.exe
+          Copy-Item dist/opngx-studio.exe stage/opngx-studio-portable-${{ github.ref_name }}.exe
+          Copy-Item build-win/opngx-engine.exe stage/opngx-engine-${{ github.ref_name }}.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-rel
+          path: stage/*
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build libdeflate (static) + engine
+        run: |
+          sudo apt-get update && sudo apt-get install -y libdeflate-dev zlib1g-dev
+          git clone --depth 1 --branch v1.22 https://github.com/ebiggers/libdeflate.git /tmp/ld
+          cmake -S /tmp/ld -B /tmp/ldb -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_BUILD_SHARED_LIB=OFF -DLIBDEFLATE_BUILD_TESTS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build /tmp/ldb -j
+          mkdir -p vendor/linux vendor/win dist
+          find /tmp/ldb -name 'libdeflate.a' -exec cp {} vendor/linux/ \;
+          cp /tmp/ld/libdeflate.h vendor/win/
+          cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_LIB=$PWD/vendor/linux/libdeflate.a \
+            -DLIBDEFLATE_INC=$PWD/vendor/win \
+            -DOPNGX_WITH_ZLIB=OFF -DCMAKE_EXE_LINKER_FLAGS="-static"
+          cmake --build build-rel -j
+          strip build-rel/opngx-engine
+          ./build-rel/opngx-engine --version
+      - name: Packages (tarball + deb + arch pkg)
+        run: |
+          chmod +x scripts/package-linux.sh
+          V="${GITHUB_REF_NAME#v}"
+          LIBDEFLATE_STATIC=$PWD/vendor/linux/libdeflate.a \
+            LIBDEFLATE_INC=$PWD/vendor/win ./scripts/package-linux.sh "$V"
+      - name: Stage assets
+        run: |
+          mkdir -p stage
+          V="${GITHUB_REF_NAME#v}"
+          cp dist/opngx-$V-linux-x86_64.tar.gz stage/
+          cp dist/opngx_${V}_amd64.deb stage/ 2>/dev/null || true
+          cp dist/*.pkg.tar.zst stage/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lin-rel
+          path: stage/*
+
+  publish:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+      - name: Publish release (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: >-
+            Automated build. Install guide in README.
+
+
+            * opngx-setup-*.exe - Windows all-in-one installer
+              (engine + Qt studio + ffmpeg + docs)
+
+            * opngx-studio-portable-*.exe - portable Windows GUI
+
+            * opngx-engine-*.exe - raw Windows CLI
+
+            * Linux tarball / .deb / arch package - static CLI, any distro
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p rel
+          find art -type f -exec cp {} rel/ \;
+          ls -la rel
+          if gh release view "$TAG" --repo $GITHUB_REPOSITORY >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo $GITHUB_REPOSITORY --clobber rel/*
+            gh release edit "$TAG" --repo $GITHUB_REPOSITORY --notes "$NOTES"
+          else
+            gh release create "$TAG" --repo $GITHUB_REPOSITORY \
+              --title "opngx ${TAG}" --notes "$NOTES" rel/*
+          fi
+          gh release edit "$TAG" --repo $GITHUB_REPOSITORY --draft=false --latest
