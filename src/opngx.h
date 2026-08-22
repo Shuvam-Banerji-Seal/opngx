@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define OPNGX_VERSION "1.2.0"
+#define OPNGX_VERSION "1.2.1"
 #define OPNGX_ABI_VERSION 3
 
 /* Output formats */
