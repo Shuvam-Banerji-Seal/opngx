@@ -4,12 +4,6 @@
  * host any future ABI shims (struct-size guards etc.). */
 #include "opngx.h"
 
-/* Force symbol export on all platforms */
-#if defined(_WIN32)
-__declspec(dllexport) int opngx_abi_marker(void);
-int opngx_abi_marker(void) { return 1; }
-#endif
-
 /* Compile-time sanity: params struct layout version. Bump OPNGX_ABI_VERSION
  * in opngx.h whenever opngx_params changes so bindings can assert match. */
 #ifndef OPNGX_ABI_VERSION

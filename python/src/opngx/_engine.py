@@ -103,6 +103,7 @@ def _candidates() -> list[Path]:
 
 _lib = None
 _lib_path: Optional[str] = None
+_attempts: list[tuple[str, str]] = []   # (path, "ok"/error) — surfaced by diagnostics
 
 
 def load_library() -> Optional[ctypes.CDLL]:

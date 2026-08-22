@@ -86,9 +86,10 @@ if (OPNGX_BUILD_SHARED)
   target_include_directories(opngx PRIVATE src)
   set_target_properties(opngx PROPERTIES OUTPUT_NAME opngx)
   if(WIN32)
-    # ctypes needs the job API exported; one explicit dllexport would
-    # otherwise disable GNU auto-export for everything else
+    # ctypes needs the whole job API exported. A single explicit
+    # __declspec(dllexport) anywhere disables GNU auto-export, so force it:
     set_target_properties(opngx PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    target_link_options(opngx PRIVATE -Wl,--export-all-symbols)
   endif()
   opngx_apply_backend(opngx)
   target_link_libraries(opngx PRIVATE Threads::Threads m)

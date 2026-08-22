@@ -15,6 +15,12 @@ from .verify import VerifyReport, verify
 __version__ = "1.2.0"
 
 
+def engine_diagnostics() -> list[str]:
+    """Why the native engine did/didn't load — shown in the UI log."""
+    from ._engine import engine_diagnostics as _d
+    return _d()
+
+
 def engine_backend() -> str:
     """'native (path)' when the C engine is available, else 'python-fallback'."""
     from ._engine import library_path
