@@ -1,16 +1,18 @@
 101 RCDATA "opngx-engine.exe"
+102 RCDATA "opngx-studio.exe"
+103 RCDATA "docs.zip"
 1 VERSIONINFO
-FILEVERSION     1,2,0,0
-PRODUCTVERSION  1,2,0,0
+FILEVERSION     1,2,1,0
+PRODUCTVERSION  1,2,1,0
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "FileDescription", "opngx setup"
+      VALUE "FileDescription", "opngx setup (engine + studio + docs)"
       VALUE "ProductName",     "opngx"
-      VALUE "FileVersion",     "1.2.0"
-      VALUE "ProductVersion",  "1.2.0"
+      VALUE "FileVersion",     "1.2.1"
+      VALUE "ProductVersion",  "1.2.1"
       VALUE "LegalCopyright",  "MIT License"
     END
   END

@@ -420,12 +420,27 @@ static int cmd_bench(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
-    /* Full-core utilization defaults: bind threads to CPUs and use all
-     * physical+logical processors unless the user overrides. Honored by
-     * GNU/LLVM OpenMP; ignored where unsupported. */
-#ifndef _WIN32
-    setenv("OMP_PROC_BIND", "close", 0);      /* don't clobber user config */
-    setenv("OMP_SCHEDULE", "dynamic,32", 0);
+#ifdef _WIN32
+    /* Double-clicking the exe in Explorer gives us an empty command line;
+     * a console app would flash and vanish (reported as a "crash").
+     * Explain instead. */
+    if (argc < 2) {
+        LPSTR raw = GetCommandLineA();
+        if (!raw || !raw[0] || argc == 1) {   /* truly launched bare */
+            MessageBoxA(NULL,
+                "opngx-engine is the COMMAND-LINE core of opngx.\n\n"
+                "Nothing was extracted because no command was given.\n\n"
+                "  GUI:        launch \"opngx studio\" from the Start Menu\n"
+                "  CLI help:   open a terminal and run:\n"
+                "              opngx-engine --help\n\n"
+                "Examples:\n"
+                "  opngx-engine info D:/footage/cam1.bin\n"
+                "  opngx-engine extract D:/footage/cam1.bin -o D:/frames -j 0\n",
+                "opngx-engine " OPNGX_VERSION,
+                MB_OK | MB_ICONINFORMATION);
+            return 2;
+        }
+    }
 #endif
     if (argc < 2) { usage(); return 2; }
     const char *cmd = argv[1];

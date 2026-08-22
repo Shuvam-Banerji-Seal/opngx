@@ -70,21 +70,34 @@ class EngineError(RuntimeError):
     pass
 
 
+def _candidate_dirs() -> list[Path]:
+    """Directories that may contain the native engine, in priority order."""
+    import sys
+    dirs: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)      # PyInstaller onefile bundle
+    if meipass:
+        dirs.append(Path(meipass))
+    try:
+        dirs.append(Path(sys.executable).resolve().parent)   # installed app dir
+    except Exception:
+        pass
+    here = Path(__file__).resolve().parent
+    dirs += [here, here / "_native",
+             here.parent.parent.parent / "build",
+             here.parent.parent.parent / "build-win"]
+    dirs += [Path("/usr/local/lib"), Path("/usr/lib")]
+    return dirs
+
+
 def _candidates() -> list[Path]:
     env = os.environ.get("OPNGX_ENGINE")
     cands: list[Path] = []
     if env:
         cands.append(Path(env))
-    here = Path(__file__).resolve().parent
     names = ["libopngx.so", "opngx.dll", "libopngx.dll", "libopngx.dylib"]
-    for n in names:
-        cands.append(here / "_native" / n)
-        cands.append(here.parent.parent.parent / "build" / n.replace(".dll", ".dll"))
-    cands += [
-        Path("/usr/local/lib/libopngx.so"),
-        Path("/usr/lib/libopngx.so"),
-        here.parent.parent.parent / "build-win" / "libopngx.dll",
-    ]
+    for d in _candidate_dirs():
+        for n in names:
+            cands.append(d / n)
     return cands
 
 

@@ -122,3 +122,41 @@ jobs:
             -DOPNGX_WITH_ZLIB=OFF -G Ninja
           cmake --build build-win -j
           ./build-win/opngx-engine.exe --version
+
+      - name: Build opngx-studio.exe (PyInstaller, embeds libopngx.dll)
+        run: |
+          python -m pip install --quiet pyinstaller numpy pillow
+          pip install --quiet ./python
+          cp build-win/libopngx.dll .
+          pyinstaller --noconfirm opngx.spec
+          ls -la dist/
+
+      - name: Build docs.zip + one-click setup.exe
+        shell: pwsh
+        run: |
+          Compress-Archive -Path README.md, docs/FORMAT.md, docs/BENCHMARKS.md `
+            -DestinationPath installer/docs.zip -Force
+          Copy-Item build-win/opngx-engine.exe installer/
+          Copy-Item dist/opngx-studio.exe installer/
+          windres installer/app.rc -O coff -o installer/apprc.o
+          gcc -O2 -mwindows installer/installer.c installer/apprc.o `
+            -o dist/opngx-setup.exe -lole32 -luuid -lshell32 -ladvapi32 -static
+          Remove-Item installer/opngx-engine.exe, installer/opngx-studio.exe, `
+            installer/docs.zip, installer/apprc.o
+
+      - name: Smoke-test installed layout (silent install into sandbox)
+        shell: cmd
+        run: |
+          dist\opngx-setup.exe /S
+          if not exist "%LOCALAPPDATA%\opngx\opngx-engine.exe" exit 1
+          if not exist "%LOCALAPPDATA%\opngx\opngx-studio.exe" exit 1
+          "%LOCALAPPDATA%\opngx\opngx-engine.exe" --version
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-dist
+          path: |
+            dist/opngx-setup.exe
+            dist/opngx-studio.exe
+            build-win/opngx-engine.exe
