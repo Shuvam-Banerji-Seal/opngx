@@ -59,6 +59,30 @@ jobs:
           cd ..
           PATH="$PWD/python/.venv/bin:$PATH" bash tests/test_engine.sh
 
+      - name: Static Linux executable
+        run: |
+          git clone --depth 1 --branch v1.22 https://github.com/ebiggers/libdeflate.git /tmp/ld
+          cmake -S /tmp/ld -B /tmp/ldb -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_BUILD_SHARED_LIB=OFF -DLIBDEFLATE_BUILD_TESTS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build /tmp/ldb -j
+          mkdir -p vendor/linux dist
+          find /tmp/ldb -name 'libdeflate.a' -exec cp {} vendor/linux/ \;
+          cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_LIB=$PWD/vendor/linux/libdeflate.a \
+            -DLIBDEFLATE_INC=$PWD/vendor/win \
+            -DOPNGX_WITH_ZLIB=OFF -DCMAKE_EXE_LINKER_FLAGS="-static"
+          cmake --build build-rel -j
+          strip build-rel/opngx-engine
+          ./build-rel/opngx-engine --version
+          cp build-rel/opngx-engine dist/opngx-linux
+          tar czf dist/opngx-linux-x86_64.tar.gz -C dist opngx-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-dist
+          path: dist/opngx-linux-x86_64.tar.gz
+
       - name: Python package tests
         run: |
           cd python && uv sync --all-extras && uv run pytest ../python/tests -q
