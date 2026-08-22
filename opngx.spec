@@ -11,6 +11,7 @@ dll = os.path.join(root, "build-win", "libopngx.dll")
 
 hidden = collect_submodules("opngx") + [
     "opngx.ui.app", "opngx.ui.theme", "opngx.ui.widgets",
+    "opngx.ui.qt_app", "opngx.video",
 ]
 
 a = Analysis(
