@@ -757,6 +757,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.next_btn.clicked.connect(lambda: self._step_frame(+1))
         self.frame_slider.valueChanged.connect(
             lambda v_: self._show_frame(int(v_)))
+        # quality-setting changes re-render the visible frame instantly
+        for rb in self.modes.values():
+            rb.toggled.connect(self._refresh_frame)
+        for spin in (self.b_spin, self.c_spin, self.g_spin):
+            spin.valueChanged.connect(self._refresh_frame)
 
         log_card, gv = self._card("log")
         self.log_view = QtWidgets.QPlainTextEdit()
@@ -845,6 +850,10 @@ class MainWindow(QtWidgets.QMainWindow):
                            Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.viewer_img.setPixmap(scaled)
         self.frame_lbl.setText(f"frame {idx:,} / {m.capacity_frames - 1:,}")
+
+    def _refresh_frame(self) -> None:
+        if self.meta and self.frame_slider.maximum() > 0:
+            self._show_frame(int(self.frame_slider.value()))
 
     def _step_frame(self, delta: int) -> None:
         v = int(self.frame_slider.value()) + delta

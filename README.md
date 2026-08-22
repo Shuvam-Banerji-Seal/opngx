@@ -14,6 +14,8 @@
 | throughput (RGBA) | slow, GUI-only | ~30 fps | **880–1400 fps** |
 | raw/lossless mode (no highlight clipping) | ✗ | ✗ | ✓ |
 | grayscale fast path (2.5× faster) | ✗ | ✗ | ✓ |
+| direct MP4 render from .bin | ✗ | manual | ✓ |
+| in-app frame viewer + verification | ✗ | ✗ | ✓ |
 | per-frame timestamps + metadata JSON | ✗ | ✗ | ✓ |
 | pixel-exact verification tool | ✗ | manual | built-in |
 | runs anywhere (Intel/AMD/ARM, any OS) | ✗ | ✓ | ✓ |
@@ -51,8 +53,16 @@ opngx verify reference_dir/ frames/ --subset    # pixel-exact proof
 # standalone C binary (no python needed)
 ./build/opngx-engine batch sbs/bin/ -o out_root/ -j 16
 
-# GUI
-opngx-ui
+# GUI — opngx studio (Qt)
+opngx-ui          # black / coffee-green theme, frame viewer,
+                  # video rendering, drag & drop, live progress
+
+Requires PySide6 for the Qt edition ('pip install "opngx[qt]"');
+falls back to a Tkinter UI when absent.
+
+# Video — straight from a .bin, no intermediate files
+opngx video recording.bin -o clip.mp4 --fps 30 --crf 18 \
+    --start 0 --frames 500 -m reference
 ```
 
 Python API:
