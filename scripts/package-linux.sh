@@ -13,7 +13,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-1.3.0}"
 DIST="$HERE/dist"
-BUILD="$HERE/build-pkg"
+BUILD="${OPNGX_PKG_BUILD:-/tmp/opngx-pkgbuild}"
 mkdir -p "$DIST" "$BUILD"
 
 echo "== 1. static engine =="

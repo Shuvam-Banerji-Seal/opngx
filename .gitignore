@@ -31,3 +31,5 @@ vendor/win/*.a
 python/.venv/
 build-rel-lin/
 build-win/
+build-pkg/
+build-rel/
