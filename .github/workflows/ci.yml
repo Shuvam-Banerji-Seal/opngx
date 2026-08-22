@@ -153,7 +153,7 @@ jobs:
       - name: Build opngx-studio.exe (PyInstaller, embeds libopngx.dll)
         shell: pwsh
         run: |
-          python -m pip install --quiet pyinstaller numpy pillow
+          python -m pip install --quiet pyinstaller numpy pillow PySide6
           pip install --quiet ./python
           Copy-Item build-win/libopngx.dll .
           pyinstaller --noconfirm opngx.spec

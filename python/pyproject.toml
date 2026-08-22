@@ -24,11 +24,12 @@ dependencies = ["numpy>=1.22"]
 
 [project.optional-dependencies]
 ui = ["pillow>=9.0"]
+qt = ["PySide6>=6.5"]
 dev = ["pytest>=7.0", "pillow>=9.0"]
 
 [project.scripts]
 opngx = "opngx.cli:main"
-opngx-ui = "opngx.ui.app:main"
+opngx-ui = "opngx.ui:main"
 
 [project.urls]
 Homepage = "https://github.com/shuvam07/opngx"
