@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opngx"
-version = "1.2.1"
+version = "1.3.0"
 description = "Ultra-fast Optronis TimeViewer .bin footage extractor - multi-core PNG conversion with metadata & timestamp export"
 readme = "README.md"
 requires-python = ">=3.9"
