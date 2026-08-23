@@ -36,7 +36,33 @@ def _selftest_video() -> int:
     return 0 if ok else 1
 
 
+def _debug_ffmpeg():
+    import sys, os
+    print(f"sys._MEIPASS = {getattr(sys, '_MEIPASS', 'NOT SET')}")
+    print(f"sys.executable = {sys.executable}")
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei and os.path.isdir(mei):
+        for root, dirs, files in os.walk(mei):
+            for f in files:
+                if "ffmpeg" in f.lower() or "ffbin" in f.lower():
+                    print(f"  FOUND: {os.path.join(root, f)}")
+            # only go 2 levels deep
+            if root.count(os.sep) - mei.count(os.sep) > 2:
+                dirs.clear()
+    # also check for any exe/binary in _MEIPASS root
+    if mei and os.path.isdir(mei):
+        for f in os.listdir(mei):
+            fp = os.path.join(mei, f)
+            if os.path.isfile(fp) and os.access(fp, os.X_OK):
+                sz = os.path.getsize(fp)
+                if sz > 1000000:
+                    print(f"  BIG BIN: {f} ({sz:,} bytes)")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--debug-ffmpeg" in sys.argv:
+        raise SystemExit(_debug_ffmpeg())
     if "--selftest-video" in sys.argv:
         raise SystemExit(_selftest_video())
     from opngx.ui import main                 # noqa: E402
