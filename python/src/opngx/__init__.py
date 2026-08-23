@@ -8,17 +8,19 @@ Public API:
 """
 
 from .footage import FootageMetadata, probe, read_timestamps
+from .timing import analyze_timestamps
 from .extractor import ExtractStats, Extractor, extract
 from .quality import QualityMode
-from .verify import VerifyReport, verify
+from .verify import VerifyReport, verify, verify_against_bin
 from .video import render_video, read_frame_gray, ffmpeg_available
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 
 def engine_diagnostics() -> list[str]:
     """Why the native engine did/didn't load — shown in the UI log."""
     from ._engine import engine_diagnostics as _d
+
     return _d()
 
 
@@ -28,6 +30,13 @@ def engine_backend() -> str:
 
     lp = library_path()
     return f"native ({lp})" if lp else "python-fallback"
+
+
+def detect_gpus() -> list[str]:
+    """GPU descriptions via the native engine's portable detection."""
+    from ._engine import detect_gpus as _d
+
+    return _d()
 
 
 __all__ = [
@@ -40,6 +49,7 @@ __all__ = [
     "QualityMode",
     "VerifyReport",
     "verify",
+    "verify_against_bin",
     "engine_backend",
     "__version__",
 ]

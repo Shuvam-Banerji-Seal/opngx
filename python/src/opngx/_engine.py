@@ -17,7 +17,7 @@ import struct
 from pathlib import Path
 from typing import Optional
 
-ABI_VERSION = 3
+ABI_VERSION = 4
 
 MODE_REFERENCE, MODE_RAW, MODE_CUSTOM = 0, 1, 2
 BACKEND_AUTO, BACKEND_LIBDEFLATE, BACKEND_ZLIB = 0, 1, 2
@@ -39,8 +39,8 @@ class OpngxParams(ctypes.Structure):
         ("contrast", ctypes.c_double),
         ("gamma", ctypes.c_double),
         ("bit_depth", ctypes.c_int),
-        ("channels", ctypes.c_int),      # 6 = RGBA (default), 0 = gray
-        ("format", ctypes.c_int),        # 0 png, 1 bmp, 2 tif, 3 jpg
+        ("channels", ctypes.c_int),  # 6 = RGBA (default), 0 = gray
+        ("format", ctypes.c_int),  # 0 png, 1 bmp, 2 tif, 3 jpg
         ("jpeg_quality", ctypes.c_int),
         ("out_dir", ctypes.c_char_p),
         ("prefix", ctypes.c_char_p),
@@ -51,7 +51,15 @@ class OpngxParams(ctypes.Structure):
         ("export_timestamps", ctypes.c_int),
         ("export_metadata", ctypes.c_int),
         ("verbose", ctypes.c_int),
+        # ADD-6: push-progress callback (see src/opngx.h)
+        ("progress_fn", ctypes.c_void_p),
+        ("progress_user", ctypes.c_void_p),
     ]
+
+
+ProgressCallback = ctypes.CFUNCTYPE(
+    None, ctypes.c_int64, ctypes.c_int64, ctypes.c_void_p
+)
 
 
 class OpngxStats(ctypes.Structure):
@@ -73,18 +81,22 @@ class EngineError(RuntimeError):
 def _candidate_dirs() -> list[Path]:
     """Directories that may contain the native engine, in priority order."""
     import sys
+
     dirs: list[Path] = []
-    meipass = getattr(sys, "_MEIPASS", None)      # PyInstaller onefile bundle
+    meipass = getattr(sys, "_MEIPASS", None)  # PyInstaller onefile bundle
     if meipass:
         dirs.append(Path(meipass))
     try:
-        dirs.append(Path(sys.executable).resolve().parent)   # installed app dir
+        dirs.append(Path(sys.executable).resolve().parent)  # installed app dir
     except Exception:
         pass
     here = Path(__file__).resolve().parent
-    dirs += [here, here / "_native",
-             here.parent.parent.parent / "build",
-             here.parent.parent.parent / "build-win"]
+    dirs += [
+        here,
+        here / "_native",
+        here.parent.parent.parent / "build",
+        here.parent.parent.parent / "build-win",
+    ]
     dirs += [Path("/usr/local/lib"), Path("/usr/lib")]
     return dirs
 
@@ -103,7 +115,7 @@ def _candidates() -> list[Path]:
 
 _lib = None
 _lib_path: Optional[str] = None
-_attempts: list[tuple[str, str]] = []   # (path, "ok"/error) — surfaced by diagnostics
+_attempts: list[tuple[str, str]] = []  # (path, "ok"/error) — surfaced by diagnostics
 
 
 def load_library() -> Optional[ctypes.CDLL]:
@@ -112,25 +124,54 @@ def load_library() -> Optional[ctypes.CDLL]:
     if _lib is not None:
         return _lib
     for cand in _candidates():
-        if cand.exists():
-            try:
-                lib = ctypes.CDLL(str(cand))
-                _wire_prototypes(lib)
-            except (OSError, AttributeError):
-                continue
+        if not cand.exists():
+            continue
+        try:
+            lib = ctypes.CDLL(str(cand))
+            _wire_prototypes(lib)
+        except (OSError, AttributeError) as exc:
+            _attempts.append((str(cand), f"load failed: {exc}"))
+            continue
+        try:
             abi = lib.opngx_abi_version()
-            if abi != ABI_VERSION:
-                raise EngineError(
-                    f"libopngx ABI {abi} != expected {ABI_VERSION} at {cand}"
-                )
-            _lib, _lib_path = lib, str(cand)
-            return _lib
+        except AttributeError as exc:
+            _attempts.append((str(cand), f"no opngx_abi_version: {exc}"))
+            continue
+        if abi != ABI_VERSION:
+            _attempts.append(
+                (str(cand), f"ABI mismatch: got {abi}, want {ABI_VERSION}")
+            )
+            raise EngineError(f"libopngx ABI {abi} != expected {ABI_VERSION} at {cand}")
+        _attempts.append((str(cand), "ok"))
+        _lib, _lib_path = lib, str(cand)
+        return _lib
     return None
 
 
 def library_path() -> Optional[str]:
     load_library()
     return _lib_path
+
+
+def engine_diagnostics() -> list[str]:
+    """Human-readable reasons why the native engine did/didn't load.
+
+    Consumed by both UIs when running on the python-fallback path so the
+    user can see which candidate paths were probed and why they failed.
+    """
+    load_library()
+    if _lib_path:
+        return [f"native engine loaded: {_lib_path}"]
+    if not _attempts:
+        return ["no native engine candidates found on this system"]
+    lines = ["native engine not available; probe results:"]
+    for path, status in _attempts:
+        lines.append(f"  {path}: {status}")
+    lines.append(
+        "build it with: cmake -S . -B build && cmake --build build -j "
+        "(or set OPNGX_ENGINE=/path/to/libopngx.so)"
+    )
+    return lines
 
 
 def _wire_prototypes(lib: ctypes.CDLL) -> None:

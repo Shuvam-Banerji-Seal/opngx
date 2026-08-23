@@ -57,10 +57,18 @@ def main(argv: list[str] | None = None) -> int:
     pv.add_argument("out_dir")
     pv.add_argument("--prefix", default="brow_")
     pv.add_argument("--ext", default=".Png")
-    pv.add_argument("--subset", action="store_true", default=True,
-                    help="out may be a subset of ref (default on)")
-    pv.add_argument("--full-set", dest="subset", action="store_false",
-                    help="require identical name sets")
+    pv.add_argument(
+        "--subset",
+        action="store_true",
+        default=True,
+        help="out may be a subset of ref (default on)",
+    )
+    pv.add_argument(
+        "--full-set",
+        dest="subset",
+        action="store_false",
+        help="require identical name sets",
+    )
 
     pv2 = sub.add_parser("video", help="render an MP4 straight from a .bin")
     pv2.add_argument("bin")
@@ -70,11 +78,23 @@ def main(argv: list[str] | None = None) -> int:
     pv2.add_argument("--start", type=int, default=0)
     pv2.add_argument("--frames", type=int, default=None)
     pv2.add_argument("--footage", default=None)
-    pv2.add_argument("-m", "--mode", choices=["reference", "raw", "custom"],
-                     default="reference")
+    pv2.add_argument(
+        "-m", "--mode", choices=["reference", "raw", "custom"], default="reference"
+    )
 
     pi = sub.add_parser("info", help="show metadata + machine capabilities")
     pi.add_argument("bin", nargs="?")
+
+    pt = sub.add_parser(
+        "timestamps",
+        help="analyse per-frame camera-clock headers (gaps, drops, real fps)",
+    )
+    pt.add_argument("bin")
+    pt.add_argument("--footage", default=None)
+    pt.add_argument("--start", type=int, default=0)
+    pt.add_argument("--frames", type=int, default=None)
+    pt.add_argument("--csv", default=None, help="write per-frame deltas CSV")
+    pt.add_argument("--json", action="store_true")
 
     args = ap.parse_args(argv)
 
@@ -101,15 +121,120 @@ def main(argv: list[str] | None = None) -> int:
                 "verified_operating_point",
             ):
                 print(f"{k}: {getattr(m, k)}")
+            extras = getattr(m, "extra", {}) or {}
+            for k in (
+                "FramerateReal",
+                "Serial",
+                "Model",
+                "Speed",
+                "TriggerROIRight",
+                "TriggerROIBottom",
+                "TriggeredBySoftware",
+            ):
+                if k in extras:
+                    print(f"{k}: {extras[k]}")
+            if extras:
+                others = [
+                    k
+                    for k in extras
+                    if k
+                    not in (
+                        "FramerateReal",
+                        "Serial",
+                        "Model",
+                        "Speed",
+                        "TriggerROIRight",
+                        "TriggerROIBottom",
+                        "TriggeredBySoftware",
+                    )
+                ]
+                if others:
+                    print(
+                        f"extra_tags: {len(others)} more "
+                        f"(metadata.json / probe().extra)"
+                    )
+        return 0
+
+    if args.cmd == "timestamps":
+        from opngx.timing import analyze_timestamps
+
+        m = opngx.probe(args.bin, args.footage)
+        rep = analyze_timestamps(args.bin, m, start=args.start, count=args.frames)
+        if args.csv:
+            import csv as _csv
+
+            from opngx.footage import read_timestamps
+
+            n = (
+                args.frames
+                if args.frames is not None
+                else max(0, m.capacity_frames - args.start)
+            )
+            ts = read_timestamps(args.bin, m, start=args.start, count=n)
+            with open(args.csv, "w", newline="") as fh:
+                w = _csv.writer(fh)
+                w.writerow(["frame_index", "timestamp_raw", "delta_ticks"])
+                prev = None
+                for i, t in enumerate(ts):
+                    d = "" if prev is None else int(t) - prev
+                    w.writerow([args.start + i, int(t), d])
+                    prev = int(t)
+            print(f"opngx: deltas written to {args.csv}")
+        if args.json:
+            import json
+
+            print(json.dumps(rep, indent=2))
+        else:
+            tick = rep.get("tick_period_s")
+            unit = f" (~{tick * 1e6:.3f} µs/tick)" if tick else ""
+            print(
+                f"frames analysed : {rep['frames']:,} "
+                f"(from index {rep['start_index']:,})"
+            )
+            print(
+                f"tick range      : {rep['first_tick']:,} … {rep['last_tick']:,}{unit}"
+            )
+            span = rep.get("span_s")
+            print(
+                f"span            : {span:.3f}s"
+                if span
+                else f"span            : {rep['span_ticks']:,.0f} ticks"
+            )
+            eff = rep.get("effective_fps")
+            print(
+                f"effective fps   : {eff:.3f}"
+                if eff
+                else "effective fps   : n/a (no nominal framerate)"
+            )
+            print(
+                f"delta min/med/max: {rep['delta_min']} / "
+                f"{rep['delta_median']:.0f} / {rep['delta_max']} ticks"
+            )
+            print(f"gaps >1.5×median: {rep['gaps_gt_1p5x_median']}")
+            print(
+                f"non-monotonic   : {rep['non_monotonic']} "
+                f"({'monotonic ✓' if rep['monotonic'] else 'CLOCK WENT BACKWARDS'})"
+            )
+            if rep["gap_examples"]:
+                print("first gaps:")
+                for g in rep["gap_examples"][:10]:
+                    print(f"  after frame {g['frame']:,}: {g['delta_ticks']} ticks")
         return 0
 
     if args.cmd == "video":
         st = opngx.render_video(
-            args.bin, args.out, mode=args.mode,
-            start=args.start, count=args.frames,
-            fps=args.fps, crf=args.crf)
-        print(f"opngx: wrote {st['frames_written']:,} frames → {st['output']} "
-              f"in {st['seconds']:.1f}s")
+            args.bin,
+            args.out,
+            mode=args.mode,
+            start=args.start,
+            count=args.frames,
+            fps=args.fps,
+            crf=args.crf,
+        )
+        print(
+            f"opngx: wrote {st['frames_written']:,} frames → {st['output']} "
+            f"in {st['seconds']:.1f}s"
+        )
         return 0
 
     if args.cmd == "verify":

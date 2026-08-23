@@ -34,6 +34,7 @@ class FootageMetadata:
     frame_stride: int = 0  # bytes per frame incl. timestamp header
     capacity_frames: int = 0  # frames that fit in the file
     verified_operating_point: bool = False  # B=49 C=18 G=1 (pixel-exact proven)
+    extra: dict[str, str] = field(default_factory=dict)  # every other scalar tag
 
     @property
     def pixels_per_frame(self) -> int:
@@ -41,6 +42,36 @@ class FootageMetadata:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _collect_extras(root) -> dict[str, str]:
+    """Every scalar tag as 'Path/To/Tag' → text (deduped, known top-level
+    scalars kept under their bare tag so old consumers keep working)."""
+    known_top = {
+        "ResolutionX",
+        "ResolutionY",
+        "NumberOfImages",
+        "Framerate",
+        "Exposure",
+        "TimeMarkerReference",
+        "Brightness",
+        "Contrast",
+        "Gamma",
+    }
+    out: dict[str, str] = {}
+
+    def walk(elem, prefix: str) -> None:
+        for child in elem:
+            path = f"{prefix}{child.tag}"
+            if len(child) == 0 and child.text and child.text.strip():
+                if "/" not in path and child.tag in known_top:
+                    continue
+                key = child.tag if "/" not in path else path
+                out.setdefault(key, child.text.strip())
+            walk(child, path + "/")
+
+    walk(root, "")
+    return out
 
 
 def _sidecar_for(bin_path: Path) -> Optional[Path]:
@@ -83,6 +114,25 @@ def probe(
             meta.brightness = float(proc.findtext("Brightness", default="0"))
             meta.contrast = float(proc.findtext("Contrast", default="0"))
             meta.gamma = float(proc.findtext("Gamma", default="1") or "1")
+
+        # capture every remaining scalar so nothing the vendor stored is lost
+        known = {
+            "ResolutionX",
+            "ResolutionY",
+            "NumberOfImages",
+            "Framerate",
+            "Exposure",
+            "TimeMarkerReference",
+            "Brightness",
+            "Contrast",
+            "Gamma",
+        }
+        for elem in root.iter():
+            if len(elem) == 0 and elem.text and elem.text.strip():
+                tag = elem.tag
+                if tag in known:
+                    continue
+                meta.extra[tag] = elem.text.strip()
 
     if meta.width and meta.height:
         meta.frame_stride = FRAME_HEADER_BYTES + meta.pixels_per_frame

@@ -35,22 +35,8 @@ SAMPLE_PNG_DIR = SAMPLE_BIN.parent.parent.parent / "png" / "brow_1_2"
 
 
 # ----------------------------------------------------------------- fixtures
-@pytest.fixture(scope="session")
-def fixture_dir(tmp_path_factory):
-    out = tmp_path_factory.mktemp("fixture")
-    subprocess.run(
-        [sys.executable, str(REPO / "tests" / "gen_fixture.py"), str(out)],
-        check=True,
-        capture_output=True,
-    )
-    return out
-
-
-@pytest.fixture(scope="session")
-def native_available():
-    from opngx._engine import load_library
-
-    return load_library() is not None
+# fixture_dir / native_available live in conftest.py (shared with the
+# audit regression suite)
 
 
 # ------------------------------------------------------------------- probes
@@ -346,3 +332,50 @@ def test_ffmpeg_resolution():
     if not shutil.which("ffmpeg") and p is None:
         pytest.skip("no ffmpeg anywhere")
     assert p and Path(p).exists()
+
+
+# ------------------------------------------------- ADD-5: verify --json
+def test_verify_json_machine_readable(fixture_dir):
+    """Native engine emits parseable JSON; python wrapper consumes it."""
+    import json
+    import subprocess
+
+    out = fixture_dir / "py_out"
+    eng = None
+    from opngx.verify import _engine_binary
+
+    eng = _engine_binary()
+    if eng is None:
+        pytest.skip("native engine binary not built")
+    r = subprocess.run(
+        [
+            eng,
+            "verify",
+            str(fixture_dir / "ref_pngs"),
+            str(out),
+            "--prefix",
+            "cam_",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    data = json.loads(r.stdout.strip().splitlines()[-1])
+    assert r.returncode == 0 and data["passed"] is True
+    assert data["files_compared"] == 200 and data["mismatched_files"] == 0
+
+
+def test_verify_survives_colon_in_error_text(fixture_dir):
+    """first_error containing ':' must not break report parsing (ADD-5)."""
+    import shutil
+
+    out = fixture_dir / "colon_out"
+    if out.exists():
+        shutil.rmtree(out)
+    shutil.copytree(fixture_dir / "py_out", out)
+    victim = sorted(out.glob("*.Png"))[3]
+    data = bytearray(victim.read_bytes())
+    data[-25] ^= 0xFF
+    victim.write_bytes(bytes(data))
+    rep = opngx.verify(fixture_dir / "ref_pngs", out, prefix="cam_")
+    assert not rep.passed and rep.mismatched_files >= 1

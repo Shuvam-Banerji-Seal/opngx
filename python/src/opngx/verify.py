@@ -39,6 +39,87 @@ def _engine_binary() -> str | None:
     return str(env) if env.exists() else None
 
 
+def verify_against_bin(
+    bin_path: str | Path,
+    out_dir: str | Path,
+    *,
+    footage_path: str | Path | None = None,
+    width: int = 0,
+    height: int = 0,
+    mode: str = "reference",
+    brightness: float = 0.0,
+    contrast: float = 0.0,
+    gamma: float = 1.0,
+    bit_depth: int = 8,
+    channels: int = 6,
+    prefix: str = "brow_",
+    ext: str = ".Png",
+    frames: int | None = None,
+) -> VerifyReport:
+    """ADD-7: verify an extract directory straight against its source .bin.
+
+    Each output file's decoded pixels must equal the LUT-mapped frame at
+    the absolute index encoded in its filename — no vendor reference set
+    required. Reference mode auto-detects the sibling .footage sidecar.
+    Requires the native engine binary.
+    """
+    engine = _engine_binary()
+    if not engine:
+        raise RuntimeError(
+            "verify_against_bin needs the native opngx-engine binary; "
+            "build it with: cmake -S . -B build && cmake --build build -j"
+        )
+    args = [
+        engine,
+        "verifybin",
+        "--bin",
+        str(bin_path),
+        "--prefix",
+        prefix,
+        "--ext",
+        ext,
+        "-m",
+        mode,
+        "--brightness",
+        str(brightness),
+        "--contrast",
+        str(contrast),
+        "--gamma",
+        str(gamma),
+        "--bit-depth",
+        str(bit_depth),
+        "--channels",
+        "gray" if channels == 0 else "rgba",
+    ]
+    fp = Path(footage_path) if footage_path else Path(bin_path).with_suffix(".footage")
+    if fp.exists():
+        args += ["--footage", str(fp)]
+    else:
+        args += ["--width", str(width), "--height", str(height)]
+    if frames is not None:
+        args += ["--frames", str(frames)]
+    args.append(str(out_dir))
+    args += ["--json"]
+
+    proc = subprocess.run(args, capture_output=True, text=True)
+    import json
+
+    try:
+        data = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise RuntimeError(f"verifybin failed: {proc.stderr.strip() or proc.stdout}")
+    return VerifyReport(
+        files_ref=int(data["files_ref"]),
+        files_out=int(data["files_out"]),
+        files_compared=int(data["files_compared"]),
+        bytes_compared=int(data["bytes_compared"]),
+        mismatched_files=int(data["mismatched_files"]),
+        set_equal=bool(data["set_equal"]),
+        first_error=str(data.get("first_error", "")),
+        passed=bool(data["passed"]),
+    )
+
+
 def verify(
     ref_dir: str | Path,
     out_dir: str | Path,
@@ -66,7 +147,27 @@ def verify(
         ]
         if subset:
             args.append("--subset")
+        # ADD-5: structured report — no more scraping 'key: value' lines
+        args.append("--json")
         proc = subprocess.run(args, capture_output=True, text=True)
+        import json
+
+        try:
+            data = json.loads(proc.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            data = None
+        if isinstance(data, dict) and "passed" in data:
+            return VerifyReport(
+                files_ref=int(data["files_ref"]),
+                files_out=int(data["files_out"]),
+                files_compared=int(data["files_compared"]),
+                bytes_compared=int(data["bytes_compared"]),
+                mismatched_files=int(data["mismatched_files"]),
+                set_equal=bool(data["set_equal"]),
+                first_error=str(data.get("first_error", "")),
+                passed=bool(data["passed"]),
+            )
+        # stale engine without --json: fall back to line parsing
         rep = VerifyReport(0, 0, 0, 0, 0, False)
         for line in proc.stdout.splitlines():
             k, _, v = line.partition(":")
