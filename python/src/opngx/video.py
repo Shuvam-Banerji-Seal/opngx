@@ -21,43 +21,32 @@ _FFCACHE: Optional[str] = None
 
 
 def resolve_ffmpeg() -> Optional[str]:
-    """Find an ffmpeg executable.
-
-    Priority:
-      1. Bundled binary next to this file (PyInstaller _MEIPASS / app dir),
-         named _ffmpeg.exe or _ffmpeg.
-      2. System PATH lookup.
-    """
+    """Find an ffmpeg executable. Checks bundled binary first, then PATH."""
     global _FFCACHE
     if _FFCACHE:
         return _FFCACHE
-    import sys
-    here = getattr(sys, "_MEIPASS", None)
-    if not here:
-        try:
-            here = str(Path(__file__).resolve().parent)
-        except Exception:
-            here = None
-    if here:
-        for name in ("_bundled_ffmpeg.exe", "_bundled_ffmpeg",
-                     "_ffmpeg.exe", "_ffmpeg"):
-            cand = Path(here) / name
-            if cand.exists():
-                _FFCACHE = str(cand)
+    import sys, os
+    search_dirs = []
+    _mei = getattr(sys, "_MEIPASS", None)
+    if _mei:
+        search_dirs.append(_mei)
+    try:
+        search_dirs.append(os.path.dirname(os.path.abspath(sys.executable)))
+    except Exception:
+        pass
+    try:
+        search_dirs.append(os.path.dirname(os.path.abspath(__file__)))
+    except Exception:
+        pass
+    for _d in search_dirs:
+        for _name in ("_bundled_ffmpeg.exe", "_bundled_ffmpeg",
+                      "_ffmpeg.exe", "_ffmpeg"):
+            _cand = os.path.join(_d, _name)
+            if os.path.isfile(_cand):
+                _FFCACHE = _cand
                 return _FFCACHE
-        # debug: list what IS in _MEIPASS for ffmpeg-like files
-        try:
-            import os as _os
-            matches = [_os.listdir(here)[i] for i in range(len(_os.listdir(here)))
-                       if "ffmpeg" in _os.listdir(here)[i].lower()]
-            if not matches:
-                matches = ["(nothing ffmpeg-related found)"]
-            sys.stderr.write(f"opngx debug: _MEIPASS={here}\n")
-            sys.stderr.write(f"opngx debug: ffmpeg files: {matches}\n")
-        except Exception:
-            pass
     exe = shutil.which("ffmpeg")
-    if exe and Path(exe).exists():
+    if exe:
         _FFCACHE = exe
         return _FFCACHE
     try:
