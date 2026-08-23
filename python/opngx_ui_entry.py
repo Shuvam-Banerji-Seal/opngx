@@ -27,7 +27,7 @@ def _selftest_video() -> int:
             f.write(struct.pack("<Q", 1_000_000 + i * 2000))
             f.write(rng.integers(0, 256, size=(h * w), dtype=np.uint8).tobytes())
     out = d / "selftest.mp4"
-    st = render_video(str(binp), str(out), mode="raw",
+    st = render_video(str(binp), str(out), mode="raw", width=w, height=h,
                       start=0, count=n, fps=10, crf=30)
     ok = (st["frames_written"] == n and out.exists()
           and out.stat().st_size > 1024)

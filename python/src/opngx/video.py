@@ -72,6 +72,8 @@ def render_video(
     brightness: Optional[float] = None,
     contrast: Optional[float] = None,
     gamma: Optional[float] = None,
+    width: int = 0,
+    height: int = 0,
     start: int = 0,
     count: Optional[int] = None,
     fps: int = 30,
@@ -89,6 +91,11 @@ def render_video(
             "and try again.")
 
     meta = probe(bin_path)
+    if width and height:
+        meta.width = int(width)
+        meta.height = int(height)
+        meta.frame_stride = 8 + meta.width * meta.height
+        meta.capacity_frames = meta.file_size // meta.frame_stride
     if meta.width == 0 or meta.height == 0:
         raise ValueError("unknown geometry; a .footage sidecar is required")
 
