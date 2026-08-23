@@ -54,6 +54,15 @@ jobs:
           Copy-Item build-win/libopngx.dll .
           pyinstaller --noconfirm opngx.spec
 
+      - name: UI selftest — construct MainWindow inside the packaged exe
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $out = & dist\opngx-studio.exe --selftest-ui 2>&1
+          $out | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Build one-click setup.exe
         shell: pwsh
         run: |
@@ -155,6 +164,9 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           mkdir -p rel
           find art -type f -exec cp {} rel/ \;
+          ls -la rel
+          # checksum manifest for every asset (users verify downloads)
+          (cd rel && sha256sum $(ls | grep -v '^SHA256SUMS$') > SHA256SUMS)
           ls -la rel
           if gh release view "$TAG" --repo $GITHUB_REPOSITORY >/dev/null 2>&1; then
             gh release upload "$TAG" --repo $GITHUB_REPOSITORY --clobber rel/*

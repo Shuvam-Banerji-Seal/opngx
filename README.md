@@ -49,6 +49,8 @@ opngx extract recording.bin -o frames/          # vendor-identical PNGs
 opngx extract recording.bin -o frames/ \
     --mode raw --bit-depth 16 --timestamps --metadata -j $(nproc)
 opngx verify reference_dir/ frames/ --subset    # pixel-exact proof
+opngx verifybin --bin recording.bin frames/     # prove vs source, no refs needed
+opngx verify ref_dir/ frames/ --json            # machine-readable report
 
 # standalone C binary (no python needed)
 ./build/opngx-engine batch sbs/bin/ -o out_root/ -j 16

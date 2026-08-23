@@ -159,6 +159,17 @@ jobs:
           pyinstaller --noconfirm opngx.spec
           Get-ChildItem dist
 
+      - name: UI selftest — construct MainWindow inside the packaged exe
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # v1.4.0 shipped a studio that crashed at launch (self._log missing)
+          # because nothing ever constructed the window in CI. Never again.
+          $out = & dist\opngx-studio.exe --selftest-ui 2>&1
+          $out | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Build docs.zip + one-click setup.exe
         shell: pwsh
         run: |

@@ -21,7 +21,7 @@
 #define RES_ENGINE 101
 #define RES_STUDIO 102
 #define RES_DOCS   103
-#define APP_VERSION "1.2.1"
+#define APP_VERSION "1.5.0"
 #define APP_NAME    "opngx"
 #define PUBLISHER   "opngx contributors"
 
