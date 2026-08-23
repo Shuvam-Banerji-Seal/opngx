@@ -223,6 +223,19 @@ def test_ar6_studio_constructs_offscreen():
         assert hasattr(win, attr), f"MainWindow lacks {attr}"
     assert win.w_spin.value() == 0, "width field must default to auto"
 
+    # AR-11: sysmon values may be None (Windows first poll, unsupported
+    # platform) — chips must tolerate that, not raise TypeError. This exact
+    # bug crashed the studio on Windows and was caught by the packaged-exe
+    # selftest on the CI runner before v1.5.0 shipped.
+    win._sys_snapshot = lambda: {"cpu": None, "mem": None, "load1": None}
+    win._poll_sysmon()
+    assert win.cpu_chip.text() == "CPU –", win.cpu_chip.text()
+    assert win.ram_chip.text() == "RAM –", win.ram_chip.text()
+    win._sys_snapshot = lambda: {"cpu": 87.0, "mem": 50.0, "load1": 1.25}
+    win._poll_sysmon()
+    assert win.cpu_chip.text() == "CPU 87%"
+    assert win.ram_chip.text() == "RAM 50%"
+
 
 # --------------------------------------------------------------------- AR-5
 def test_ar5_version_strings_consistent():
@@ -312,15 +325,14 @@ def test_ar8a_verifybin_pass_corrupt_and_subrange(fixture_dir):
         # full run passes
         st = opngx.extract(str(binp), str(Path(td) / "full"), prefix="cam_")
         assert st.frames_written == 200
-        rep = opngx.verify_against_bin(str(binp), str(Path(td) / "full"),
-                                       prefix="cam_")
+        rep = opngx.verify_against_bin(str(binp), str(Path(td) / "full"), prefix="cam_")
         assert rep.passed and rep.files_compared == 200, rep.first_error
 
         # subrange (start>0) passes by absolute-index naming
-        opngx.extract(str(binp), str(Path(td) / "sub"), start=100,
-                      frames=50, prefix="cam_")
-        rep2 = opngx.verify_against_bin(str(binp), str(Path(td) / "sub"),
-                                        prefix="cam_")
+        opngx.extract(
+            str(binp), str(Path(td) / "sub"), start=100, frames=50, prefix="cam_"
+        )
+        rep2 = opngx.verify_against_bin(str(binp), str(Path(td) / "sub"), prefix="cam_")
         assert rep2.passed and rep2.files_compared == 50, rep2.first_error
 
         # corrupted output must fail
@@ -329,8 +341,7 @@ def test_ar8a_verifybin_pass_corrupt_and_subrange(fixture_dir):
         data = bytearray(victim.read_bytes())
         data[-20] ^= 0xFF
         victim.write_bytes(bytes(data))
-        rep3 = opngx.verify_against_bin(str(binp), str(Path(td) / "bad"),
-                                        prefix="cam_")
+        rep3 = opngx.verify_against_bin(str(binp), str(Path(td) / "bad"), prefix="cam_")
         assert not rep3.passed and rep3.mismatched_files >= 1
 
 
@@ -381,13 +392,13 @@ def test_ar9_push_progress_callback_fires_and_completes(fixture_dir):
         p.footage_path = fp.encode()
         p.num_frames = -1
         p.frame_stride = -1
-        p.mode = 1          # raw
+        p.mode = 1  # raw
         p.bit_depth = 8
         p.channels = 6
         p.format = 0
         p.jobs = 4
-        p.level = 1         # fastest
-        p.backend = 0       # auto
+        p.level = 1  # fastest
+        p.backend = 0  # auto
         p.gamma = 1.0
         p.verbose = 0
         p.out_dir = os.fsencode(td)
@@ -414,14 +425,48 @@ def test_ar9_push_progress_callback_fires_and_completes(fixture_dir):
 # --------------------------------------------------------------------- AR-10
 # Qt-inherited names MainWindow may call without being defined in qt_app.py.
 _QT_SELF_WHITELIST = {
-    "setWindowTitle", "resize", "setMinimumSize", "setAcceptDrops",
-    "setCentralWidget", "menuBar", "style", "close", "width", "height",
-    "setStyleSheet", "centralWidget", "update", "blockSignals", "thread",
-    "installEventFilter", "adjustSize", "show", "hide", "exec", "reject",
-    "accept", "setRange", "setValue", "setDisabled", "setEnabled",
-    "addAction", "addMenu", "addSeparator", "setShortcut", "setFont",
-    "layout", "parent", "window", "setToolTip", "toolTip", "grab",
-    "testAttribute", "setAttribute", "palette", "font", "sizeHint",
+    "setWindowTitle",
+    "resize",
+    "setMinimumSize",
+    "setAcceptDrops",
+    "setCentralWidget",
+    "menuBar",
+    "style",
+    "close",
+    "width",
+    "height",
+    "setStyleSheet",
+    "centralWidget",
+    "update",
+    "blockSignals",
+    "thread",
+    "installEventFilter",
+    "adjustSize",
+    "show",
+    "hide",
+    "exec",
+    "reject",
+    "accept",
+    "setRange",
+    "setValue",
+    "setDisabled",
+    "setEnabled",
+    "addAction",
+    "addMenu",
+    "addSeparator",
+    "setShortcut",
+    "setFont",
+    "layout",
+    "parent",
+    "window",
+    "setToolTip",
+    "toolTip",
+    "grab",
+    "testAttribute",
+    "setAttribute",
+    "palette",
+    "font",
+    "sizeHint",
 }
 
 
@@ -444,18 +489,26 @@ def _unresolved_self_calls(text: str) -> set[str]:
     assigned: set[str] = set()
     calls: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
-                and node.value.id == "self":
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        ):
             calls.add(node.attr)
         if isinstance(node, ast.Assign):
             for tgt in node.targets:
-                if isinstance(tgt, ast.Attribute) and \
-                        isinstance(tgt.value, ast.Name) and \
-                        tgt.value.id == "self":
+                if (
+                    isinstance(tgt, ast.Attribute)
+                    and isinstance(tgt.value, ast.Name)
+                    and tgt.value.id == "self"
+                ):
                     assigned.add(tgt.attr)
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Attribute) \
-                and isinstance(node.target.value, ast.Name) and \
-                node.target.value.id == "self":
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Attribute)
+            and isinstance(node.target.value, ast.Name)
+            and node.target.value.id == "self"
+        ):
             assigned.add(node.target.attr)
 
     # attribute *reads* that are not calls are fine (e.g. self.meta.width);
@@ -464,13 +517,17 @@ def _unresolved_self_calls(text: str) -> set[str]:
 
     call_names: set[str] = set()
     for node in _ast.walk(tree):
-        if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute) \
-                and isinstance(node.func.value, _ast.Name) and \
-                node.func.value.id == "self":
+        if (
+            isinstance(node, _ast.Call)
+            and isinstance(node.func, _ast.Attribute)
+            and isinstance(node.func.value, _ast.Name)
+            and node.func.value.id == "self"
+        ):
             call_names.add(node.func.attr)
 
     return {
-        n for n in call_names
+        n
+        for n in call_names
         if n not in defined and n not in assigned and n not in _QT_SELF_WHITELIST
     }
 
@@ -489,7 +546,10 @@ def test_ar10_gate_really_catches_v140_regression():
     try:
         blob = subprocess.run(
             ["git", "show", "v1.4.0:python/src/opngx/ui/qt_app.py"],
-            capture_output=True, text=True, cwd=str(REPO), check=True,
+            capture_output=True,
+            text=True,
+            cwd=str(REPO),
+            check=True,
         ).stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
         pytest.skip("git or v1.4.0 tag unavailable")

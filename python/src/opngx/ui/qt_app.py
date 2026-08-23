@@ -1032,7 +1032,10 @@ class MainWindow(QtWidgets.QMainWindow):
         cpu, mem, load1 = snap.get("cpu"), snap.get("mem"), snap.get("load1")
         self.cpu_chip.setText(f"CPU {cpu:.0f}%" if cpu is not None else "CPU –")
         self.ram_chip.setText(f"RAM {mem:.0f}%" if mem is not None else "RAM –")
-        tip = f"<b>Live CPU</b> {cpu:.0f}% overall"
+        # every value may be None (unsupported platform / sampler priming)
+        tip = "<b>Live CPU</b>"
+        if cpu is not None:
+            tip += f" {cpu:.0f}% overall"
         if load1 is not None and os.cpu_count():
             tip += f"<br>load 1 min: {load1:.2f} ({os.cpu_count()} cores)"
         self.cpu_chip.setToolTip(tip)
