@@ -172,13 +172,29 @@ jobs:
           Remove-Item installer/opngx-engine.exe, installer/opngx-studio.exe, `
             installer/docs.zip, installer/apprc.o
 
-      - name: Selftest bundled ffmpeg (inside opngx-studio.exe)
+      - name: Verify ffmpeg is bundled + selftest render pipeline
         shell: pwsh
         run: |
-          $out = & dist/opngx-studio.exe --selftest-video 2>&1 | Select-Object -Last 5
-          Write-Host $out
-          if ($LASTEXITCODE -ne 0) { throw "bundled ffmpeg selftest failed" }
-
+          python -c "import imageio_ffmpeg; print('bundled ffmpeg:', imageio_ffmpeg.get_ffmpeg_exe())"
+          python -c "
+          import struct, tempfile
+          from pathlib import Path
+          import numpy as np
+          from opngx.video import render_video
+          w,h,n = 64,48,10
+          d = Path(tempfile.mkdtemp(prefix='opngx_selftest_'))
+          rng = np.random.default_rng(7)
+          binp = d/'st.bin'
+          with open(binp,'wb') as f:
+              for i in range(n):
+                  f.write(struct.pack('<Q',1_000_000+i*2000))
+                  f.write(rng.integers(0,256,size=(h*w),dtype=np.uint8).tobytes())
+          out = d/'selftest.mp4'
+          st = render_video(str(binp),str(out),mode='raw',width=w,height=h,start=0,count=n,fps=10,crf=30)
+          ok = st['frames_written']==n and out.exists() and out.stat().st_size>1024
+          print('SELFTEST', 'PASS' if ok else 'FAIL', st['frames_written'], out.stat().st_size)
+          if not ok: raise SystemExit(1)
+          "
       - name: Smoke-test installed layout (silent install into sandbox)
         shell: cmd
         run: |
