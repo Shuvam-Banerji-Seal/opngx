@@ -27,6 +27,7 @@ import ast
 import os
 import re
 import shutil
+import time
 import subprocess
 import sys
 from pathlib import Path
@@ -208,6 +209,7 @@ def test_ar6_studio_constructs_offscreen():
         "_start",
         "_cancel",
         "_verify",
+        "_verify_bin",
         "_log",
         "_on_dialog",
         "_refresh_frame",
@@ -557,3 +559,55 @@ def test_ar10_gate_really_catches_v140_regression():
     assert "_log" in missing, (
         "gate failed its purpose: v1.4.0's undefined _log not detected"
     )
+
+
+# --------------------------------------------------------------------- AR-12
+def test_ar12_video_render_streams_and_cancels(fixture_dir, tmp_path):
+    """Render must feed ffmpeg immediately (bounded pipeline), honor
+    cancel, and produce a valid file.
+
+    Regression for the '1 minute of nothing after pressing Render':
+    the old code translated the WHOLE range into RAM before frame 1.
+    """
+    from opngx.video import render_video
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("no ffmpeg on PATH")
+    binp = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    out = tmp_path / "stream.mp4"
+
+    first_progress_at: list[float] = []
+    t0 = time.perf_counter()
+
+    def progress(done: int, total: int) -> None:
+        if not first_progress_at:
+            first_progress_at.append(time.perf_counter() - t0)
+
+    st = render_video(binp, str(out), mode="raw", width=64, height=48,
+                      start=0, count=120, fps=30, crf=30,
+                      progress=progress)
+    assert st["frames_written"] == 120
+    assert out.exists() and out.stat().st_size > 1024
+    assert first_progress_at, "progress never fired"
+    # first frames must be encoding almost immediately, not after a
+    # full-corpus translate pass
+    assert first_progress_at[0] < 5.0, (
+        f"first progress after {first_progress_at[0]:.1f}s — "
+        "pipeline is buffering instead of streaming"
+    )
+
+    # cancel mid-render must return cleanly with cancelled=True
+    out2 = tmp_path / "cancel.mp4"
+    state = {"n": 0}
+
+    def cancel_after_first(done: int, total: int) -> None:
+        state["n"] += 1
+
+    def should_cancel() -> bool:
+        return state["n"] >= 2   # cancel once writing has begun
+
+    st2 = render_video(binp, str(out2), mode="raw", width=64, height=48,
+                       start=0, count=120, fps=30, crf=30,
+                       progress=cancel_after_first,
+                       should_cancel=should_cancel)
+    assert st2["cancelled"] is True

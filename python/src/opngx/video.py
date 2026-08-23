@@ -26,6 +26,7 @@ def resolve_ffmpeg() -> Optional[str]:
     if _FFCACHE:
         return _FFCACHE
     import sys, os
+
     search_dirs = []
     _mei = getattr(sys, "_MEIPASS", None)
     if _mei:
@@ -39,9 +40,14 @@ def resolve_ffmpeg() -> Optional[str]:
     except Exception:
         pass
     import glob as _g
+
     for _d in search_dirs:
-        for _name in ("_bundled_ffmpeg.exe", "_bundled_ffmpeg",
-                      "_ffmpeg.exe", "_ffmpeg"):
+        for _name in (
+            "_bundled_ffmpeg.exe",
+            "_bundled_ffmpeg",
+            "_ffmpeg.exe",
+            "_ffmpeg",
+        ):
             _cand = os.path.join(_d, _name)
             if os.path.isfile(_cand):
                 _FFCACHE = _cand
@@ -62,8 +68,7 @@ def resolve_ffmpeg() -> Optional[str]:
         _iio_bin = os.path.join(_mei, "imageio_ffmpeg", "binaries")
         try:
             for _f in os.listdir(_iio_bin):
-                if "ffmpeg" in _f.lower() and (
-                        _f.endswith(".exe") or not "." in _f):
+                if "ffmpeg" in _f.lower() and (_f.endswith(".exe") or not "." in _f):
                     _cand = os.path.join(_iio_bin, _f)
                     if os.path.isfile(_cand):
                         _FFCACHE = _cand
@@ -75,8 +80,7 @@ def resolve_ffmpeg() -> Optional[str]:
         _mod_dir = os.path.dirname(os.path.abspath(__file__))
         _iio_bin2 = os.path.join(_mod_dir, "imageio_ffmpeg", "binaries")
         for _f in os.listdir(_iio_bin2):
-            if "ffmpeg" in _f.lower() and (
-                    _f.endswith(".exe") or not "." in _f):
+            if "ffmpeg" in _f.lower() and (_f.endswith(".exe") or not "." in _f):
                 _cand = os.path.join(_iio_bin2, _f)
                 if os.path.isfile(_cand):
                     _FFCACHE = _cand
@@ -89,6 +93,7 @@ def resolve_ffmpeg() -> Optional[str]:
         return _FFCACHE
     try:
         import imageio_ffmpeg
+
         c = imageio_ffmpeg.get_ffmpeg_exe()
         if c and Path(c).exists():
             _FFCACHE = c
@@ -102,18 +107,26 @@ def ffmpeg_available() -> bool:
     return resolve_ffmpeg() is not None
 
 
-def read_frame_gray(bin_path: str, meta, index: int,
-                    mode: str = "reference",
-                    brightness: Optional[float] = None,
-                    contrast: Optional[float] = None,
-                    gamma: Optional[float] = None) -> bytes:
+def read_frame_gray(
+    bin_path: str,
+    meta,
+    index: int,
+    mode: str = "reference",
+    brightness: Optional[float] = None,
+    contrast: Optional[float] = None,
+    gamma: Optional[float] = None,
+) -> bytes:
     """Decode one frame into LUT-mapped grayscale bytes (for previews)."""
     import numpy as np
+
     b, c, g = brightness, contrast, gamma
     if mode == "raw":
-        b = c = 0; g = 1.0
+        b = c = 0
+        g = 1.0
     elif mode == "custom":
-        b = b or 0.0; c = c or 0.0; g = g or 1.0
+        b = b or 0.0
+        c = c or 0.0
+        g = g or 1.0
     else:
         b = meta.brightness if b is None else b
         c = meta.contrast if c is None else c
@@ -149,7 +162,8 @@ def render_video(
         raise RuntimeError(
             "ffmpeg was not found on PATH — required for video rendering.\n"
             "Install it (e.g. 'winget install ffmpeg' / 'pacman -S ffmpeg') "
-            "and try again.")
+            "and try again."
+        )
 
     meta = probe(bin_path)
     if width and height:
@@ -183,61 +197,92 @@ def render_video(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-f", "rawvideo", "-pix_fmt", "gray",
-        "-s", f"{meta.width}x{meta.height}", "-r", str(fps), "-i", "-",
-        "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "gray",
+        "-s",
+        f"{meta.width}x{meta.height}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",
+        "-c:v",
+        "libx264",
+        "-preset",
+        preset,
+        "-crf",
+        str(crf),
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
         str(out),
     ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                            stderr=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
     import mmap
     import os
+    from collections import deque
     from concurrent.futures import ThreadPoolExecutor
 
     px = meta.width * meta.height
     t0 = time.perf_counter()
     written = 0
     try:
-        # All-core decode: bytes.translate releases the GIL, so we split
-        # the frame range into per-core chunks, translate each chunk in a
-        # worker thread, then write to ffmpeg strictly in frame order.
+        # Streaming pipeline: translate chunk k+1 on the workers while
+        # chunk k streams into ffmpeg. The old translate-everything-first
+        # design stalled the dialog for the whole decode pass (3.84 GB on
+        # a full bin ≈ a minute of nothing) and buffered the entire
+        # output in RAM before frame 1 was encoded.
         with open(bin_path, "rb") as f:
             mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
             try:
                 nth = max(1, os.cpu_count() or 1)
                 n_chunks = min(n, nth * 2)
                 chunk_sz = max(1, n // n_chunks)
+                max_inflight = 4  # bounds RAM to ~4 chunks
 
                 def work(chunk_idx: int):
+                    if should_cancel is not None and should_cancel():
+                        return chunk_idx, None
                     s0 = chunk_idx * chunk_sz
                     e0 = s0 + chunk_sz if chunk_idx < n_chunks - 1 else n
                     pieces = []
                     for i in range(s0, e0):
                         base = (start + i) * meta.frame_stride + 8
-                        raw = mm[base:base + px]
+                        raw = mm[base : base + px]
                         pieces.append(raw.translate(lut))
                     return chunk_idx, pieces
 
+                inflight = deque()
+                next_chunk = 0
+                cancelled = False
                 with ThreadPoolExecutor(max_workers=nth) as ex:
-                    futures = [ex.submit(work, c) for c in range(n_chunks)]
-                    buf = [None] * n_chunks
-                    for fut in futures:
-                        ci, pieces = fut.result()
-                        buf[ci] = pieces
-                    if proc.stdin and proc.stdin.writable():
-                        for pieces in buf:
-                            if pieces is None:
-                                continue
-                            if should_cancel is not None and should_cancel():
-                                break
+                    while next_chunk < n_chunks and len(inflight) < max_inflight:
+                        inflight.append(ex.submit(work, next_chunk))
+                        next_chunk += 1
+                    while inflight:
+                        _, pieces = inflight.popleft().result()
+                        if next_chunk < n_chunks:
+                            inflight.append(ex.submit(work, next_chunk))
+                            next_chunk += 1
+                        if pieces is None:
+                            cancelled = True
+                            break
+                        if proc.stdin and not proc.stdin.closed:
                             for blob in pieces:
                                 proc.stdin.write(blob)
                                 written += 1
-                            if progress:
-                                progress(min(written, n), n)
+                        if progress:
+                            progress(min(written, n), n)
+                        if should_cancel is not None and should_cancel():
+                            cancelled = True
+                            break
             finally:
                 mm.close()
     finally:
@@ -249,16 +294,22 @@ def render_video(
 
     dt = time.perf_counter() - t0
     out_path = Path(out)
-    if rc != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+    cancelled = bool(should_cancel and should_cancel())
+    if (
+        rc != 0
+        or not out_path.exists()
+        or (out_path.stat().st_size == 0 and not cancelled)
+    ):
         err = ""
         if proc.stderr:
             err = proc.stderr.read().decode(errors="replace")[-800:]
         raise RuntimeError(
-            f"ffmpeg failed (rc={rc}, frames={written}): {err or 'no output produced'}")
+            f"ffmpeg failed (rc={rc}, frames={written}): {err or 'no output produced'}"
+        )
     return {
         "frames_written": written,
         "seconds": dt,
         "output": str(out),
-        "cancelled": bool(should_cancel and should_cancel()),
+        "cancelled": cancelled,
         "fps_effective": written / max(dt, 1e-9),
     }
