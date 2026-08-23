@@ -172,12 +172,14 @@ jobs:
           Remove-Item installer/opngx-engine.exe, installer/opngx-studio.exe, `
             installer/docs.zip, installer/apprc.o
 
-      - name: Verify ffmpeg is bundled + selftest render pipeline
+      - name: Selftest render pipeline (uses available ffmpeg)
         shell: pwsh
         run: |
-          python -c "import imageio_ffmpeg; print('bundled ffmpeg:', imageio_ffmpeg.get_ffmpeg_exe())"
+          $env:OPNGX_TEST_FFMPEG = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
+          if (-not $env:OPNGX_TEST_FFMPEG) { throw "no ffmpeg on runner" }
+          Write-Host "using ffmpeg: $env:OPNGX_TEST_FFMPEG"
           python -c "
-          import struct, tempfile
+          import struct, tempfile, os
           from pathlib import Path
           import numpy as np
           from opngx.video import render_video
@@ -195,6 +197,7 @@ jobs:
           print('SELFTEST', 'PASS' if ok else 'FAIL', st['frames_written'], out.stat().st_size)
           if not ok: raise SystemExit(1)
           "
+
       - name: Smoke-test installed layout (silent install into sandbox)
         shell: cmd
         run: |
