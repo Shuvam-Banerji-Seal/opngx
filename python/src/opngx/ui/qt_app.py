@@ -179,6 +179,22 @@ QToolTip {
     background: #070807; color: #eaf2ea;
     border: 1px solid #588157; border-radius: 8px; padding: 8px;
 }
+
+/* ---------- dialogs that QSS alone misses (black-on-black fix) ---------- */
+QMessageBox, QInputDialog, QProgressDialog, QColorDialog {
+    background: #0d0f0d; color: #e8ede8;
+}
+QMessageBox QLabel, QInputDialog QLabel, QProgressDialog QLabel {
+    color: #e8ede8; background: transparent;
+}
+QMessageBox QPushButton { min-width: 88px; }
+QMessageBox QPushButton, QInputDialog QPushButton {
+    background: #10140f; color: #ffffff;
+    border: 1px solid #2a332a; border-radius: 9px; padding: 7px 16px;
+}
+QMessageBox QPushButton:hover, QInputDialog QPushButton:hover {
+    background: #182018; border-color: #3e6b3a;
+}
 """
 
 
@@ -994,12 +1010,22 @@ class MainWindow(QtWidgets.QMainWindow):
         verify.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogApplyButton))
         verify.setToolTip(
             "<b>Verify pixel-exactness</b><br>Pick a reference folder (or use "
-            "the source bin via CLI) — every frame is decoded and compared."
+            "the source bin via the button next to this) — every frame is "
+            "decoded and compared."
+        )
+        verify_bin = QtWidgets.QPushButton("✓  Verify vs source bin")
+        verify_bin.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
+        verify_bin.setToolTip(
+            "<b>Verify against the recording itself</b><br>No vendor "
+            "reference folder needed: every extracted frame is re-derived "
+            "from the loaded .bin and compared pixel-for-pixel. Uses the "
+            "current quality mode and output folder."
         )
         bar.addWidget(self.extract_btn)
         bar.addWidget(self.cancel_btn)
         bar.addWidget(video_btn)
         bar.addWidget(verify)
+        bar.addWidget(verify_bin)
         self.progress = QtWidgets.QProgressBar()
         self.progress.setFixedHeight(16)
         bar.addWidget(self.progress, 1)
@@ -1016,6 +1042,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cancel_btn.clicked.connect(self._cancel)
         video_btn.clicked.connect(self._render_video_dialog)
         verify.clicked.connect(self._verify)
+        verify_bin.clicked.connect(self._verify_bin)
 
         self._log(
             f"opngx {opngx.__version__} ready — engine: {opngx.engine_backend()}", "ok"
@@ -1528,6 +1555,52 @@ class MainWindow(QtWidgets.QMainWindow):
         self._cancel_requested = True
         self._log("cancel requested…", "warn")
 
+    def _verify_bin(self) -> None:
+        """Verify the output folder against the loaded .bin itself —
+        no vendor reference directory required (ADD-10)."""
+        if not self.meta:
+            QtWidgets.QMessageBox.warning(self, "opngx", "Probe a bin first.")
+            return
+        out = self.out_edit.text().strip()
+        if not out:
+            QtWidgets.QMessageBox.warning(
+                self, "opngx", "Choose an output directory first."
+            )
+            return
+        opts = self._collect_opts()
+
+        def run() -> None:
+            try:
+                rep = opngx.verify_against_bin(
+                    self.meta.bin_path,
+                    out,
+                    mode=opts["mode"],
+                    brightness=opts["brightness"],
+                    contrast=opts["contrast"],
+                    gamma=opts["gamma"],
+                    bit_depth=opts["bit_depth"],
+                    channels=opts["channels"],
+                    prefix=opts["prefix"],
+                    ext=opts["ext"],
+                )
+                msg = (
+                    "<b style='color:#34d399'>PASS</b> — all "
+                    f"{rep.files_compared:,} compared frame(s) are "
+                    "pixel-exact against the source recording."
+                    if rep.passed
+                    else f"<b style='color:#f87171'>FAIL</b> — "
+                    f"{rep.mismatched_files} mismatched file(s).<br>"
+                    f"<span style='color:#fbbf24'>{rep.first_error}</span>"
+                )
+                self._sig.log.emit(
+                    f"verify-vs-bin: {rep}", "ok" if rep.passed else "err"
+                )
+                self._sig.dialog.emit(("verify vs source bin", msg))
+            except Exception as exc:  # noqa: BLE001
+                self._sig.error.emit(str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+
     def _verify(self) -> None:
         ref = QtWidgets.QFileDialog.getExistingDirectory(
             self, "Reference PNG directory"
@@ -1613,7 +1686,43 @@ def main() -> int:
             "Falling back to the Tkinter UI is available via: opngx-ui --tk"
         )
     app = QtWidgets.QApplication([])
+
+    # Dark QPalette FIRST: guarantees white-on-dark text in every dialog
+    # (QMessageBox, file dialogs, context menus) even where QSS does not
+    # reach — the black-on-black report came from unstyled message boxes.
+    pal = QtGui.QPalette()
+    cr = QtGui.QPalette.ColorRole
+    cg = QtGui.QPalette.ColorGroup
+    dark = QtGui.QColor("#0d0f0d")
+    darker = QtGui.QColor("#050505")
+    text = QtGui.QColor("#e8ede8")
+    bright = QtGui.QColor("#ffffff")
+    for group in (cg.Active, cg.Inactive, cg.Disabled):
+        pal.setColor(group, cr.Window, dark)
+        pal.setColor(
+            group,
+            cr.WindowText,
+            text if group != cg.Disabled else QtGui.QColor("#8a948a"),
+        )
+        pal.setColor(group, cr.Base, QtGui.QColor("#070807"))
+        pal.setColor(group, cr.AlternateBase, dark)
+        pal.setColor(
+            group, cr.Text, text if group != cg.Disabled else QtGui.QColor("#8a948a")
+        )
+        pal.setColor(group, cr.Button, QtGui.QColor("#10140f"))
+        pal.setColor(
+            group,
+            cr.ButtonText,
+            bright if group != cg.Disabled else QtGui.QColor("#4a554a"),
+        )
+        pal.setColor(group, cr.Highlight, QtGui.QColor("#4d8248"))
+        pal.setColor(group, cr.HighlightedText, bright)
+        pal.setColor(group, cr.ToolTipBase, QtGui.QColor("#070807"))
+        pal.setColor(group, cr.ToolTipText, QtGui.QColor("#eaf2ea"))
+        pal.setColor(group, cr.PlaceholderText, QtGui.QColor("#8a948a"))
+    app.setPalette(pal)
     app.setStyleSheet(QSS)
+
     win = MainWindow()
     win.show()
     return app.exec()
