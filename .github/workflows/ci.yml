@@ -172,6 +172,13 @@ jobs:
           Remove-Item installer/opngx-engine.exe, installer/opngx-studio.exe, `
             installer/docs.zip, installer/apprc.o
 
+      - name: Selftest bundled ffmpeg (inside opngx-studio.exe)
+        shell: pwsh
+        run: |
+          $out = & dist/opngx-studio.exe --selftest-video 2>&1 | Select-Object -Last 5
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "bundled ffmpeg selftest failed" }
+
       - name: Smoke-test installed layout (silent install into sandbox)
         shell: cmd
         run: |

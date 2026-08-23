@@ -33,3 +33,4 @@ build-rel-lin/
 build-win/
 build-pkg/
 build-rel/
+dist/

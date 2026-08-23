@@ -57,7 +57,7 @@ def read_frame_gray(bin_path: str, meta, index: int,
         b = meta.brightness if b is None else b
         c = meta.contrast if c is None else c
         g = meta.gamma if g is None else g
-    lut = build_lut(b, c, g)
+    lut = bytes(build_lut(b, c, g))
     with open(bin_path, "rb") as f:
         f.seek(index * meta.frame_stride + 8)
         buf = f.read(meta.width * meta.height)
@@ -106,7 +106,7 @@ def render_video(
         c = meta.contrast if c is not None else meta.contrast
         g = meta.gamma if g is not None else meta.gamma
         b = meta.brightness if b is None else b
-    lut = build_lut(b, c, g)
+    lut = bytes(build_lut(b, c, g))
 
     n = count if count is not None else meta.capacity_frames - start
     n = max(0, min(n, meta.capacity_frames - start))
@@ -143,7 +143,8 @@ def render_video(
         "+faststart",
         str(out),
     ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
 
     t0 = time.perf_counter()
     written = 0
@@ -164,7 +165,7 @@ def render_video(
                         break
                     take = min(CHUNK, n - i)
                     off0 = base_off + i * meta.frame_stride
-                    span = (take - 1) * meta.frame_stride + 8 + px
+                    span = (take - 1) * meta.frame_stride + px
                     raw = mm[off0 : off0 + span]
                     if len(raw) < span:
                         raise IOError(
@@ -173,8 +174,8 @@ def render_video(
                     lutted = raw.translate(lut)
                     view = memoryview(lutted)
                     parts = [
-                        view[k * meta.frame_stride + 8 :
-                             k * meta.frame_stride + 8 + px]
+                        view[k * meta.frame_stride :
+                             k * meta.frame_stride + px]
                         for k in range(take)
                     ]
                     try:
@@ -200,8 +201,13 @@ def render_video(
         rc = proc.wait(timeout=60)
 
     dt = time.perf_counter() - t0
-    if rc != 0 and written:
-        raise RuntimeError(f"ffmpeg exited {rc}")
+    out_path = Path(out)
+    if rc != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+        err = ""
+        if proc.stderr:
+            err = proc.stderr.read().decode(errors="replace")[-800:]
+        raise RuntimeError(
+            f"ffmpeg failed (rc={rc}, frames={written}): {err or 'no output produced'}")
     return {
         "frames_written": written,
         "seconds": dt,
