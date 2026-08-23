@@ -38,6 +38,7 @@ def resolve_ffmpeg() -> Optional[str]:
         search_dirs.append(os.path.dirname(os.path.abspath(__file__)))
     except Exception:
         pass
+    import glob as _g
     for _d in search_dirs:
         for _name in ("_bundled_ffmpeg.exe", "_bundled_ffmpeg",
                       "_ffmpeg.exe", "_ffmpeg"):
@@ -45,6 +46,16 @@ def resolve_ffmpeg() -> Optional[str]:
             if os.path.isfile(_cand):
                 _FFCACHE = _cand
                 return _FFCACHE
+    # glob fallback: any file starting with _bundled_ffmpeg or _ffmpeg
+    for _d in search_dirs:
+        try:
+            for _pat in ("_bundled_ffmpeg*", "_ffmpeg*"):
+                for _cand in _g.glob(os.path.join(_d, _pat)):
+                    if os.path.isfile(_cand):
+                        _FFCACHE = _cand
+                        return _FFCACHE
+        except Exception:
+            pass
     exe = shutil.which("ffmpeg")
     if exe:
         _FFCACHE = exe
