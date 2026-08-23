@@ -58,12 +58,16 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-          OPNGX_SELFTEST_LOG: selftest-ui.log
         run: |
-          & dist\opngx-studio.exe --selftest-ui
-          $code = $LASTEXITCODE
-          Get-Content selftest-ui.log
-          if ($code -ne 0) { exit 1 }
+          # PowerShell does NOT wait for GUI-subsystem exes with `&`;
+          # Start-Process -Wait -PassThru is mandatory here.
+          $log = Join-Path $PWD "selftest-ui.log"
+          $env:OPNGX_SELFTEST_LOG = $log
+          $p = Start-Process -FilePath "dist\opngx-studio.exe" `
+                 -ArgumentList "--selftest-ui" -Wait -PassThru -NoNewWindow
+          "exit code: 0x{0:X8} ({0})" -f $p.ExitCode
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written)" }
+          exit $p.ExitCode
 
       - name: Build one-click setup.exe
         shell: pwsh
