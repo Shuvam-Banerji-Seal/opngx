@@ -56,6 +56,33 @@ def resolve_ffmpeg() -> Optional[str]:
                         return _FFCACHE
         except Exception:
             pass
+    # PyInstaller imageio_ffmpeg hook puts the binary at
+    # _MEIPASS/imageio_ffmpeg/binaries/ffmpeg-*.exe
+    if _mei:
+        _iio_bin = os.path.join(_mei, "imageio_ffmpeg", "binaries")
+        try:
+            for _f in os.listdir(_iio_bin):
+                if "ffmpeg" in _f.lower() and (
+                        _f.endswith(".exe") or not "." in _f):
+                    _cand = os.path.join(_iio_bin, _f)
+                    if os.path.isfile(_cand):
+                        _FFCACHE = _cand
+                        return _FFCACHE
+        except Exception:
+            pass
+    # also check the module dir's imageio_ffmpeg subpath
+    try:
+        _mod_dir = os.path.dirname(os.path.abspath(__file__))
+        _iio_bin2 = os.path.join(_mod_dir, "imageio_ffmpeg", "binaries")
+        for _f in os.listdir(_iio_bin2):
+            if "ffmpeg" in _f.lower() and (
+                    _f.endswith(".exe") or not "." in _f):
+                _cand = os.path.join(_iio_bin2, _f)
+                if os.path.isfile(_cand):
+                    _FFCACHE = _cand
+                    return _FFCACHE
+    except Exception:
+        pass
     exe = shutil.which("ffmpeg")
     if exe:
         _FFCACHE = exe
