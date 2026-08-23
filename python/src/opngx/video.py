@@ -21,18 +21,22 @@ _FFCACHE: Optional[str] = None
 
 
 def resolve_ffmpeg() -> Optional[str]:
-    """Path to an ffmpeg executable: PATH first, then the one shipped
-    inside imageio-ffmpeg (bundled in the Windows build)."""
+    """Path to an ffmpeg executable. Prefers the imageio-ffmpeg build that
+    ships inside the packaged app (deterministic, always present), and
+    falls back to one on PATH."""
     global _FFCACHE
     if _FFCACHE:
         return _FFCACHE
-    exe = shutil.which("ffmpeg")
+    exe = None
+    try:
+        import imageio_ffmpeg
+        candidate = imageio_ffmpeg.get_ffmpeg_exe()
+        if candidate and Path(candidate).exists():
+            exe = candidate
+    except Exception:
+        pass
     if not exe:
-        try:
-            import imageio_ffmpeg
-            exe = imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            exe = None
+        exe = shutil.which("ffmpeg")
     _FFCACHE = exe
     return exe
 
