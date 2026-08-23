@@ -190,6 +190,7 @@ class WorkerSignals(QtCore.QObject):
     done = Signal(object)
     error = Signal(str)
     state = Signal(bool)
+    dialog = Signal(object)
 
 
 FIELD_GUIDE = """
@@ -288,6 +289,49 @@ frame sizes.
 """
 
 
+TIMING_GUIDE = """
+<h2 style='color:#60a5fa'>Timestamps, gaps &amp; dropped frames</h2>
+Every frame carries a camera-clock tick in its 8-byte header. At the
+verified operating point one tick is <b>1 µs</b> and a perfect 500 fps
+recording advances exactly 2000 ticks per frame.<br><br>
+<b>CLI:</b> <code>opngx timestamps X.bin [--csv out.csv] [--json]</code><br>
+reports span, effective fps, delta min/median/max, gap count and the first
+gaps with their locations — proof of whether any frames were dropped by
+the camera or the grabber.<br><br>
+Measured on brow_1.2: 50 000 frames, deltas 1999–2001 ticks (±1 jitter),
+effective fps <b>500.000</b>, zero gaps.
+"""
+
+SIDECAR_GUIDE = """
+<h2 style='color:#60a5fa'>What's inside the .footage sidecar</h2>
+opngx surfaces every field the vendor stored — nothing is thrown away:
+<table cellpadding=4>
+<tr><td><b>FramerateReal</b></td><td>achieved capture rate vs nominal Framerate</td></tr>
+<tr><td><b>Serial / Model</b></td><td>camera provenance for lab notebooks</td></tr>
+<tr><td><b>TriggerROI *</b></td><td>sensor window used for trigger; the recording itself is ResolutionX×Y inside it</td></tr>
+<tr><td><b>BrightnessR/G/B</b></td><td>per-channel gains (unity here ⇒ pure mono math)</td></tr>
+<tr><td><b>BayerFormat</b></td><td>colour-filter arrangement reported by the sensor</td></tr>
+<tr><td><b>TriggeredBySoftware / Slave</b></td><td>acquisition wiring</td></tr>
+</table>
+Access from Python: <code>opngx.probe(x).extra</code> — all tags land in
+metadata.json too.
+"""
+
+VERIFY_GUIDE = """
+<h2 style='color:#60a5fa'>Proving your output is correct</h2>
+Two independent proofs ship with opngx:<br><br>
+<b>1. Against vendor references</b> — ✓ Verify… compares decoded pixels of
+your output against an existing export folder. PASS means bit-for-bit
+identical images.<br>
+<code>opngx verify REF_DIR OUT_DIR --json</code><br><br>
+<b>2. Against the source recording</b> — no vendor files needed. Every
+output frame is re-derived from X.bin and compared:<br>
+<code>opngx-engine verifybin --bin X.bin OUT_DIR --json</code><br><br>
+Full-scale evidence: 50 000/50 000 frames verified pixel-exact
+(14.6 GB of scanlines) on brow_1.2.
+"""
+
+
 def chip(text: str) -> "QtWidgets.QLabel":
     lbl = QtWidgets.QLabel(text)
     lbl.setObjectName("chip")
@@ -327,6 +371,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sig.log.connect(self._log)
         self._sig.done.connect(self._on_done)
         self._sig.error.connect(self._on_error)
+        self._sig.dialog.connect(self._on_dialog)
         self._sig.state.connect(self._set_state)
 
         self._menu()
@@ -375,6 +420,15 @@ class MainWindow(QtWidgets.QMainWindow):
         g3 = QtGui.QAction("Performance tuning", self)
         g3.triggered.connect(lambda: self._guide("Tuning", TUNING_GUIDE))
         m_help.addAction(g3)
+        g4 = QtGui.QAction("Timestamps & dropped frames", self)
+        g4.triggered.connect(lambda: self._guide("Timing", TIMING_GUIDE))
+        m_help.addAction(g4)
+        g5 = QtGui.QAction("Inside the .footage sidecar", self)
+        g5.triggered.connect(lambda: self._guide("Sidecar fields", SIDECAR_GUIDE))
+        m_help.addAction(g5)
+        g6 = QtGui.QAction("Two ways to prove correctness", self)
+        g6.triggered.connect(lambda: self._guide("Verification", VERIFY_GUIDE))
+        m_help.addAction(g6)
         m_help.addSeparator()
         about = QtGui.QAction("About", self)
         about.triggered.connect(self._about)
@@ -398,11 +452,17 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(
             self,
             "About opngx",
-            f"<h3>opngx {opngx.__version__}</h3>"
+            f"<h2>opngx {opngx.__version__} — opngx studio</h2>"
+            f"<p><b style='color:#7fb069'>Developer: Shuvam Banerji Seal</b><br>"
             f"engine: {opngx.engine_backend()}<br>"
-            f"cpus: {os.cpu_count()} logical • gpus: {gpus}<br><br>"
-            "Pixel-exact Optronis .bin → PNG/JPG/BMP/TIFF extraction.<br>"
-            "All CPU cores used by default. MIT licensed.",
+            f"cpus: {os.cpu_count()} logical • gpus: {gpus}</p>"
+            "<p>Ultra-fast, pixel-exact Optronis .bin → PNG/JPG/BMP/TIFF "
+            "extraction with MP4 rendering, frame viewer and built-in "
+            "verification. All CPU cores by default.</p>"
+            "<p>Help menu documents every control; F1 opens the field guide.<br>"
+            "License: MIT • "
+            "<a href='https://github.com/Shuvam-Banerji-Seal/opngx'>"
+            "github.com/Shuvam-Banerji-Seal/opngx</a></p>",
         )
 
     # --------------------------------------------------------------- build
@@ -439,6 +499,31 @@ class MainWindow(QtWidgets.QMainWindow):
             opngx.engine_backend().split("(")[0].strip(),
         ):
             head.addWidget(chip(txt))
+
+        # live CPU / RAM chips (C12) — show the machine working in real time
+        from opngx.sysmon import snapshot as _sys_snapshot
+
+        self._sys_snapshot = _sys_snapshot
+        self.cpu_chip = chip("CPU –")
+        self.ram_chip = chip("RAM –")
+        self.cpu_chip.setToolTip(
+            "<b>Live CPU utilisation</b><br>Whole-machine percent. During an "
+            "extract at jobs=all this should sit near 100% — that is the "
+            "engine using every core."
+        )
+        self.ram_chip.setToolTip(
+            "<b>Live memory usage</b><br>Used physical RAM percent. The "
+            "engine streams via mmap, so usage stays flat even on huge "
+            "recordings."
+        )
+        head.addWidget(self.cpu_chip)
+        head.addWidget(self.ram_chip)
+        self._sys_timer = QtCore.QTimer(self)
+        self._sys_timer.setInterval(900)
+        self._sys_timer.timeout.connect(self._poll_sysmon)
+        self._sys_timer.start()
+        self._poll_sysmon()
+
         outer.addLayout(head)
 
         # ---------------- splitter body ----------------
@@ -459,8 +544,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bin_edit.setPlaceholderText(
             "path to .bin … or just drag a file onto this window"
         )
-        browse = QtWidgets.QPushButton("Browse…")
-        probe = QtWidgets.QPushButton("Probe")
+        browse = QtWidgets.QPushButton(" Open…")
+        probe = QtWidgets.QPushButton(" Read info")
+        browse.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DirOpenIcon))
+        probe.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogInfoView))
         row.addWidget(self.bin_edit, 1)
         row.addWidget(browse)
         row.addWidget(probe)
@@ -479,10 +566,14 @@ class MainWindow(QtWidgets.QMainWindow):
         glabel = QtWidgets.QLabel("width × height")
         glabel.setObjectName("fieldlabel")
         geom.addWidget(glabel)
-        self.w_spin = QtWidgets.QSpinBox(); self.w_spin.setRange(0, 100000)
-        self.h_spin = QtWidgets.QSpinBox(); self.h_spin.setRange(0, 100000)
-        self.w_spin.setSpecialValueText("auto"); self.h_spin.setSpecialValueText("auto")
-        self.w_spin.setValue(0); self.h_spin.setValue(0)
+        self.w_spin = QtWidgets.QSpinBox()
+        self.w_spin.setRange(0, 100000)
+        self.h_spin = QtWidgets.QSpinBox()
+        self.h_spin.setRange(0, 100000)
+        self.w_spin.setSpecialValueText("auto")
+        self.h_spin.setSpecialValueText("auto")
+        self.w_spin.setValue(0)
+        self.h_spin.setValue(0)
         geom.addWidget(self.w_spin)
         geom.addWidget(QtWidgets.QLabel("×"))
         geom.addWidget(self.h_spin)
@@ -491,10 +582,13 @@ class MainWindow(QtWidgets.QMainWindow):
         geom.addWidget(self.geom_hint, 1)
         sv.addLayout(geom)
         lv.addWidget(src_card)
-        self._tip(self.w_spin, "Width",
-                  "Needed only when the recording has NO .footage sidecar.\n"
-                  "0/auto = take geometry from the sidecar. Values are "
-                  "remembered per recording.")
+        self._tip(
+            self.w_spin,
+            "Width",
+            "Needed only when the recording has NO .footage sidecar.\n"
+            "0/auto = take geometry from the sidecar. Values are "
+            "remembered per recording.",
+        )
         self._tip(self.h_spin, "Height", "See width.")
 
         self._tip(
@@ -525,23 +619,32 @@ class MainWindow(QtWidgets.QMainWindow):
         mode_col.setSpacing(4)
         self.mode_group = QtWidgets.QButtonGroup(self)
         self.modes: dict[str, QtWidgets.QRadioButton] = {}
-        for key, label in (("reference", "reference  —  vendor-identical"),
-                           ("raw", "raw  —  sensor-faithful, nothing clipped"),
-                           ("custom", "custom  —  your curve")):
+        for key, label in (
+            ("reference", "reference  —  vendor-identical"),
+            ("raw", "raw  —  sensor-faithful, nothing clipped"),
+            ("custom", "custom  —  your curve"),
+        ):
             rb = QtWidgets.QRadioButton(label)
             rb.setChecked(key == "reference")
             self.mode_group.addButton(rb)
             self.modes[key] = rb
             mode_col.addWidget(rb)
         tv.addLayout(mode_col)
-        self._tip(self.modes["reference"], "reference mode",
-                  "Vendor display transform (B49/C18). Output pixels match "
-                  "Optronis exports bit-for-bit.")
-        self._tip(self.modes["raw"], "raw mode",
-                  "Identity mapping — nothing clipped or shifted. The most "
-                  "faithful data possible.")
-        self._tip(self.modes["custom"], "custom mode",
-                  "Your brightness/contrast/gamma below.")
+        self._tip(
+            self.modes["reference"],
+            "reference mode",
+            "Vendor display transform (B49/C18). Output pixels match "
+            "Optronis exports bit-for-bit.",
+        )
+        self._tip(
+            self.modes["raw"],
+            "raw mode",
+            "Identity mapping — nothing clipped or shifted. The most "
+            "faithful data possible.",
+        )
+        self._tip(
+            self.modes["custom"], "custom mode", "Your brightness/contrast/gamma below."
+        )
 
         bcg = QtWidgets.QHBoxLayout()
         self.b_spin = QtWidgets.QDoubleSpinBox()
@@ -554,9 +657,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.g_spin.setRange(0.1, 4.0)
         self.g_spin.setValue(1.0)
         self.g_spin.setSingleStep(0.05)
+
+        def mini_label(text: str) -> QtWidgets.QLabel:
+            lab = QtWidgets.QLabel(text)
+            lab.setObjectName("fieldlabel")
+            lab.setMinimumWidth(78)  # never clip, even when squeezed
+            return lab
+
         for lbl, w, tip_t, tip_b in (
-            ("brightness", self.b_spin, "Brightness", "Offset added to every raw byte before scaling."),
-            ("contrast", self.c_spin, "Contrast", "Multiplier = 1 + C/50. Vendor default 18 → 1.36×."),
+            (
+                "brightness",
+                self.b_spin,
+                "Brightness",
+                "Offset added to every raw byte before scaling.",
+            ),
+            (
+                "contrast",
+                self.c_spin,
+                "Contrast",
+                "Multiplier = 1 + C/50. Vendor default 18 → 1.36×.",
+            ),
             ("gamma", self.g_spin, "Gamma", "Applied after B/C. 1.0 = off."),
         ):
             box = QtWidgets.QHBoxLayout()
@@ -598,31 +718,51 @@ class MainWindow(QtWidgets.QMainWindow):
             tv.addLayout(h)
             self._tip(w, tt, tb_)
 
-        self.depth_combo = QtWidgets.QComboBox(); self.depth_combo.addItems(["8", "16"])
-        self.chan_combo = QtWidgets.QComboBox(); self.chan_combo.addItems(["rgba", "gray"])
-        self.fmt_combo = QtWidgets.QComboBox(); self.fmt_combo.addItems(["png", "jpg", "bmp", "tif"])
+        self.depth_combo = QtWidgets.QComboBox()
+        self.depth_combo.addItems(["8", "16"])
+        self.chan_combo = QtWidgets.QComboBox()
+        self.chan_combo.addItems(["rgba", "gray"])
+        self.fmt_combo = QtWidgets.QComboBox()
+        self.fmt_combo.addItems(["png", "jpg", "bmp", "tif"])
         self.jpg_slider = QtWidgets.QSlider(Qt.Horizontal)
-        self.jpg_slider.setRange(40, 100); self.jpg_slider.setValue(90)
+        self.jpg_slider.setRange(40, 100)
+        self.jpg_slider.setValue(90)
         self.jpg_label = QtWidgets.QLabel("90")
         self.jpg_label.setFixedWidth(30)
-        field_row("bit depth", self.depth_combo, "Bit depth",
-                  "8 matches vendor exports; 16 stores values ×257 "
-                  "(no extra detail; PNG only).")
-        field_row("channels", self.chan_combo, "Channels",
-                  "rgba = vendor-like container; gray = single channel, "
-                  "identical pixels, ~2.5× faster.")
-        field_row("format", self.fmt_combo, "Format",
-                  "png lossless · jpg lossy+small · bmp/tif lossless. "
-                  "Extension follows automatically.")
+        field_row(
+            "bit depth",
+            self.depth_combo,
+            "Bit depth",
+            "8 matches vendor exports; 16 stores values ×257 "
+            "(no extra detail; PNG only).",
+        )
+        field_row(
+            "channels",
+            self.chan_combo,
+            "Channels",
+            "rgba = vendor-like container; gray = single channel, "
+            "identical pixels, ~2.5× faster.",
+        )
+        field_row(
+            "format",
+            self.fmt_combo,
+            "Format",
+            "png lossless · jpg lossy+small · bmp/tif lossless. "
+            "Extension follows automatically.",
+        )
         jrow = QtWidgets.QHBoxLayout()
-        jlab = QtWidgets.QLabel("jpeg q"); jlab.setObjectName("fieldlabel")
+        jlab = QtWidgets.QLabel("jpeg q")
+        jlab.setObjectName("fieldlabel")
         jlab.setFixedWidth(78)
         jrow.addWidget(jlab)
         jrow.addWidget(self.jpg_slider, 1)
         jrow.addWidget(self.jpg_label)
         tv.addLayout(jrow)
-        self._tip(self.jpg_slider, "JPEG quality",
-                  "40–100. Higher = better fidelity, bigger files.")
+        self._tip(
+            self.jpg_slider,
+            "JPEG quality",
+            "40–100. Higher = better fidelity, bigger files.",
+        )
         self.jpg_slider.valueChanged.connect(
             lambda v_: self.jpg_label.setText(str(int(v_)))
         )
@@ -639,12 +779,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.level_slider.setValue(6)
         self.level_label = QtWidgets.QLabel("6")
         self.level_label.setFixedWidth(30)
-        field_row("jobs", self.jobs_slider, "Worker threads (auto-detected)",
-                  f"This machine reports {os.cpu_count()} logical cores. "
-                  "Expect ≈(cores×100)% total CPU while extracting.")
-        field_row("level", self.level_slider, "Compression level",
-                  "DEFLATE effort: 1–2 fast/large · 3 sweet spot · "
-                  "6 default · 9+ smallest/slowest.")
+        field_row(
+            "jobs",
+            self.jobs_slider,
+            "Worker threads (auto-detected)",
+            f"This machine reports {os.cpu_count()} logical cores. "
+            "Expect ≈(cores×100)% total CPU while extracting.",
+        )
+        field_row(
+            "level",
+            self.level_slider,
+            "Compression level",
+            "DEFLATE effort: 1–2 fast/large · 3 sweet spot · "
+            "6 default · 9+ smallest/slowest.",
+        )
         tv.addStretch(1)
 
         self.jobs_slider.valueChanged.connect(
@@ -694,7 +842,8 @@ class MainWindow(QtWidgets.QMainWindow):
         out_card, ov = self._card("output")
         orow = QtWidgets.QHBoxLayout()
         self.out_edit = QtWidgets.QLineEdit()
-        obrowse = QtWidgets.QPushButton("Choose…")
+        obrowse = QtWidgets.QPushButton(" Choose…")
+        obrowse.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogSaveButton))
         orow.addWidget(self.out_edit, 1)
         orow.addWidget(obrowse)
         ov.addLayout(orow)
@@ -762,8 +911,12 @@ class MainWindow(QtWidgets.QMainWindow):
         wv.addWidget(self.viewer_img, 1)
         vrow = QtWidgets.QHBoxLayout()
         self.prev_btn = QtWidgets.QPushButton("◀")
+        self.prev_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ArrowBack))
         self.prev_btn.setFixedWidth(44)
         self.next_btn = QtWidgets.QPushButton("▶")
+        self.next_btn.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.SP_ArrowForward)
+        )
         self.next_btn.setFixedWidth(44)
         self.frame_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.frame_slider.setRange(0, 0)
@@ -776,15 +929,20 @@ class MainWindow(QtWidgets.QMainWindow):
         vrow.addWidget(self.frame_lbl)
         wv.addLayout(vrow)
         rv.addWidget(viewer_card)
-        self._tip(self.viewer_img, "Frame preview",
-                  "Renders the selected frame with the CURRENT quality "
-                  "settings — move the sliders to see the transform live.")
-        self._tip(self.frame_slider, "Scrubber",
-                  "Drag to scrub through the recording. ◀/▶ step one frame.")
+        self._tip(
+            self.viewer_img,
+            "Frame preview",
+            "Renders the selected frame with the CURRENT quality "
+            "settings — move the sliders to see the transform live.",
+        )
+        self._tip(
+            self.frame_slider,
+            "Scrubber",
+            "Drag to scrub through the recording. ◀/▶ step one frame.",
+        )
         self.prev_btn.clicked.connect(lambda: self._step_frame(-1))
         self.next_btn.clicked.connect(lambda: self._step_frame(+1))
-        self.frame_slider.valueChanged.connect(
-            lambda v_: self._show_frame(int(v_)))
+        self.frame_slider.valueChanged.connect(lambda v_: self._show_frame(int(v_)))
         # quality-setting changes re-render the visible frame instantly
         for rb in self.modes.values():
             rb.toggled.connect(self._refresh_frame)
@@ -807,11 +965,37 @@ class MainWindow(QtWidgets.QMainWindow):
         bar = QtWidgets.QHBoxLayout()
         self.extract_btn = QtWidgets.QPushButton("▶  Extract")
         self.extract_btn.setObjectName("accent")
+        self.extract_btn.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay)
+        )
+        self.extract_btn.setToolTip(
+            "<b>Extract frames</b><br>Decode the recording with the quality "
+            "settings above and write one image per frame to the output "
+            "folder. Progress bar + CPU chip show it working."
+        )
         self.cancel_btn = QtWidgets.QPushButton("■  Cancel")
         self.cancel_btn.setObjectName("danger")
+        self.cancel_btn.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.SP_MediaStop)
+        )
+        self.cancel_btn.setToolTip(
+            "<b>Stop the current job</b><br>Works for both extraction and "
+            "MP4 rendering; finishes the frame in flight, then stops."
+        )
         self.cancel_btn.setEnabled(False)
         video_btn = QtWidgets.QPushButton("🎬  Render video…")
-        verify = QtWidgets.QPushButton("✓  Verify against reference dir…")
+        video_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaVolume))
+        video_btn.setToolTip(
+            "<b>Render MP4</b><br>Encode a frame range straight to H.264 "
+            "with ffmpeg. A progress bar opens in this dialog and mirrors "
+            "on the main bar below."
+        )
+        verify = QtWidgets.QPushButton("✓  Verify…")
+        verify.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogApplyButton))
+        verify.setToolTip(
+            "<b>Verify pixel-exactness</b><br>Pick a reference folder (or use "
+            "the source bin via CLI) — every frame is decoded and compared."
+        )
         bar.addWidget(self.extract_btn)
         bar.addWidget(self.cancel_btn)
         bar.addWidget(video_btn)
@@ -840,6 +1024,19 @@ class MainWindow(QtWidgets.QMainWindow):
             for line in opngx.engine_diagnostics():
                 self._log("  " + line, "warn")
 
+    def _poll_sysmon(self) -> None:
+        try:
+            snap = self._sys_snapshot()
+        except Exception:
+            return
+        cpu, mem, load1 = snap.get("cpu"), snap.get("mem"), snap.get("load1")
+        self.cpu_chip.setText(f"CPU {cpu:.0f}%" if cpu is not None else "CPU –")
+        self.ram_chip.setText(f"RAM {mem:.0f}%" if mem is not None else "RAM –")
+        tip = f"<b>Live CPU</b> {cpu:.0f}% overall"
+        if load1 is not None and os.cpu_count():
+            tip += f"<br>load 1 min: {load1:.2f} ({os.cpu_count()} cores)"
+        self.cpu_chip.setToolTip(tip)
+
     # ------------------------------------------------------------ dnd
     def dragEnterEvent(self, e: Any) -> None:
         urls = e.mimeData().urls() if hasattr(e, "mimeData") else []
@@ -852,15 +1049,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rb_single.setChecked(True)
         self._probe()
 
-
     # ------------------------------------------------------ frame viewer
     def _current_lut_kwargs(self) -> dict[str, Any]:
-        mode = next((k for k, rb in self.modes.items() if rb.isChecked()),
-                    "reference")
-        return dict(mode=mode,
-                    brightness=self.b_spin.value(),
-                    contrast=self.c_spin.value(),
-                    gamma=self.g_spin.value())
+        mode = next((k for k, rb in self.modes.items() if rb.isChecked()), "reference")
+        return dict(
+            mode=mode,
+            brightness=self.b_spin.value(),
+            contrast=self.c_spin.value(),
+            gamma=self.g_spin.value(),
+        )
 
     def _show_frame(self, idx: int) -> None:
         m = self.meta
@@ -868,14 +1065,18 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         idx = max(0, min(idx, m.capacity_frames - 1))
         from opngx.video import read_frame_gray
-        buf = opngx.read_frame_gray(m.bin_path, m, idx,
-                                    **self._current_lut_kwargs())
-        img = QtGui.QImage(buf, m.width, m.height,
-                           m.width, QtGui.QImage.Format_Grayscale8).copy()
+
+        buf = opngx.read_frame_gray(m.bin_path, m, idx, **self._current_lut_kwargs())
+        img = QtGui.QImage(
+            buf, m.width, m.height, m.width, QtGui.QImage.Format_Grayscale8
+        ).copy()
         pm = QtGui.QPixmap.fromImage(img)
-        scaled = pm.scaled(self.viewer_img.width() - 2,
-                           self.viewer_img.height() - 2,
-                           Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        scaled = pm.scaled(
+            self.viewer_img.width() - 2,
+            self.viewer_img.height() - 2,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
         self.viewer_img.setPixmap(scaled)
         self.frame_lbl.setText(f"frame {idx:,} / {m.capacity_frames - 1:,}")
 
@@ -885,8 +1086,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _step_frame(self, delta: int) -> None:
         v = int(self.frame_slider.value()) + delta
-        self.frame_slider.setValue(max(self.frame_slider.minimum(),
-                                       min(self.frame_slider.maximum(), v)))
+        self.frame_slider.setValue(
+            max(self.frame_slider.minimum(), min(self.frame_slider.maximum(), v))
+        )
 
     # ------------------------------------------------------- video render
     def _render_video_dialog(self) -> None:
@@ -895,17 +1097,24 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if not opnx_ffmpeg_ok():
             QtWidgets.QMessageBox.warning(
-                self, "opngx",
+                self,
+                "opngx",
                 "ffmpeg was not found (neither on PATH nor bundled).<br>"
-                "Install it and reopen the dialog.")
+                "Install it and reopen the dialog.",
+            )
             return
 
         opts = self._collect_opts()
-        n = opts["frames"] if opts["frames"] is not None else max(
-            0, self.meta.capacity_frames - opts["start"])
+        n = (
+            opts["frames"]
+            if opts["frames"] is not None
+            else max(0, self.meta.capacity_frames - opts["start"])
+        )
         fps_default = (
             int(round(self.meta.framerate))
-            if self.meta.framerate and self.meta.framerate > 0 else 30)
+            if self.meta.framerate and self.meta.framerate > 0
+            else 30
+        )
 
         d = QtWidgets.QDialog(self)
         d.setWindowTitle("Render video")
@@ -920,15 +1129,18 @@ class MainWindow(QtWidgets.QMainWindow):
         crf.setRange(14, 28)
         crf.setValue(18)
         out_edit = QtWidgets.QLineEdit(
-            os.path.join(self.out_edit.text().strip() or ".",
-                         (self.meta.camera_name or "video").replace(".", "_")
-                         + ".mp4"))
+            os.path.join(
+                self.out_edit.text().strip() or ".",
+                (self.meta.camera_name or "video").replace(".", "_") + ".mp4",
+            )
+        )
         save = QtWidgets.QPushButton("…")
         save.setFixedWidth(36)
 
         def pick():
             pth, _ = QtWidgets.QFileDialog.getSaveFileName(
-                d, "Output video", out_edit.text(), "MP4 video (*.mp4)")
+                d, "Output video", out_edit.text(), "MP4 video (*.mp4)"
+            )
             if pth:
                 out_edit.setText(pth)
 
@@ -945,39 +1157,58 @@ class MainWindow(QtWidgets.QMainWindow):
         dur_lbl = QtWidgets.QLabel()
         dur_lbl.setObjectName("hint")
         frames_lbl = QtWidgets.QLabel(
-            f"frames to encode: {n:,} (from {opts['start']:,})")
+            f"frames to encode: {n:,} (from {opts['start']:,})"
+        )
         frames_lbl.setObjectName("hint")
         v.addWidget(frames_lbl)
         v.addWidget(dur_lbl)
         self._tip(
-            fps, "Frame rate",
+            fps,
+            "Frame rate",
             f"Playback speed of the MP4. The camera recorded at "
             f"{self.meta.framerate:g} fps — match it for real-time "
-            "playback; lower for slow-motion review.")
-        self._tip(crf, "Quality (CRF)",
-                  "Lower = better quality & bigger file. 18 is visually "
-                  "lossless; 28 gives small files.")
+            "playback; lower for slow-motion review.",
+        )
+        self._tip(
+            crf,
+            "Quality (CRF)",
+            "Lower = better quality & bigger file. 18 is visually "
+            "lossless; 28 gives small files.",
+        )
 
         def upd_dur():
             f_ = max(1, fps.value())
             secs = n / f_
-            dur_lbl.setText(f"video length at {fps.value()} fps: "
-                            f"{int(secs // 60)}:{int(secs % 60):02d} "
-                            f"({secs:.1f}s) — {n:,} frames")
+            dur_lbl.setText(
+                f"video length at {fps.value()} fps: "
+                f"{int(secs // 60)}:{int(secs % 60):02d} "
+                f"({secs:.1f}s) — {n:,} frames"
+            )
 
         fps.valueChanged.connect(upd_dur)
         upd_dur()
 
         prog = QtWidgets.QProgressBar()
-        stat = QtWidgets.QLabel("", wordWrap=True)
+        prog.setRange(0, 100)
+        stat = QtWidgets.QLabel("ready — press Render to encode", wordWrap=True)
         stat.setObjectName("hint")
         v.addWidget(prog)
         v.addWidget(stat)
+
+        def stop_render():
+            self._cancel_requested = True  # unified cancel with main window
+            state["cancel"] = True
+            stat.setText("stopping after the current frame…")
+            d.reject()
+
         bb = QtWidgets.QHBoxLayout()
-        go = QtWidgets.QPushButton("▶  Render")
+        go = QtWidgets.QPushButton("▶  Render MP4")
         go.setObjectName("accent")
-        cancel = QtWidgets.QPushButton("Cancel")
-        cancel.clicked.connect(d.reject)
+        go.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay))
+        cancel = QtWidgets.QPushButton("■  Stop")
+        cancel.setObjectName("danger")
+        cancel.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaStop))
+        cancel.clicked.connect(stop_render)
         bb.addWidget(go)
         bb.addWidget(cancel)
         bb.addStretch(1)
@@ -993,16 +1224,24 @@ class MainWindow(QtWidgets.QMainWindow):
                     frac = done / max(total, 1)
                     el = time.perf_counter() - t0
                     eta = el / frac - el if frac > 0.004 else 0
-                    txt = (f"{done:,}/{total:,} frames encoded "
-                           f"({frac*100:.1f}%) • encoder feed "
-                           f"{done/max(el,1e-9):,.0f} fps • video so far "
-                           f"{done/max(fps.value(),1):.1f}s • eta {eta:,.0f}s")
+                    txt = (
+                        f"{done:,}/{total:,} frames encoded "
+                        f"({frac * 100:.1f}%) • encoder feed "
+                        f"{done / max(el, 1e-9):,.0f} fps • video so far "
+                        f"{done / max(fps.value(), 1):.1f}s • eta {eta:,.0f}s"
+                    )
                     QtCore.QMetaObject.invokeMethod(
-                        stat, "setText", Qt.QueuedConnection,
-                        QtCore.Q_ARG(str, txt))
+                        stat, "setText", Qt.QueuedConnection, QtCore.Q_ARG(str, txt)
+                    )
                     QtCore.QMetaObject.invokeMethod(
-                        prog, "setValue", Qt.QueuedConnection,
-                        QtCore.Q_ARG(int, int(100 * frac)))
+                        prog,
+                        "setValue",
+                        Qt.QueuedConnection,
+                        QtCore.Q_ARG(int, int(100 * frac)),
+                    )
+                    # mirror on the main-window bar so rendering is visible
+                    # even when the dialog is small/behind (C12)
+                    self._sig.progress.emit(done, total, done / max(el, 1e-9))
 
                 st = opngx.render_video(
                     self.meta.bin_path,
@@ -1020,38 +1259,301 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 tail = " — CANCELLED" if st.get("cancelled") else ""
                 secs_out = st["frames_written"] / max(fps.value(), 1)
-                size_b = os.path.getsize(st["output"]) if os.path.exists(
-                    st["output"]) else 0
+                size_b = (
+                    os.path.getsize(st["output"]) if os.path.exists(st["output"]) else 0
+                )
                 self._sig.log.emit(
                     f"video done: {st['frames_written']:,} frames in "
                     f"{st['seconds']:.1f}s → {st['output']} "
-                    f"(plays {int(secs_out//60)}:{int(secs_out%60):02d} @ "
+                    f"(plays {int(secs_out // 60)}:{int(secs_out % 60):02d} @ "
                     f"{fps.value()}fps, {size_b:,} bytes){tail}",
-                    "warn" if st.get("cancelled") else "ok")
+                    "warn" if st.get("cancelled") else "ok",
+                )
                 QtCore.QMetaObject.invokeMethod(
-                    stat, "setText", Qt.QueuedConnection,
-                    QtCore.Q_ARG(str,
-                                 f"done: {st['frames_written']:,} frames • "
-                                 f"{size_b:,} bytes • plays "
-                                 f"{int(secs_out//60)}:"
-                                 f"{int(secs_out%60):02d}{tail}"))
+                    stat,
+                    "setText",
+                    Qt.QueuedConnection,
+                    QtCore.Q_ARG(
+                        str,
+                        f"done: {st['frames_written']:,} frames • "
+                        f"{size_b:,} bytes • plays "
+                        f"{int(secs_out // 60)}:"
+                        f"{int(secs_out % 60):02d}{tail}",
+                    ),
+                )
             except Exception as exc:  # noqa: BLE001
                 self._sig.error.emit(str(exc))
             finally:
-                QtCore.QMetaObject.invokeMethod(d, "accept",
-                                                Qt.QueuedConnection)
+                QtCore.QMetaObject.invokeMethod(d, "accept", Qt.QueuedConnection)
+                self._sig.state.emit(False)  # restore main-window buttons
 
         def start_render():
             go.setEnabled(False)
             fps.setEnabled(False)
             crf.setEnabled(False)
             self._running = True
+            self._cancel_requested = False
+            self._t_start = time.perf_counter()
+            self._sig.state.emit(True)  # main Cancel becomes armed
             threading.Thread(target=run, daemon=True).start()
 
         go.clicked.connect(start_render)
         d.exec()
         self._running = False
 
+    # ------------------------------------------------------------- actions
+    def _fmt_changed(self, fmt: str) -> None:
+        extmap = {"png": ".Png", "jpg": ".jpg", "bmp": ".bmp", "tif": ".tif"}
+        cur = self.ext_edit.text()
+        if cur in extmap.values():
+            self.ext_edit.setText(extmap.get(fmt, ".Png"))
+
+    def _log(self, msg: str, tag: str = "info") -> None:
+        stamp = time.strftime("%H:%M:%S")
+        colors = {
+            "info": "#94a3b8",
+            "ok": "#34d399",
+            "warn": "#fbbf24",
+            "err": "#f87171",
+        }
+        self.log_view.appendHtml(
+            f"<span style='color:#475569'>[{stamp}]</span> "
+            f"<span style='color:{colors.get(tag, '#94a3b8')}'>{msg}</span>"
+        )
+
+    def _on_scope_changed(self, batch: bool) -> None:
+        """Batch mode scans folders — manual geometry fields only matter
+        for a single sidecar-less recording."""
+        for w in (self.w_spin, self.h_spin):
+            w.setEnabled(not batch)
+        if batch:
+            self.geom_hint.setText("batch: every *.bin under the folder")
+
+    def _adopt_manual_geometry(self, m) -> None:
+        """Sidecar-less recordings take geometry from the width/height
+        fields (remembered per session); otherwise show what the sidecar
+        provided."""
+        if m.width == 0:
+            w_, h_ = int(self.w_spin.value()), int(self.h_spin.value())
+            if w_ > 0 and h_ > 0:
+                m.width, m.height = w_, h_
+                m.frame_stride = 8 + m.width * m.height
+                m.capacity_frames = (
+                    m.file_size // m.frame_stride if m.frame_stride else 0
+                )
+                self.geom_hint.setText(
+                    f"using manual {w_}×{h_} — capacity {m.capacity_frames:,} frames"
+                )
+                return
+            self.geom_hint.setText("no sidecar — enter width × height above")
+        else:
+            self.geom_hint.setText(f"{m.width}×{m.height} from sidecar")
+
+    def _manual_geom_kwargs(self) -> dict[str, Any]:
+        if self.meta is not None and self.meta.width == 0:
+            w_, h_ = int(self.w_spin.value()), int(self.h_spin.value())
+            if w_ > 0 and h_ > 0:
+                return dict(width=w_, height=h_)
+        return {}
+
+    def _pick_bin(self) -> None:
+        p, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open recording", "", "Optronis footage (*.bin);;All files (*)"
+        )
+        if p:
+            self.bin_edit.setText(p)
+            self.rb_single.setChecked(True)
+            self._probe()
+
+    def _pick_out(self) -> None:
+        d = QtWidgets.QFileDialog.getExistingDirectory(self, "Output directory")
+        if d:
+            self.out_edit.setText(d)
+
+    def _probe(self) -> None:
+        target = self.bin_edit.text().strip()
+        if not target:
+            return
+        if self.rb_batch.isChecked():
+            bins = sorted(glob.glob(os.path.join(target, "*", "*.bin"))) + sorted(
+                glob.glob(os.path.join(target, "*.bin"))
+            )
+            self._fill_info(
+                [
+                    ("scope", "batch folder"),
+                    ("folder", target),
+                    ("bins found", str(len(bins))),
+                ]
+            )
+            self._log(f"batch scan: {len(bins)} bin(s) under {target}")
+            return
+        try:
+            m = opngx.probe(target)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "probe failed", str(exc))
+            return
+        self.meta = m
+        self._adopt_manual_geometry(m)
+        rows = [
+            ("camera", m.camera_name or "?"),
+            ("geometry", f"{m.width} × {m.height} px" if m.width else "? × ? px"),
+            ("frames in XML", f"{m.num_images:,}" if m.num_images > 0 else "?"),
+            ("capacity from size", f"{m.capacity_frames:,}" or "?"),
+            ("frame stride", f"{m.frame_stride:,} B" if m.frame_stride else "?"),
+            ("framerate", f"{m.framerate:g} fps" if m.framerate > 0 else "?"),
+            ("exposure", f"{m.exposure_us:g} µs" if m.exposure_us > 0 else "?"),
+            ("display B/C/G", f"{m.brightness:g} / {m.contrast:g} / {m.gamma:g}"),
+            (
+                "operating point",
+                "✔ verified pixel-exact"
+                if m.verified_operating_point
+                else "⚠ unverified — fidelity not guaranteed",
+            ),
+        ]
+        self._fill_info(rows)
+        self._log(f"probed {os.path.basename(m.bin_path)}")
+        self.frame_slider.blockSignals(True)
+        self.frame_slider.setRange(0, max(0, m.capacity_frames - 1))
+        start_at = int(self.start_spin.value())
+        self.frame_slider.setValue(start_at)
+        self.frame_slider.blockSignals(False)
+        self._show_frame(start_at)
+        if not self.out_edit.text():
+            suggested = os.path.dirname(m.bin_path)
+            if m.camera_name:
+                suggested = os.path.join(
+                    suggested, m.camera_name.replace(".", "_") + "_png"
+                )
+            self.out_edit.setText(suggested)
+
+    def _fill_info(self, rows) -> None:
+        self.info_table.setRowCount(len(rows))
+        for r, (k, v) in enumerate(rows):
+            self.info_table.setItem(r, 0, QtWidgets.QTableWidgetItem(str(k)))
+            self.info_table.setItem(r, 1, QtWidgets.QTableWidgetItem(str(v)))
+
+    def _collect_opts(self) -> dict[str, Any]:
+        return dict(
+            mode=next(k for k, rb in self.modes.items() if rb.isChecked()),
+            brightness=self.b_spin.value(),
+            contrast=self.c_spin.value(),
+            gamma=self.g_spin.value(),
+            bit_depth=int(self.depth_combo.currentText()),
+            channels=0 if self.chan_combo.currentText() == "gray" else 6,
+            fmt=self.fmt_combo.currentText(),
+            jpeg_quality=int(self.jpg_slider.value()),
+            jobs=int(self.jobs_slider.value()),
+            level=int(self.level_slider.value()),
+            prefix=self.prefix_edit.text(),
+            ext=self.ext_edit.text(),
+            start=int(self.start_spin.value()),
+            frames=(int(self.count_spin.value()) or None),
+            export_timestamps=self.ts_check.isChecked(),
+            export_metadata=self.mj_check.isChecked(),
+        )
+
+    def _start(self) -> None:
+        if self._running:
+            return
+        out = self.out_edit.text().strip()
+        if not out:
+            QtWidgets.QMessageBox.warning(self, "opngx", "Choose an output directory.")
+            return
+        batch = self.rb_batch.isChecked()
+        if batch:
+            root_dir = self.bin_edit.text().strip()
+            bins = sorted(glob.glob(os.path.join(root_dir, "*", "*.bin"))) + sorted(
+                glob.glob(os.path.join(root_dir, "*.bin"))
+            )
+            if not bins:
+                QtWidgets.QMessageBox.warning(self, "opngx", "No .bin files found.")
+                return
+        else:
+            if not self.meta:
+                QtWidgets.QMessageBox.warning(self, "opngx", "Probe a bin first.")
+                return
+            bins = [self.meta.bin_path]
+
+        opts = self._collect_opts()
+        geom = self._manual_geom_kwargs()
+        self._running = True
+        self._cancel_requested = False
+        self._sig.state.emit(True)
+        self._t_start = time.perf_counter()
+
+        def worker() -> None:
+            try:
+                last = None
+                for b in bins:
+                    if self._cancel_requested:
+                        break
+                    stem = os.path.splitext(os.path.basename(b))[0]
+                    od = (
+                        out
+                        if len(bins) == 1
+                        else os.path.join(out, stem.replace(".", "_"))
+                    )
+                    o = opts
+                    self._sig.log.emit(
+                        f"extract {os.path.basename(b)} → {od}  "
+                        f"[mode={o['mode']} fmt={o['fmt']} depth={o['bit_depth']} "
+                        f"ch={o['channels']} jobs={o['jobs']} level={o['level']}]",
+                        "info",
+                    )
+                    ex = opngx.Extractor(b, **geom)
+                    last = ex.extract(
+                        od,
+                        progress=lambda d_, t_: self._sig.progress.emit(
+                            d_,
+                            t_,
+                            d_ / max(time.perf_counter() - self._t_start, 1e-9),
+                        ),
+                        should_cancel=lambda: self._cancel_requested,
+                        **opts,
+                    )
+                if last is not None:
+                    self._sig.done.emit(last)
+            except Exception as exc:  # noqa: BLE001
+                self._sig.error.emit(str(exc))
+            finally:
+                self._running = False
+                self._sig.state.emit(False)
+
+        threading.Thread(target=worker, name="opngx-worker", daemon=True).start()
+
+    def _cancel(self) -> None:
+        self._cancel_requested = True
+        self._log("cancel requested…", "warn")
+
+    def _verify(self) -> None:
+        ref = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Reference PNG directory"
+        )
+        if not ref or not self.out_edit.text().strip():
+            QtWidgets.QMessageBox.warning(
+                self, "opngx", "Pick both a reference dir and an output dir."
+            )
+            return
+
+        def run() -> None:
+            try:
+                rep = opngx.verify(
+                    ref, self.out_edit.text().strip(), prefix=self.prefix_edit.text()
+                )
+                msg = (
+                    "<b style='color:#34d399'>PASS</b> — every compared "
+                    "frame is pixel-exact."
+                    if rep.passed
+                    else f"<b style='color:#f87171'>FAIL</b> — "
+                    f"{rep.mismatched_files} mismatched file(s).<br>"
+                    f"<span style='color:#fbbf24'>{rep.first_error}</span>"
+                )
+                self._sig.log.emit(f"verify: {rep}", "ok" if rep.passed else "err")
+                self._sig.dialog.emit(("verification", msg))
+            except Exception as exc:  # noqa: BLE001
+                self._sig.error.emit(str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
 
     # ------------------------------------------------------------- slots
     def _on_progress(self, done: int, total: int, fps: float) -> None:
@@ -1085,6 +1587,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_error(self, msg: str) -> None:
         self._log(f"ERROR: {msg}", "err")
         QtWidgets.QMessageBox.critical(self, "opngx", msg)
+
+    def _on_dialog(self, payload) -> None:
+        title, msg = payload
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setTextFormat(Qt.RichText)
+        box.setText(msg)
+        box.setIcon(QtWidgets.QMessageBox.Information)
+        box.exec()
 
     def _set_state(self, running: bool) -> None:
         self.extract_btn.setEnabled(not running)

@@ -53,6 +53,7 @@ class App(tk.Tk):
     def _detect_gpus() -> list[str]:
         try:
             from opngx._engine import detect_gpus
+
             return detect_gpus()
         except Exception:
             return []
@@ -98,7 +99,8 @@ class App(tk.Tk):
         gpus = ", ".join(opngx.detect_gpus()) or "none detected"
         messagebox.showinfo(
             "About opngx",
-            f"opngx {opngx.__version__}\n\n"
+            f"opngx {opngx.__version__} — opngx studio\n\n"
+            f"Developer: Shuvam Banerji Seal\n\n"
             f"engine: {opngx.engine_backend()}\n"
             f"cpus: {os.cpu_count()} logical   •   gpus: {gpus}\n\n"
             "Pixel-exact Optronis .bin → PNG extraction.\n"
@@ -268,8 +270,10 @@ GPU
                     frac = done / max(total, 1)
                     milestone = max(total // 10, 1)
                     if done and (done % milestone == 0):
-                        self._log(f"progress: {done:,}/{total:,} frames "
-                                  f"({frac*100:.0f}%, {fps:,.0f} fps)")
+                        self._log(
+                            f"progress: {done:,}/{total:,} frames "
+                            f"({frac * 100:.0f}%, {fps:,.0f} fps)"
+                        )
                     self.progress["value"] = 100 * frac
                     elapsed = time.perf_counter() - self._t_start
                     eta = elapsed / frac - elapsed if frac > 0.004 else float("nan")
@@ -548,7 +552,10 @@ GPU
         self.jpgq_var = tk.IntVar(value=90)
         self.jpgq_lbl = ttk.Label(kf, text="90", width=3)
         js = ttk.Scale(
-            kf, from_=40, to=100, variable=self.jpgq_var,
+            kf,
+            from_=40,
+            to=100,
+            variable=self.jpgq_var,
             command=lambda _v: self._sync_labels(),
         )
         js.grid(row=4, column=1, sticky="ew")
@@ -907,11 +914,13 @@ GPU
                         else os.path.join(out, stem.replace(".", "_"))
                     )
                     o = opts
-                    emit_log("info",
-                             f"extract {os.path.basename(b)} → {od}  "
-                             f"[mode={o['mode']} fmt={o['fmt']} "
-                             f"depth={o['bit_depth']}ch={o['channels']} "
-                             f"jobs={o['jobs']} level={o['level']}]")
+                    emit_log(
+                        "info",
+                        f"extract {os.path.basename(b)} → {od}  "
+                        f"[mode={o['mode']} fmt={o['fmt']} "
+                        f"depth={o['bit_depth']}ch={o['channels']} "
+                        f"jobs={o['jobs']} level={o['level']}]",
+                    )
                     ex = opngx.Extractor(b)
                     last = ex.extract(
                         od,
