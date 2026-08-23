@@ -45,6 +45,17 @@ def resolve_ffmpeg() -> Optional[str]:
             if cand.exists():
                 _FFCACHE = str(cand)
                 return _FFCACHE
+        # debug: list what IS in _MEIPASS for ffmpeg-like files
+        try:
+            import os as _os
+            matches = [_os.listdir(here)[i] for i in range(len(_os.listdir(here)))
+                       if "ffmpeg" in _os.listdir(here)[i].lower()]
+            if not matches:
+                matches = ["(nothing ffmpeg-related found)"]
+            sys.stderr.write(f"opngx debug: _MEIPASS={here}\n")
+            sys.stderr.write(f"opngx debug: ffmpeg files: {matches}\n")
+        except Exception:
+            pass
     exe = shutil.which("ffmpeg")
     if exe and Path(exe).exists():
         _FFCACHE = exe
