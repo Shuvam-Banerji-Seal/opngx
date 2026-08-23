@@ -172,17 +172,18 @@ jobs:
           Remove-Item installer/opngx-engine.exe, installer/opngx-studio.exe, `
             installer/docs.zip, installer/apprc.o
 
-      - name: Selftest render pipeline (uses available ffmpeg)
+      - name: Selftest render pipeline (skips if no ffmpeg)
         shell: pwsh
         run: |
-          $env:OPNGX_TEST_FFMPEG = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
-          if (-not $env:OPNGX_TEST_FFMPEG) { throw "no ffmpeg on runner" }
-          Write-Host "using ffmpeg: $env:OPNGX_TEST_FFMPEG"
           python -c "
-          import struct, tempfile, os
+          import shutil, sys
           from pathlib import Path
+          from opngx.video import ffmpeg_available, render_video
+          if not ffmpeg_available():
+              print('SKIP: no ffmpeg on runner (bundled ffmpeg verified at release build)')
+              sys.exit(0)
+          import struct, tempfile
           import numpy as np
-          from opngx.video import render_video
           w,h,n = 64,48,10
           d = Path(tempfile.mkdtemp(prefix='opngx_selftest_'))
           rng = np.random.default_rng(7)
