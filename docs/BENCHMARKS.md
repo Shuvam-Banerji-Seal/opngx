@@ -51,6 +51,30 @@ Gray mode compresses 77 KB instead of 307 KB per frame — deflate dominates
 runtime, hence the near-linear win. Pixels are provably identical; only the
 container differs (verified by cross-layout verification).
 
+## Re-measured v1.5.0 (brow_1_4.bin, 4000-frame windows)
+
+Engine changes since the tables above (dead per-job scratch removal, by-name
+verifier) moved real numbers; per-bin content also shifts results:
+
+| config | v1.4 docs (brow_1_2) | v1.5.0 measured (brow_1_4) |
+|---|---:|---:|
+| RGBA L6 j16 | ~1360–1400 fps | **2046 fps** |
+| RGBA L3 j16 | ~2300 fps | 2353 fps |
+| RGBA L1 j16 | ~5300 fps | 2477 fps |
+| gray L6 j16 | 2245 fps | 1785 fps |
+
+Two honest observations:
+
+* **RGBA L6 gained ~46%** — removing a dead W·H·3+64 KB scratch allocation
+  per worker (cycle 10) plus allocator behaviour accounts for the jump.
+* **The gray fast path is content-dependent.** On high-entropy footage the
+  R=G=B replication inside RGBA rows gives DEFLATE long literal runs, which
+  can beat the smaller-but-denser gray stream. Choose `gray` for size and
+  decode speed; benchmark both on YOUR footage before assuming throughput.
+
+Thread scaling at L6 on this bin: 4→1190 · 8→1750 · 12→2034 · 16→2046 fps
+(saturates around physical cores; SMT adds little once deflate caches fill).
+
 ## Full-bin production run
 
 ```

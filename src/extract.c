@@ -38,8 +38,6 @@ struct opngx_job {
     int      color_type;     /* PNG color type in use (6 or 0) */
     size_t   idat_cap;
     size_t   file_cap;
-    uint8_t *enc;            /* RGB scratch for non-PNG encoders */
-    size_t   enc_cap;
 
     opngx_mapped_file mf;
     uint8_t *map;            /* == mf.map (convenience) */
@@ -49,6 +47,7 @@ struct opngx_job {
     _Atomic int     cancel;
     _Atomic int     backend_seen;   /* first worker reports real backend */
     _Atomic long long last_ms;      /* progress throttle (monotonic ms)   */
+    _Atomic long long cb_last_ms;   /* push-callback throttle             */
 
     opngx_stats stats;
     char err[512];
@@ -144,22 +143,16 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     j->raw_len = (size_t)j->p.height * ((size_t)j->p.width * bytes_per_px + 1);
     j->idat_cap = j->raw_len + j->raw_len / 8 + 256; /* >= any deflate bound */
     j->file_cap = j->idat_cap + 128;
-    j->enc = NULL;
-    j->enc_cap = 0;
-    if (j->p.format != OPNGX_FMT_PNG) {
-        j->enc_cap = (size_t)j->p.width * j->p.height * 3 + 65536;
-        j->enc = malloc(j->enc_cap);
-    }
 
     fill_luts(j);
     atomic_store(&j->done, 0);
     atomic_store(&j->cancel, 0);
-    memset(&j->stats, 0, sizeof j->stats);
+                atomic_store(&j->cb_last_ms, 0);
+                memset(&j->stats, 0, sizeof j->stats);
     j->stats.frames_total = j->frames_total;
     return j;
 
 fail:
-    free(j->enc); j->enc = NULL;
     if (err && err_cap) { strncpy(err, j->err, err_cap - 1); err[err_cap-1] = '\0'; }
     if (j->mf.map || j->mf._handle) port_unmap_file(&j->mf);
     free(j->bin_path); free(j->out_dir); free(j->prefix); free(j->ext); free(j->footage_path);
@@ -260,6 +253,11 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
         atomic_fetch_add(&sh->hard, 1);
 
     if (c && scan && idat && filebuf) {
+        /* AR-1 fix: persist the compressor's real backend id. Nothing ever
+         * wrote backend_seen before, so opngx_stats.backend_used claimed
+         * "libdeflate" unconditionally — a lie on zlib-only builds. */
+        atomic_store_explicit(&j->backend_seen, cctx_backend_id(c),
+                              memory_order_relaxed);
         const int64_t G = 32;   /* dynamic chunk size */
         for (;;) {
             int64_t i = atomic_fetch_add_explicit(&sh->cursor, G,
@@ -337,6 +335,18 @@ progress_bump:;
                     atomic_fetch_add_explicit(&j->done, 1,
                                               memory_order_relaxed) + 1;
 
+                /* ADD-6: push progress to the caller's callback, throttled
+                 * to ~100 ms so bindings get live updates without polling. */
+                if (j->p.progress_fn) {
+                    long long ms = (long long)(port_now_s() * 1000.0);
+                    long long exp = atomic_load(&j->cb_last_ms);
+                    if (ms - exp >= 100 &&
+                        atomic_compare_exchange_strong(&j->cb_last_ms,
+                                                       &exp, ms)) {
+                        j->p.progress_fn(done_now, N, j->p.progress_user);
+                    }
+                }
+
                 /* live progress: any worker may claim the next 250ms slot */
                 if (j->p.verbose) {
                     long long ms = (long long)(port_now_s() * 1000.0);
@@ -411,6 +421,10 @@ int opngx_job_run(opngx_job *j) {
         fprintf(stderr, "\ropngx: %lld/%lld (100.0%%)%*s\n",
                 (long long)j->stats.frames_written, (long long)N, 20, "");
 
+    /* ADD-6: guaranteed final push with the true end state */
+    if (j->p.progress_fn)
+        j->p.progress_fn(j->stats.frames_written, N, j->p.progress_user);
+
     if (hard_fail) {
         snprintf(j->err, sizeof j->err, "extraction failed (mask 0x%x): see errno messages above", hard_fail);
         return -1;
@@ -427,7 +441,6 @@ int opngx_job_run(opngx_job *j) {
 
 void opngx_job_free(opngx_job *j) {
     if (!j) return;
-    free(j->enc);
     if (j->mf.map || j->mf._handle) port_unmap_file(&j->mf);
     free(j->bin_path); free(j->out_dir); free(j->prefix); free(j->ext); free(j->footage_path);
     free(j);

@@ -18,8 +18,8 @@
 extern "C" {
 #endif
 
-#define OPNGX_VERSION "1.4.0"
-#define OPNGX_ABI_VERSION 3
+#define OPNGX_VERSION "1.5.0"
+#define OPNGX_ABI_VERSION 4
 
 /* Output formats */
 typedef enum {
@@ -78,6 +78,12 @@ typedef struct {
 
     /* misc */
     int verbose;
+
+    /* ADD-6: optional push-progress callback. Invoked from worker threads
+     * at most every ~100 ms and exactly once at completion with the final
+     * totals. Bindings must marshal to their own UI thread. May be NULL. */
+    void (*progress_fn)(int64_t done, int64_t total, void *user);
+    void *progress_user;
 } opngx_params;
 
 /* Statistics returned by a run */

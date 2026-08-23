@@ -8,6 +8,9 @@
 #include "pngout.h"
 #include "compress.h"
 #include "port.h"
+#include "opngx.h"
+#include "footage.h"
+#include "transform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -106,6 +109,18 @@ typedef struct {
     uint8_t *idat; size_t idat_len;
 } png_view;
 
+/* Binary search a sorted name array; -1 when absent. */
+static int64_t find_name(char **arr, int64_t n, const char *name) {
+    int64_t lo = 0, hi = n - 1;
+    while (lo <= hi) {
+        int64_t mid = lo + (hi - lo) / 2;
+        int c = strcmp(arr[mid], name);
+        if (c == 0) return mid;
+        if (c < 0) lo = mid + 1; else hi = mid - 1;
+    }
+    return -1;
+}
+
 static int png_parse(const uint8_t *buf, size_t len, png_view *v) {
     static const uint8_t sig[8] = {0x89,'P','N','G','\r','\n',0x1a,'\n'};
     memset(v, 0, sizeof *v);
@@ -178,9 +193,11 @@ typedef struct {
     char **rn, **on;
     const char *ref_dir, *out_dir;
     verify_report *rep;
-    _Atomic int64_t cursor;      /* dynamic claim cursor */
+    _Atomic int64_t cursor;      /* dynamic claim cursor (over OUT names)  */
+    int64_t rn_n;
     int64_t common;
     _Atomic int64_t mism;
+    _Atomic int64_t not_in_ref;  /* out names absent from ref (subset check) */
     _Atomic uint64_t bytes_ok;
     _Atomic int err_taken;
 } vshared_t;
@@ -188,86 +205,125 @@ typedef struct {
 static int zinflate_len(const uint8_t *in, size_t in_len,
                         uint8_t *out, size_t out_len);
 
-/* Compare one index-aligned pair. Returns 1 on mismatch/error. */
-static int verify_one_pair(vshared_t *vs, int64_t i) {
-    char p1[1200], p2[1200];
-    snprintf(p1, sizeof p1, "%.500s/%.600s", vs->ref_dir, vs->rn[i]);
-    snprintf(p2, sizeof p2, "%.500s/%.600s", vs->out_dir, vs->on[i]);
-    FILE *f1 = fopen(p1, "rb"), *f2 = fopen(p2, "rb");
-    if (!f1 || !f2) {
-        if (!atomic_exchange(&vs->err_taken, 1))
-            snprintf(vs->rep->first_error, sizeof vs->rep->first_error,
-                     "open failed: %.400s", f1 ? p2 : p1);
-        if (f1) fclose(f1);
-        if (f2) fclose(f2);
-        return 1;
+/* ---- shared decode/compare helpers (used by both verifiers) ---- */
+
+/* Decode one PNG file into stripped pixel rows (post-unfilter).
+ * On success returns 0, *q_out holds h*w*bpp bytes and v is filled
+ * (v.idat already released). On failure returns -1 with `why` filled. */
+static int load_png_pixels(const char *path, png_view *v, uint8_t **q_out,
+                           unsigned *bpp_out, char *why, size_t why_cap) {
+    *q_out = NULL;
+    memset(v, 0, sizeof *v);
+    FILE *f = fopen(path, "rb");
+    if (!f) { snprintf(why, why_cap, "open failed: %.400s", path); return -1; }
+    fseek(f, 0, SEEK_END);
+    long l = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (l <= 0) {
+        fclose(f);
+        snprintf(why, why_cap, "empty file: %.400s", path);
+        return -1;
     }
-    fseek(f1, 0, SEEK_END); long l1 = ftell(f1); fseek(f1, 0, SEEK_SET);
-    fseek(f2, 0, SEEK_END); long l2 = ftell(f2); fseek(f2, 0, SEEK_SET);
+    uint8_t *b = malloc((size_t)l);
+    if (!b || fread(b, 1, (size_t)l, f) != (size_t)l) {
+        free(b);
+        fclose(f);
+        snprintf(why, why_cap, "read failed: %.400s", path);
+        return -1;
+    }
+    fclose(f);
+
+    int rc = -1;
+    uint8_t *r = NULL;
+    if (png_parse(b, (size_t)l, v)) {
+        snprintf(why, why_cap, "bad PNG structure: %.400s", path);
+        goto out;
+    }
+    {
+        unsigned ch = v->color_type == 0 ? 1u : 4u;
+        unsigned bpp = ch * (v->bit_depth == 16 ? 2u : 1u);
+        if (bpp_out) *bpp_out = bpp;
+        size_t raw = (size_t)v->h * ((size_t)v->w * bpp + 1);
+        r = malloc(raw);
+        *q_out = malloc((size_t)v->h * v->w * bpp);
+        if (!r || !*q_out ||
+            zinflate_len(v->idat, v->idat_len, r, raw) ||
+            png_unfilter(r, v->w, v->h, bpp)) {
+            snprintf(why, why_cap, "inflate/unfilter failed: %.400s", path);
+            goto out;
+        }
+        png_strip_filters(r, v->w, v->h, bpp, *q_out);
+        rc = 0;
+    }
+out:
+    free(r);
+    free(v->idat);
+    v->idat = NULL;
+    free(b);
+    if (rc && *q_out) { free(*q_out); *q_out = NULL; }
+    return rc;
+}
+
+/* Pixel equality for two decoded buffers. Handles identical layouts via
+ * memcmp and gray-vs-RGBA cross-layout via first-channel comparison.
+ * Returns 0 when equal. */
+static int pixels_differ(const png_view *a, const uint8_t *qa,
+                         const png_view *b, const uint8_t *qb,
+                         uint64_t *ok_bytes) {
+    unsigned cha = a->color_type == 0 ? 1u : 4u;
+    unsigned chb = b->color_type == 0 ? 1u : 4u;
+    unsigned bpa = cha * (a->bit_depth == 16 ? 2u : 1u);
+    unsigned bpb = chb * (b->bit_depth == 16 ? 2u : 1u);
+    if (a->w != b->w || a->h != b->h) return 1;
+    if (cha == chb && a->bit_depth == b->bit_depth) {
+        size_t n = (size_t)a->h * a->w * bpa;
+        if (memcmp(qa, qb, n)) return 1;
+        *ok_bytes = (uint64_t)n;
+        return 0;
+    }
+    /* cross-layout: gray value must equal RGBA R (=G=B) */
+    const uint32_t W = a->w, H = a->h;
+    for (uint32_t y = 0; y < H; y++) {
+        const uint8_t *ra = qa + (size_t)y * a->w * bpa;
+        const uint8_t *rb = qb + (size_t)y * b->w * bpb;
+        for (uint32_t x = 0; x < W; x++)
+            if (ra[x * bpa] != rb[x * bpb]) return 1;
+    }
+    *ok_bytes = (uint64_t)W * H;
+    return 0;
+}
+
+/* Compare one pair resolved BY NAME (subset-safe: a --start>0 extract
+ * must verify against its own names, not against sorted positions). */
+static int verify_one_pair(vshared_t *vs, int64_t oi, int64_t ri) {
+    char p1[1200], p2[1200];
+    snprintf(p1, sizeof p1, "%.500s/%.600s", vs->ref_dir, vs->rn[ri]);
+    snprintf(p2, sizeof p2, "%.500s/%.600s", vs->out_dir, vs->on[oi]);
+
+    png_view v1, v2;
+    uint8_t *q1 = NULL, *q2 = NULL;
+    unsigned bpp1 = 0, bpp2 = 0;
+    char why[256] = "";
     int bad = 0;
     uint64_t ok_bytes = 0;
-    uint8_t *b1 = NULL, *b2 = NULL;
-    png_view v1, v2;
-    memset(&v1, 0, sizeof v1); memset(&v2, 0, sizeof v2);
-    uint8_t *r1 = NULL, *r2 = NULL, *q1 = NULL, *q2 = NULL;
 
-    if (l1 <= 0 || l2 <= 0 ||
-        !(b1 = malloc((size_t)l1)) || !(b2 = malloc((size_t)l2)) ||
-        fread(b1, 1, (size_t)l1, f1) != (size_t)l1 ||
-        fread(b2, 1, (size_t)l2, f2) != (size_t)l2 ||
-        png_parse(b1, (size_t)l1, &v1) || png_parse(b2, (size_t)l2, &v2)) {
+    if (load_png_pixels(p1, &v1, &q1, &bpp1, why, sizeof why) ||
+        load_png_pixels(p2, &v2, &q2, &bpp2, why, sizeof why)) {
         bad = 1;
         goto done;
     }
-    if (v1.w != v2.w || v1.h != v2.h) { bad = 1; goto done; }
-
-    {
-        unsigned ch1 = v1.color_type == 0 ? 1u : 4u;
-        unsigned ch2 = v2.color_type == 0 ? 1u : 4u;
-        unsigned bpp1 = ch1 * (v1.bit_depth == 16 ? 2u : 1u);
-        unsigned bpp2 = ch2 * (v2.bit_depth == 16 ? 2u : 1u);
-        size_t raw1 = (size_t)v1.h * ((size_t)v1.w * bpp1 + 1);
-        size_t raw2 = (size_t)v2.h * ((size_t)v2.w * bpp2 + 1);
-        r1 = malloc(raw1); r2 = malloc(raw2);
-        q1 = malloc((size_t)v1.h * v1.w * bpp1);
-        q2 = malloc((size_t)v2.h * v2.w * bpp2);
-        if (!r1 || !r2 || !q1 || !q2 ||
-            zinflate_len(v1.idat, v1.idat_len, r1, raw1) ||
-            zinflate_len(v2.idat, v2.idat_len, r2, raw2) ||
-            png_unfilter(r1, v1.w, v1.h, bpp1) ||
-            png_unfilter(r2, v2.w, v2.h, bpp2)) {
-            bad = 1;
-            goto done;
-        }
-        png_strip_filters(r1, v1.w, v1.h, bpp1, q1);
-        png_strip_filters(r2, v2.w, v2.h, bpp2, q2);
-        if (ch1 == ch2 && v1.bit_depth == v2.bit_depth) {
-            size_t n = (size_t)v1.h * v1.w * bpp1;
-            if (memcmp(q1, q2, n)) bad = 1;
-            else ok_bytes = (uint64_t)n;
-        } else {
-            /* cross-layout: gray value must equal RGBA R (=G=B) */
-            const uint32_t W = v1.w < v2.w ? v1.w : v2.w;
-            const uint32_t H = v1.h < v2.h ? v1.h : v2.h;
-            for (uint32_t y = 0; y < H && !bad; y++) {
-                const uint8_t *row1 = q1 + (size_t)y * v1.w * bpp1;
-                const uint8_t *row2 = q2 + (size_t)y * v2.w * bpp2;
-                for (uint32_t x = 0; x < W; x++) {
-                    if (row1[x * bpp1] != row2[x * bpp2]) { bad = 1; break; }
-                }
-            }
-            if (!bad) ok_bytes = (uint64_t)W * H;
-        }
-    }
+    bad = pixels_differ(&v1, q1, &v2, q2, &ok_bytes);
 
 done:
-    free(r1); free(r2); free(q1); free(q2);
-    free(v1.idat); free(v2.idat);
-    free(b1); free(b2);
-    fclose(f1); fclose(f2);
-    if (bad && !atomic_exchange(&vs->err_taken, 1))
-        snprintf(vs->rep->first_error, sizeof vs->rep->first_error,
-                 "pixel mismatch: %.200s vs %.200s", p1, p2);
+    free(q1); free(q2);
+    if (bad && !atomic_exchange(&vs->err_taken, 1)) {
+        if (why[0])
+            snprintf(vs->rep->first_error, sizeof vs->rep->first_error,
+                     "%s", why);
+        else
+            snprintf(vs->rep->first_error, sizeof vs->rep->first_error,
+                     "pixel mismatch: %.200s vs %.200s", p1, p2);
+    }
     if (!bad)
         atomic_fetch_add(&vs->bytes_ok, ok_bytes);
     return bad;
@@ -280,11 +336,17 @@ static void vworker(const port_worker_ctx *w, void *ud) {
     for (;;) {
         int64_t i = atomic_fetch_add_explicit(&vs->cursor, G,
                                               memory_order_relaxed);
-        if (i >= vs->common) break;
+        if (i >= vs->common) break;   /* common == number of OUT names */
         int64_t end = i + G < vs->common ? i + G : vs->common;
-        for (; i < end; i++)
-            if (verify_one_pair(vs, i))
+        for (; i < end; i++) {
+            int64_t ri = find_name(vs->rn, vs->rn_n, vs->on[i]);
+            if (ri < 0) {
+                atomic_fetch_add(&vs->not_in_ref, 1);
+                continue;
+            }
+            if (verify_one_pair(vs, i, ri))
                 atomic_fetch_add(&vs->mism, 1);
+        }
     }
 }
 
@@ -317,29 +379,279 @@ int opngx_verify(const char *ref_dir, const char *out_dir,
                  "name sets differ: ref=%lld out=%lld", (long long)rn_n, (long long)on_n);
     }
 
-    /* compare intersection (index-aligned since sorted; stop at min) */
-    int64_t common = rn_n < on_n ? rn_n : on_n;
+    /* pair every OUT name to its REF name (subset-safe by-name matching) */
+    int64_t common = on_n;
 
     vshared_t vs;
     vs.rn = rn; vs.on = on;
     vs.ref_dir = ref_dir; vs.out_dir = out_dir;
     vs.rep = rep;
     vs.cursor = 0; vs.common = common; vs.mism = 0; vs.bytes_ok = 0;
+    vs.not_in_ref = 0; vs.rn_n = rn_n;
     vs.err_taken = 0;
 
     port_spawn_workers(port_cpu_count(), vworker, &vs);
 
-    rep->files_compared = common;
+    int64_t matched = on_n - atomic_load(&vs.not_in_ref);
+    rep->files_compared = matched;
     rep->bytes_compared = atomic_load(&vs.bytes_ok);
     rep->mismatched_files = atomic_load(&vs.mism);
     if (rep->mismatched_files && !atomic_load(&vs.err_taken))
         snprintf(rep->first_error, sizeof rep->first_error,
                  "%lld file(s) differ",
                  (long long)rep->mismatched_files);
+    {
+        int64_t nabsent = atomic_load(&vs.not_in_ref);
+        if (nabsent > 0) {
+            char note[96];
+            snprintf(note, sizeof note,
+                     "%lld output file(s) absent from reference set",
+                     (long long)nabsent);
+            size_t cur = strlen(rep->first_error);
+            if (cur && rep->mismatched_files == 0 && cur + 3 < sizeof rep->first_error)
+                rep->first_error[cur++] = ';', rep->first_error[cur++] = ' ';
+            snprintf(rep->first_error + cur,
+                     sizeof rep->first_error - cur, "%s", note);
+        }
+    }
 
     for (int64_t i = 0; i < rn_n; i++) { free(rn[i]); }
     free(rn);
     for (int64_t i = 0; i < on_n; i++) { free(on[i]); }
     free(on);
+    if (atomic_load(&vs.not_in_ref) > 0 && !rep->set_equal)
+        return 1;   /* subset claim broken: names not present in ref */
     return rep->mismatched_files ? 1 : 0;
+}
+
+/* ==================== ADD-7: verify against source .bin ====================
+ * Compares an extracted directory directly against the recording itself:
+ * each output file's decoded pixels must equal the LUT-mapped frame at the
+ * absolute index encoded in its filename. No vendor reference set needed.
+ */
+
+typedef struct {
+    const opngx_params *p;
+    const uint8_t *map;
+    size_t map_len;
+    int64_t stride, avail;
+    uint32_t W, H;
+    int bits16, color_type;
+    uint8_t  lut8[256];
+    uint16_t lut16[256];
+    char **on;
+    int64_t n_on;
+    const char *out_dir;
+    _Atomic int64_t cursor;
+    _Atomic int64_t mism;
+    _Atomic int64_t badidx;     /* unparseable / out-of-range filenames */
+    _Atomic int64_t err_taken;
+    _Atomic uint64_t bytes_ok;
+    verify_report *rep;
+} bshared;
+
+static void fill_luts_for(const opngx_params *p, uint8_t *l8, uint16_t *l16) {
+    double b, c, g = 1.0;
+    switch (p->mode) {
+    case OPNGX_MODE_RAW:    b = 0; c = 0; break;
+    case OPNGX_MODE_CUSTOM: b = p->brightness; c = p->contrast; g = p->gamma > 0 ? p->gamma : 1.0; break;
+    default:                b = p->brightness; c = p->contrast; g = p->gamma > 0 ? p->gamma : 1.0; break;
+    }
+    opngx_build_lut8(l8, b, c, g);
+    opngx_build_lut16(l16, b, c, g);
+}
+
+static int bverify_one(bshared *bs, const char *name) {
+    /* filename → absolute frame index */
+    size_t plen = strlen(bs->p->prefix), elen = strlen(bs->p->ext);
+    size_t L = strlen(name);
+    if (L <= plen + elen || memcmp(name, bs->p->prefix, plen) ||
+        memcmp(name + L - elen, bs->p->ext, elen)) {
+        atomic_fetch_add(&bs->badidx, 1);
+        return 0;
+    }
+    int64_t idx = 0;
+    for (size_t k = plen; k < L - elen; k++) {
+        if (name[k] < '0' || name[k] > '9') {
+            atomic_fetch_add(&bs->badidx, 1);
+            return 0;
+        }
+        idx = idx * 10 + (name[k] - '0');
+    }
+    if (idx >= bs->avail) {
+        atomic_fetch_add(&bs->badidx, 1);
+        return 0;
+    }
+
+    const uint32_t W = bs->W, H = bs->H;
+    const unsigned bpp = (bs->color_type == 0 ? 1u : 4u) * (bs->bits16 ? 2u : 1u);
+    const size_t raw_len = (size_t)H * ((size_t)W * bpp + 1);
+
+    uint8_t *scratch = malloc(raw_len);
+    uint8_t *qref = malloc((size_t)W * H * bpp);
+    int rc = -1;
+    png_view v;
+    uint8_t *q = NULL;
+    char why[256] = "";
+    if (!scratch || !qref) goto out;
+
+    {
+        const uint8_t *frame = bs->map + (size_t)idx * (size_t)bs->stride + 8;
+        if (bs->color_type == 0) {
+            if (bs->bits16) opngx_expand_gray16(frame, W, H, bs->lut16, scratch);
+            else            opngx_expand_gray8 (frame, W, H, bs->lut8,  scratch);
+        } else {
+            if (bs->bits16) opngx_expand_rgba16(frame, W, H, bs->lut16, scratch);
+            else            opngx_expand_rgba8 (frame, W, H, bs->lut8,  scratch);
+        }
+        for (uint32_t y = 0; y < H; y++)
+            memcpy(qref + (size_t)y * W * bpp,
+                   scratch + (size_t)y * (W * bpp + 1) + 1, W * bpp);
+    }
+
+    {
+        char path[1200];
+        snprintf(path, sizeof path, "%.500s/%.600s", bs->out_dir, name);
+        if (load_png_pixels(path, &v, &q, NULL, why, sizeof why)) goto out;
+    }
+
+    rc = pixels_differ(&v, q,
+                       &(png_view){
+                           .w = W, .h = H,
+                           .bit_depth = (uint32_t)(bs->bits16 ? 16 : 8),
+                           .color_type = (uint32_t)bs->color_type,
+                       }, qref,
+                       &(uint64_t){ 0 });
+    if (!rc)
+        atomic_fetch_add(&bs->bytes_ok, (uint64_t)W * H * bpp);
+
+out:
+    free(scratch);
+    free(qref);
+    free(q);
+    if (rc && !atomic_exchange(&bs->err_taken, 1))
+        snprintf(bs->rep->first_error, sizeof bs->rep->first_error, "%s",
+                 why[0] ? why : "pixel mismatch vs source bin");
+    return rc;
+}
+
+static void bworker(const port_worker_ctx *w, void *ud) {
+    (void)w;
+    bshared *bs = ud;
+    const int64_t G = 64;
+    for (;;) {
+        int64_t i = atomic_fetch_add_explicit(&bs->cursor, G,
+                                              memory_order_relaxed);
+        if (i >= bs->n_on) break;
+        int64_t end = i + G < bs->n_on ? i + G : bs->n_on;
+        for (; i < end; i++)
+            if (bverify_one(bs, bs->on[i]))
+                atomic_fetch_add(&bs->mism, 1);
+    }
+}
+
+int opngx_verify_bin(const opngx_params *pin, verify_report *rep,
+                     char *err, size_t err_cap) {
+    if (err && err_cap) err[0] = '\0';
+    verify_report_init(rep);
+    opngx_params p = *pin;
+    /* normalize naming defaults once — workers must never see NULL */
+    char pfx[64], extv[64];
+    snprintf(pfx, sizeof pfx, "%s",
+             p.prefix && p.prefix[0] ? p.prefix : "brow_");
+    snprintf(extv, sizeof extv, "%s",
+             p.ext && p.ext[0] ? p.ext : ".Png");
+    p.prefix = pfx;
+    p.ext = extv;
+
+    footage_t ft;
+    int have_ft = 0;
+    int ref_mode = p.mode == OPNGX_MODE_REFERENCE;
+
+    if (!(p.width && p.height) || ref_mode) {
+        /* geometry may come from the sidecar AND reference B/C always does */
+        if (!have_ft && p.footage_path && p.footage_path[0])
+            have_ft = footage_load(p.footage_path, &ft) == 0;
+        if (!have_ft) {
+            snprintf(err, err_cap,
+                     "unknown geometry / reference mode needs a .footage "
+                     "sidecar (or use --mode custom/raw with --width/--height)");
+            return -1;
+        }
+        if (!(p.width && p.height)) {
+            p.width = ft.resolution_x;
+            p.height = ft.resolution_y;
+        }
+        if (ref_mode) {
+            p.brightness = ft.brightness;
+            p.contrast = ft.contrast;
+            p.gamma = ft.gamma > 0 ? ft.gamma : 1.0;
+        }
+    }
+
+    opngx_mapped_file mf;
+    if (port_map_file(p.bin_path, &mf)) {
+        snprintf(err, err_cap, "cannot map '%s'", p.bin_path);
+        return -1;
+    }
+
+    bshared bs;
+    memset(&bs, 0, sizeof bs);
+    bs.p = &p;
+    bs.map = mf.map;
+    bs.map_len = mf.len;
+    bs.W = p.width;
+    bs.H = p.height;
+    bs.bits16 = p.bit_depth == 16;
+    bs.color_type = p.channels == 0 ? 0 : 6;
+    bs.out_dir = p.out_dir && p.out_dir[0] ? p.out_dir : ".";
+    bs.stride = p.frame_stride > 0
+        ? p.frame_stride
+        : (int64_t)(8 + (size_t)p.width * p.height);
+    int64_t cap_frames = (int64_t)(mf.len / (size_t)bs.stride);
+    bs.avail = p.num_frames >= 0 && p.num_frames < cap_frames ? p.num_frames
+                                                              : cap_frames;
+    fill_luts_for(&p, bs.lut8, bs.lut16);
+
+    int rc = list_names(bs.out_dir, p.prefix, p.ext, &bs.on, &bs.n_on);
+    if (rc) {
+        port_unmap_file(&mf);
+        snprintf(err, err_cap, "cannot scan dir '%s': %s",
+                 bs.out_dir, strerror(errno));
+        return -1;
+    }
+
+    rep->files_ref = bs.avail;   /* frames addressable in the bin */
+    rep->files_out = bs.n_on;
+    rep->set_equal = (bs.n_on == bs.avail);
+    bs.rep = rep;
+    bs.cursor = 0;
+
+    port_spawn_workers(port_cpu_count(), bworker, &bs);
+
+    rep->files_compared = bs.n_on - atomic_load(&bs.badidx);
+    rep->bytes_compared = atomic_load(&bs.bytes_ok);
+    rep->mismatched_files = atomic_load(&bs.mism);
+
+    int badidx = atomic_load(&bs.badidx) > 0;
+    if (rep->mismatched_files && !atomic_load(&bs.err_taken))
+        snprintf(rep->first_error, sizeof rep->first_error,
+                 "%lld file(s) differ from source bin",
+                 (long long)rep->mismatched_files);
+    if (badidx && !atomic_load(&bs.err_taken) && !rep->mismatched_files) {
+        char note[96];
+        snprintf(note, sizeof note, "%lld output file(s) outside bin range/naming",
+                 (long long)atomic_load(&bs.badidx));
+        size_t cur = strlen(rep->first_error);
+        if (cur && cur + 3 < sizeof rep->first_error)
+            rep->first_error[cur++] = ';', rep->first_error[cur++] = ' ';
+        snprintf(rep->first_error + cur, sizeof rep->first_error - cur, "%s", note);
+    }
+
+    for (int64_t i = 0; i < bs.n_on; i++) free(bs.on[i]);
+    free(bs.on);
+    port_unmap_file(&mf);
+
+    if (rep->mismatched_files || badidx) return 1;
+    return rep->files_compared > 0 ? 0 : 1;
 }

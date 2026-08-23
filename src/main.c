@@ -33,6 +33,8 @@ static void usage(void) {
 "  opngx-engine extract --bin FILE [--footage FILE] --out DIR [options]\n"
 "  opngx-engine batch   --in-dir DIR --out-root DIR [options]\n"
 "  opngx-engine verify  REF_DIR OUT_DIR [--prefix brow] [--ext .Png]\n"
+"  opngx-engine verifybin --bin FILE OUT_DIR [--footage F] [-m MODE]\n"
+"                       [--prefix brow_] [--ext .Png] [--json]\n"
 "  opngx-engine info    [--bin FILE] [--footage FILE]\n"
 "  opngx-engine bench   --bin FILE [--frames N] [--jobs N] [--level N]\n"
 "                       [--backend auto|libdeflate|zlib] [--repeat R]\n"
@@ -274,19 +276,30 @@ static int cmd_batch(int argc, char **argv) {
 }
 
 /* ---- verify ---- */
+static void json_print_str(const char *s) {
+    putchar('"');
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p == '"' || *p == '\\') { putchar('\\'); putchar(*p); }
+        else if (*p < 0x20) printf("\\u%04x", *p);
+        else putchar(*p);
+    }
+    putchar('"');
+}
+
 static int cmd_verify(int argc, char **argv) {
     const char *ref = NULL, *out = NULL, *prefix = "brow_", *ext = ".Png";
-    int positional = 0, subset = 0;
+    int positional = 0, subset = 0, as_json = 0;
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--prefix")) prefix = argv[++i];
         else if (!strcmp(a, "--ext")) ext = argv[++i];
         else if (!strcmp(a, "--subset")) subset = 1; /* out must be a correct subset of ref */
+        else if (!strcmp(a, "--json")) as_json = 1;  /* machine-readable report */
         else if (!positional) { ref = a; positional++; }
         else if (positional == 1) { out = a; positional++; }
         else { fprintf(stderr, "too many args\n"); return 2; }
     }
-    if (!ref || !out) { fprintf(stderr, "usage: opngx-engine verify REF OUT [--prefix P] [--ext E] [--subset]\n"); return 2; }
+    if (!ref || !out) { fprintf(stderr, "usage: opngx-engine verify REF OUT [--prefix P] [--ext E] [--subset] [--json]\n"); return 2; }
     verify_report rep;
     char err[512] = "";
     int rc = opngx_verify(ref, out, prefix, ext, &rep, err, sizeof err);
@@ -299,11 +312,114 @@ static int cmd_verify(int argc, char **argv) {
                           : rep.set_equal;
     printf("name sets:    %s\n", rep.set_equal ? "EQUAL" :
                                     (names_ok ? "SUBSET-OK" : "DIFFER"));
-    if (rep.first_error[0]) printf("first error:  %s\n", rep.first_error);
     if (rc < 0) { fprintf(stderr, "error: %s\n", err); return 1; }
     int pass = (rc == 0 && names_ok && rep.files_out > 0);
+    if (as_json) {
+        printf("{\"files_ref\":%lld,\"files_out\":%lld,"
+               "\"files_compared\":%lld,\"bytes_compared\":%llu,"
+               "\"mismatched_files\":%lld,\"set_equal\":%s,"
+               "\"names_ok\":%s,\"passed\":%s,\"first_error\":",
+               (long long)rep.files_ref, (long long)rep.files_out,
+               (long long)rep.files_compared,
+               (unsigned long long)rep.bytes_compared,
+               (long long)rep.mismatched_files,
+               rep.set_equal ? "true" : "false",
+               names_ok ? "true" : "false",
+               pass ? "true" : "false");
+        json_print_str(pass ? "" : (rep.first_error[0] ? rep.first_error : err));
+        puts("}");
+        return pass ? 0 : 1;
+    }
+    if (rep.first_error[0]) printf("first error:  %s\n", rep.first_error);
     printf("RESULT: %s%s\n", pass ? "PASS (pixel-exact)" : "FAIL",
            subset ? " [subset mode]" : "");
+    return pass ? 0 : 1;
+}
+
+/* ---- verifybin (ADD-7): verify an extract dir against its source bin ---- */
+static int cmd_verifybin(int argc, char **argv) {
+    opngx_params p; memset(&p, 0, sizeof p);
+    p.mode = OPNGX_MODE_REFERENCE; p.gamma = 1.0;
+    p.bit_depth = 8; p.channels = 6;
+    p.num_frames = -1; p.frame_stride = -1;
+    const char *outdir = NULL, *mode_s = "reference";
+    int positional = 0, as_json = 0;
+
+    for (int i = 0; i < argc; i++) {
+        const char *a = argv[i];
+        if (!strcmp(a, "--bin")) p.bin_path = argv[++i];
+        else if (!strcmp(a, "--footage")) p.footage_path = argv[++i];
+        else if (!strcmp(a, "--prefix")) p.prefix = argv[++i];
+        else if (!strcmp(a, "--ext")) p.ext = argv[++i];
+        else if (!strcmp(a, "--width")) { int64_t t; if (parse_i64(argv[++i], &t)) { fprintf(stderr, "bad width\n"); return 2; } p.width = (uint32_t)t; }
+        else if (!strcmp(a, "--height")) { int64_t t; if (parse_i64(argv[++i], &t)) { fprintf(stderr, "bad height\n"); return 2; } p.height = (uint32_t)t; }
+        else if (!strcmp(a, "--frames")) {
+            if (parse_i64(argv[++i], &p.num_frames)) { fprintf(stderr, "bad frames\n"); return 2; }
+        }
+        else if (!strcmp(a, "--bit-depth")) p.bit_depth = atoi(argv[++i]);
+        else if (!strcmp(a, "--channels")) {
+            if (++i >= argc) { fprintf(stderr, "missing value after %s\n", a); return 2; }
+            if (!strcasecmp(argv[i], "gray") || !strcmp(argv[i], "0")) p.channels = 0;
+            else if (!strcasecmp(argv[i], "rgba") || !strcmp(argv[i], "6")) p.channels = 6;
+            else { fprintf(stderr, "bad channels: %s\n", argv[i]); return 2; }
+        }
+        else if (!strcmp(a, "-m") || !strcmp(a, "--mode")) mode_s = argv[++i];
+        else if (!strcmp(a, "--brightness")) p.brightness = atof(argv[++i]);
+        else if (!strcmp(a, "--contrast")) p.contrast = atof(argv[++i]);
+        else if (!strcmp(a, "--gamma")) p.gamma = atof(argv[++i]);
+        else if (!strcmp(a, "--json")) as_json = 1;
+        else if (!positional) { outdir = a; positional++; }
+        else { fprintf(stderr, "too many args\n"); return 2; }
+    }
+    if (!p.bin_path || !outdir) {
+        fprintf(stderr,
+            "usage: opngx-engine verifybin --bin FILE OUT_DIR [--footage F]\n"
+            "       [--width W --height H] [-m reference|raw|custom]\n"
+            "       [--brightness B --contrast C --gamma G] [--bit-depth 8|16]\n"
+            "       [--channels rgba|gray] [--prefix P] [--ext E] [--json]\n");
+        return 2;
+    }
+    if (parse_mode(mode_s, &p.mode)) { fprintf(stderr, "bad mode\n"); return 2; }
+    if (strcasecmp(mode_s, "reference") == 0 && !p.footage_path) {
+        /* default sibling sidecar like info/bench do */
+        size_t L = strlen(p.bin_path);
+        static char footbuf[1100];
+        snprintf(footbuf, sizeof footbuf, "%.*s.footage", (int)(L > 4 ? L - 4 : L), p.bin_path);
+        p.footage_path = footbuf;
+    }
+    p.out_dir = outdir;
+
+    verify_report rep;
+    char err[512] = "";
+    int rc = opngx_verify_bin(&p, &rep, err, sizeof err);
+    int names_ok = (rep.mismatched_files == 0 &&
+                    rep.files_compared > 0 &&
+                    rep.files_compared == rep.files_out);
+    printf("bin frames:   %lld\n", (long long)rep.files_ref);
+    printf("out files:    %lld\n", (long long)rep.files_out);
+    printf("compared:     %lld\n", (long long)rep.files_compared);
+    printf("bytes equal:  %llu\n", (unsigned long long)rep.bytes_compared);
+    printf("mismatches:   %lld\n", (long long)rep.mismatched_files);
+    if (rc < 0) { fprintf(stderr, "error: %s\n", err); return 1; }
+    int pass = (rc == 0 && names_ok && rep.mismatched_files == 0);
+    if (as_json) {
+        printf("{\"files_ref\":%lld,\"files_out\":%lld,"
+               "\"files_compared\":%lld,\"bytes_compared\":%llu,"
+               "\"mismatched_files\":%lld,\"set_equal\":%s,"
+               "\"names_ok\":%s,\"passed\":%s,\"first_error\":",
+               (long long)rep.files_ref, (long long)rep.files_out,
+               (long long)rep.files_compared,
+               (unsigned long long)rep.bytes_compared,
+               (long long)rep.mismatched_files,
+               rep.set_equal ? "true" : "false",
+               names_ok ? "true" : "false",
+               pass ? "true" : "false");
+        json_print_str(pass ? "" : (rep.first_error[0] ? rep.first_error : err));
+        puts("}");
+        return pass ? 0 : 1;
+    }
+    if (rep.first_error[0]) printf("first error:  %s\n", rep.first_error);
+    printf("RESULT: %s [against source bin]\n", pass ? "PASS (pixel-exact)" : "FAIL");
     return pass ? 0 : 1;
 }
 
@@ -449,6 +565,7 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "extract")) return cmd_extract(argc-2, argv+2);
     if (!strcmp(cmd, "batch"))   return cmd_batch(argc-2, argv+2);
     if (!strcmp(cmd, "verify"))  return cmd_verify(argc-2, argv+2);
+    if (!strcmp(cmd, "verifybin")) return cmd_verifybin(argc-2, argv+2);
     if (!strcmp(cmd, "info"))    return cmd_info(argc-2, argv+2);
     if (!strcmp(cmd, "bench"))   return cmd_bench(argc-2, argv+2);
     usage();
