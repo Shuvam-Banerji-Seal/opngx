@@ -86,8 +86,7 @@ def render_video(
         raise RuntimeError(
             "ffmpeg was not found on PATH — required for video rendering.\n"
             "Install it (e.g. 'winget install ffmpeg' / 'pacman -S ffmpeg') "
-            "and try again."
-        )
+            "and try again.")
 
     meta = probe(bin_path)
     if meta.width == 0 or meta.height == 0:
@@ -103,9 +102,8 @@ def render_video(
         g = g or 1.0
     else:  # reference
         b = meta.brightness if b is None else b
-        c = meta.contrast if c is not None else meta.contrast
-        g = meta.gamma if g is not None else meta.gamma
-        b = meta.brightness if b is None else b
+        c = meta.contrast if c is None else c
+        g = meta.gamma if g is None else g
     lut = bytes(build_lut(b, c, g))
 
     n = count if count is not None else meta.capacity_frames - start
@@ -117,80 +115,61 @@ def render_video(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "error",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "gray",
-        "-s",
-        f"{meta.width}x{meta.height}",
-        "-r",
-        str(fps),
-        "-i",
-        "-",
-        "-c:v",
-        "libx264",
-        "-preset",
-        preset,
-        "-crf",
-        str(crf),
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "gray",
+        "-s", f"{meta.width}x{meta.height}", "-r", str(fps), "-i", "-",
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         str(out),
     ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                             stderr=subprocess.PIPE)
 
+    import mmap
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    px = meta.width * meta.height
     t0 = time.perf_counter()
     written = 0
     try:
-        # Bulk pipeline: mmap once, LUT big runs of frames with one
-        # bytes.translate per chunk (C speed), few large pipe writes.
-        import mmap
-
-        CHUNK = 256  # frames per LUT/write batch
-        px = meta.width * meta.height
+        # All-core decode: bytes.translate releases the GIL, so we split
+        # the frame range into per-core chunks, translate each chunk in a
+        # worker thread, then write to ffmpeg strictly in frame order.
         with open(bin_path, "rb") as f:
             mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
             try:
-                base_off = start * meta.frame_stride + 8
-                i = 0
-                while i < n:
-                    if should_cancel is not None and should_cancel():
-                        break
-                    take = min(CHUNK, n - i)
-                    off0 = base_off + i * meta.frame_stride
-                    span = (take - 1) * meta.frame_stride + px
-                    raw = mm[off0 : off0 + span]
-                    if len(raw) < span:
-                        raise IOError(
-                            f"unexpected EOF at frame {start + i + take - 1}"
-                        )
-                    lutted = raw.translate(lut)
-                    view = memoryview(lutted)
-                    parts = [
-                        view[k * meta.frame_stride :
-                             k * meta.frame_stride + px]
-                        for k in range(take)
-                    ]
-                    try:
-                        proc.stdin.write(b"".join(parts))
-                    except BrokenPipeError:
-                        err = (
-                            proc.stderr.read().decode(errors="replace")
-                            if proc.stderr
-                            else "encoder died"
-                        )
-                        raise RuntimeError(f"ffmpeg failed: {err}") from None
-                    written += take
-                    i += take
-                    if progress:
-                        progress(min(i, n), n)
+                nth = max(1, os.cpu_count() or 1)
+                n_chunks = min(n, nth * 2)
+                chunk_sz = max(1, n // n_chunks)
+
+                def work(chunk_idx: int):
+                    s0 = chunk_idx * chunk_sz
+                    e0 = s0 + chunk_sz if chunk_idx < n_chunks - 1 else n
+                    pieces = []
+                    for i in range(s0, e0):
+                        base = (start + i) * meta.frame_stride + 8
+                        raw = mm[base:base + px]
+                        pieces.append(raw.translate(lut))
+                    return chunk_idx, pieces
+
+                with ThreadPoolExecutor(max_workers=nth) as ex:
+                    futures = [ex.submit(work, c) for c in range(n_chunks)]
+                    buf = [None] * n_chunks
+                    for fut in futures:
+                        ci, pieces = fut.result()
+                        buf[ci] = pieces
+                    if proc.stdin and proc.stdin.writable():
+                        for pieces in buf:
+                            if pieces is None:
+                                continue
+                            if should_cancel is not None and should_cancel():
+                                break
+                            for blob in pieces:
+                                proc.stdin.write(blob)
+                                written += 1
+                            if progress:
+                                progress(min(written, n), n)
             finally:
                 mm.close()
     finally:
