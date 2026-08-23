@@ -24,7 +24,14 @@ except Exception:
 
 binaries = [(dll, ".")] if os.path.exists(dll) else []
 if ffbin:
-    binaries.append((ffbin, "."))
+    # bundle under a flat, predictable name so resolve_ffmpeg can find it
+    import shutil as _sh
+    _dst = os.path.join(root, "_bundled_ffmpeg")
+    ext = ".exe" if os.name == "nt" or "win" in ffbin.lower() else ""
+    if ext and not _dst.endswith(".exe"):
+        _dst += ".exe"
+    _sh.copy2(ffbin, _dst)
+    binaries.append((_dst, "."))
 
 hidden += ["imageio_ffmpeg"]
 

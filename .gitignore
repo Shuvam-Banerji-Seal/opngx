@@ -34,3 +34,4 @@ build-win/
 build-pkg/
 build-rel/
 dist/
+_bundled_ffmpeg*

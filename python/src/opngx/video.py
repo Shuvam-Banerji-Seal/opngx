@@ -21,24 +21,43 @@ _FFCACHE: Optional[str] = None
 
 
 def resolve_ffmpeg() -> Optional[str]:
-    """Path to an ffmpeg executable. Prefers the imageio-ffmpeg build that
-    ships inside the packaged app (deterministic, always present), and
-    falls back to one on PATH."""
+    """Find an ffmpeg executable.
+
+    Priority:
+      1. Bundled binary next to this file (PyInstaller _MEIPASS / app dir),
+         named _ffmpeg.exe or _ffmpeg.
+      2. System PATH lookup.
+    """
     global _FFCACHE
     if _FFCACHE:
         return _FFCACHE
-    exe = None
+    import sys
+    here = getattr(sys, "_MEIPASS", None)
+    if not here:
+        try:
+            here = str(Path(__file__).resolve().parent)
+        except Exception:
+            here = None
+    if here:
+        for name in ("_bundled_ffmpeg.exe", "_bundled_ffmpeg",
+                     "_ffmpeg.exe", "_ffmpeg"):
+            cand = Path(here) / name
+            if cand.exists():
+                _FFCACHE = str(cand)
+                return _FFCACHE
+    exe = shutil.which("ffmpeg")
+    if exe and Path(exe).exists():
+        _FFCACHE = exe
+        return _FFCACHE
     try:
         import imageio_ffmpeg
-        candidate = imageio_ffmpeg.get_ffmpeg_exe()
-        if candidate and Path(candidate).exists():
-            exe = candidate
+        c = imageio_ffmpeg.get_ffmpeg_exe()
+        if c and Path(c).exists():
+            _FFCACHE = c
+            return _FFCACHE
     except Exception:
         pass
-    if not exe:
-        exe = shutil.which("ffmpeg")
-    _FFCACHE = exe
-    return exe
+    return None
 
 
 def ffmpeg_available() -> bool:
