@@ -58,10 +58,12 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
+          OPNGX_SELFTEST_LOG: selftest-ui.log
         run: |
-          $out = & dist\opngx-studio.exe --selftest-ui 2>&1
-          $out | ForEach-Object { Write-Host $_ }
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & dist\opngx-studio.exe --selftest-ui
+          $code = $LASTEXITCODE
+          Get-Content selftest-ui.log
+          if ($code -ne 0) { exit 1 }
 
       - name: Build one-click setup.exe
         shell: pwsh

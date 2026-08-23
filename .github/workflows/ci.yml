@@ -163,12 +163,15 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
+          OPNGX_SELFTEST_LOG: selftest-ui.log
         run: |
           # v1.4.0 shipped a studio that crashed at launch (self._log missing)
           # because nothing ever constructed the window in CI. Never again.
-          $out = & dist\opngx-studio.exe --selftest-ui 2>&1
-          $out | ForEach-Object { Write-Host $_ }
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # Windowed exe logs to a file (no console on Windows).
+          & dist\opngx-studio.exe --selftest-ui
+          $code = $LASTEXITCODE
+          Get-Content selftest-ui.log
+          if ($code -ne 0) { exit 1 }
 
       - name: Build docs.zip + one-click setup.exe
         shell: pwsh
