@@ -138,8 +138,13 @@ def _selftest_ui() -> int:
         if missing:
             print(f"SELFTEST-UI FAIL: MainWindow lacks {missing}")
             return 1
-        if win.extract_btn.icon().isNull():
-            print("SELFTEST-UI FAIL: extract button has no icon")
+        # glyph-drawn standard icons were removed (dark-on-dark under QSS);
+        # colored-pixmap buttons must still carry their icons
+        if not hasattr(win, "obrowse") or win.obrowse.icon().isNull():
+            print("SELFTEST-UI FAIL: output-folder button lost its icon")
+            return 1
+        if not hasattr(win, "verify_bin") or win.verify_bin.icon().isNull():
+            print("SELFTEST-UI FAIL: verify-vs-bin button lost its icon")
             return 1
         print(
             f"SELFTEST-UI PASS (cpu chip: {win.cpu_chip.text()}, "
