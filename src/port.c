@@ -66,9 +66,14 @@ int port_mkdir_p(const char *path) {
     for (char *q = tmp + 1; *q; q++)
         if (*q == '/' || *q == '\\') {
             char keep = *q; *q = '\0';
-            if (!CreateDirectoryA(tmp, NULL) &&
-                GetLastError() != ERROR_ALREADY_EXISTS)
-                return -1;
+            /* skip drive components ("X:") and empty ones — CreateDirectoryA
+             * on a drive root returns an error that is NOT ALREADY_EXISTS,
+             * which made every absolute-Windows-path output dir fail
+             * (the field-reported SQ_100_s1 bug) */
+            if (!(q - tmp == 2 && tmp[1] == ':') && q != tmp + 1)
+                if (!CreateDirectoryA(tmp, NULL) &&
+                    GetLastError() != ERROR_ALREADY_EXISTS)
+                    return -1;
             *q = keep;
         }
     if (!CreateDirectoryA(tmp, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)

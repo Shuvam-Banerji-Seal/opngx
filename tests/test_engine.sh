@@ -233,6 +233,23 @@ check "spaces in output path: 200 PNGs + timestamps CSV"
     "$SPDIR/SQ_100_s1_png" --prefix SQ_100_ --json 2>/dev/null | grep -q '"passed":true'
 check "spaces in output path: verifybin PASS"
 
+
+echo "== T-19: Windows-style backslash + drive-letter output path =="
+W32OUT='C:\opngx_t19\SQ 100 out'
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+                  --footage "$TMP/fix/cam_9.9/cam_9.9.footage" \
+                  --out "$W32OUT" --prefix SQ_100_ -j 4 2>"$TMP/t19err.txt"
+RC=$?
+if [ "$ENGINE" = "/tmp/opencode/wine-engine.sh" ] || echo "$ENGINE" | grep -q "wine\|\.exe"; then
+  [ $RC -eq 0 ] || { cat "$TMP/t19err.txt"; false; }
+  N=$(find "$(winepath -u 'C:\opngx_t19\SQ 100 out' 2>/dev/null || echo "$TMP/t19fallback")" -name '*.Png' 2>/dev/null | wc -l)
+  [ "${N:-0}" -ge 200 ] || { ls "$TMP/t19fallback" 2>/dev/null; false; }
+else
+  # POSIX: literal directory name with backslashes must still work
+  [ $RC -eq 0 ] && [ "$(ls "$W32OUT" | wc -l)" -eq 200 ]
+fi
+check "backslash+drive-letter output path (mkdir_p drive skip)"
+
 echo
 echo "RESULTS: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]
