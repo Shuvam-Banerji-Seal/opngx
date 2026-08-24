@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -38,6 +39,20 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows: real consoles are UTF-8 (PEP 528) but REDIRECTED output
+    # uses the locale codepage -> UnicodeEncodeError on →/µ. Never crash
+    # on printing progress.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+    if os.name == "nt":  # frozen fallback pools spawn-reimport __main__
+        import multiprocessing
+
+        multiprocessing.freeze_support()
+
     ap = argparse.ArgumentParser(
         prog="opngx",
         description=f"opngx {opngx.__version__} — Optronis .bin → PNG extractor",

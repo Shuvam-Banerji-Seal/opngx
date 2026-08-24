@@ -157,25 +157,25 @@ static int png_parse(const uint8_t *buf, size_t len, png_view *v) {
 /* --- directory listing of matching names --- */
 static int list_names(const char *dir, const char *prefix, const char *ext,
                       char ***names, int64_t *count) {
-    DIR *d = opendir(dir);
+    port_dir *d = port_opendir(dir);
     if (!d) return -1;
     size_t plen = strlen(prefix), elen = strlen(ext);
     char **arr = NULL; int64_t n = 0, cap = 0;
-    struct dirent *e;
-    while ((e = readdir(d))) {
-        size_t L = strlen(e->d_name);
+    const char *e;
+    while ((e = port_readdir_utf8(d))) {
+        size_t L = strlen(e);
         if (L <= plen + elen) continue;
-        if (memcmp(e->d_name, prefix, plen)) continue;
-        if (memcmp(e->d_name + L - elen, ext, elen)) continue;
+        if (memcmp(e, prefix, plen)) continue;
+        if (memcmp(e + L - elen, ext, elen)) continue;
         /* strict pattern: middle must be digits only */
         int alldigit = 1;
         for (size_t k = plen; k < L - elen; k++)
-            if (e->d_name[k] < '0' || e->d_name[k] > '9') { alldigit = 0; break; }
+            if (e[k] < '0' || e[k] > '9') { alldigit = 0; break; }
         if (!alldigit) continue;
         if (n == cap) { cap = cap ? cap*2 : 256; arr = realloc(arr, (size_t)cap*sizeof(char*)); }
-        arr[n++] = strdup(e->d_name);
+        arr[n++] = strdup(e);
     }
-    closedir(d);
+    port_closedir(d);
     /* sort */
     for (int64_t i = 1; i < n; i++) {
         char *k = arr[i]; int64_t jj = i-1;
@@ -241,7 +241,7 @@ static int zinflate_len(const uint8_t *in, size_t in_len,
 static int load_png_pixels(const char *path, pslot *s, png_view *v,
                            char *why, size_t why_cap) {
     memset(v, 0, sizeof *v);
-    FILE *f = fopen(path, "rb");
+    FILE *f = port_fopen_u8(path, "rb");
     if (!f) { snprintf(why, why_cap, "open failed: %.400s", path); return -1; }
     fseek(f, 0, SEEK_END);
     long l = ftell(f);

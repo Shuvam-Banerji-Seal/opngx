@@ -611,3 +611,22 @@ def test_ar12_video_render_streams_and_cancels(fixture_dir, tmp_path):
                        progress=cancel_after_first,
                        should_cancel=should_cancel)
     assert st2["cancelled"] is True
+
+
+# --------------------------------------------------------------------- AR-13
+def test_ar13_windows_filename_sanitizer():
+    """Camera names from vendor XML must become filename-safe on Windows."""
+    import importlib
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    try:
+        qt = importlib.import_module("opngx.ui.qt_app")
+    except ImportError:
+        pytest.skip("PySide6 not installed")
+    f = qt._safe_name
+    assert f("cam:1.2?") == "cam_1.2_"
+    assert f('a/b\\c*d"e<f>g|h') == "a_b_c_d_e_f_g_h"
+    assert f("trailing dots...") == "trailing dots"
+    assert f("trailing space ") == "trailing space"
+    assert f("brow_1.2") == "brow_1.2"          # mid-name dots are legal
+    assert f("...") == "_"                       # degenerate -> safe placeholder

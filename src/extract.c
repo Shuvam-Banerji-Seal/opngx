@@ -164,7 +164,7 @@ fail:
 static int write_timestamps(opngx_job *j) {
     char path[1200];
     snprintf(path, sizeof path, "%s/%s_timestamps.csv", j->out_dir, j->prefix);
-    FILE *fp = fopen(path, "w");
+    FILE *fp = port_fopen_u8(path, "w");
     if (!fp) { snprintf(j->err, sizeof j->err, "open %.380s: %s", path, strerror(errno)); return -1; }
     fprintf(fp, "frame_index,timestamp_raw,timestamp_hex\n");
     for (int64_t i = 0; i < j->frames_total; i++) {
@@ -181,7 +181,7 @@ static int write_timestamps(opngx_job *j) {
 static int write_metadata(opngx_job *j, const footage_t *ft) {
     char path[1200];
     snprintf(path, sizeof path, "%s/metadata.json", j->out_dir);
-    FILE *fp = fopen(path, "w");
+    FILE *fp = port_fopen_u8(path, "w");
     if (!fp) { snprintf(j->err, sizeof j->err, "open %.380s: %s", path, strerror(errno)); return -1; }
     fprintf(fp, "{\n");
     fprintf(fp, "  \"engine\": \"opngx %s\",\n", OPNGX_VERSION);

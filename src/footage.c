@@ -6,6 +6,7 @@
  * the vendor tool.
  */
 #include "footage.h"
+#include "port.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,7 +65,7 @@ static void parse_str(const char *xml, const char *tag, char *dst, size_t cap) {
 
 int footage_load(const char *path, footage_t *f) {
     footage_defaults(f);
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = port_fopen_u8(path, "rb");
     if (!fp) return -1;
     if (fseek(fp, 0, SEEK_END) != 0) { fclose(fp); return -2; }
     long sz = ftell(fp);

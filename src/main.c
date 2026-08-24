@@ -221,31 +221,31 @@ static int cmd_batch(int argc, char **argv) {
     opngx_mode mode;
     if (parse_mode(mode_s, &mode)) { fprintf(stderr, "bad mode\n"); return 2; }
 
-    DIR *d = opendir(indir);
+    port_dir *d = port_opendir(indir);
     if (!d) { perror("opendir"); return 1; }
     char bins[256][1024]; int nbins = 0;
-    struct dirent *e;
+    const char *e;
     /* scan indir and one nesting level (vendor layout: <root>/<cam>/<name>.bin) */
-    while ((e = readdir(d)) && nbins < 256) {
-        if (e->d_name[0] == '.') continue;
+    while ((e = port_readdir_utf8(d)) && nbins < 256) {
+        if (e[0] == '.') continue;
         char sub[1100];
-        snprintf(sub, sizeof sub, "%.900s/%.150s", indir, e->d_name);
-        DIR *sd = opendir(sub);
+        snprintf(sub, sizeof sub, "%.900s/%.150s", indir, e);
+        port_dir *sd = port_opendir(sub);
         if (sd) {
-            struct dirent *se;
-            while ((se = readdir(sd)) && nbins < 256) {
-                size_t L = strlen(se->d_name);
-                if (L > 4 && !strcmp(se->d_name + L - 4, ".bin"))
-                    snprintf(bins[nbins++], sizeof bins[0], "%.900s/%.100s", sub, se->d_name);
+            const char *se;
+            while ((se = port_readdir_utf8(sd)) && nbins < 256) {
+                size_t L = strlen(se);
+                if (L > 4 && !strcmp(se + L - 4, ".bin"))
+                    snprintf(bins[nbins++], sizeof bins[0], "%.900s/%.100s", sub, se);
             }
-            closedir(sd);
+            port_closedir(sd);
         } else {
-            size_t L = strlen(e->d_name);
-            if (L > 4 && !strcmp(e->d_name + L - 4, ".bin"))
+            size_t L = strlen(e);
+            if (L > 4 && !strcmp(e + L - 4, ".bin"))
                 snprintf(bins[nbins++], sizeof bins[0], "%.1000s", sub);
         }
     }
-    closedir(d);
+    port_closedir(d);
 
     int rc_all = 0;
     for (int k = 0; k < nbins; k++) {
@@ -463,7 +463,7 @@ static int cmd_info(int argc, char **argv) {
             printf("footage:      not available (%s)\n", footage);
         }
         if (bin) {
-            FILE *fp = fopen(bin, "rb");
+            FILE *fp = port_fopen_u8(bin, "rb");
             if (fp) {
                 fseek(fp, 0, SEEK_END); long sz = ftell(fp); fclose(fp);
                 printf("bin_size:     %ld bytes\n", sz);
@@ -537,7 +537,38 @@ static int cmd_bench(int argc, char **argv) {
     return 0;
 }
 
-int main(int argc, char **argv) {
+static int engine_main(int argc, char **argv);
+
+#ifdef _WIN32
+/* True-Unicode argv on Windows: -municode gives us UTF-16 argv; convert
+ * each element to UTF-8 so the rest of the engine stays byte-clean. */
+static char *wide_to_utf8(const wchar_t *w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    if (n <= 0) return NULL;
+    char *u = (char *)malloc((size_t)n);
+    if (!u) return NULL;
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, u, n, NULL, NULL);
+    return u;
+}
+
+int wmain(int argc, wchar_t **argv) {
+    char **u8 = (char **)calloc((size_t)argc + 1, sizeof(char *));
+    if (!u8) return 2;
+    for (int i = 0; i < argc; i++) {
+        u8[i] = wide_to_utf8(argv[i]);
+        if (!u8[i]) u8[i] = (char *)"";
+    }
+    int rc = engine_main(argc, u8);
+    for (int i = 0; i < argc; i++) free(u8[i]);
+    free(u8);
+    return rc;
+}
+
+#else
+int main(int argc, char **argv) { return engine_main(argc, argv); }
+#endif
+
+static int engine_main(int argc, char **argv) {
 #ifdef _WIN32
     /* Double-clicking the exe in Explorer gives us an empty command line;
      * a console app would flash and vanish (reported as a "crash").

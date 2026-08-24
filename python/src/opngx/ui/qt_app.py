@@ -356,6 +356,15 @@ Full-scale evidence: 50 000/50 000 frames verified pixel-exact
 """
 
 
+def _safe_name(name: str) -> str:
+    """Filename-safe form of a camera/recording name (Windows forbids
+    \\ / : * ? " < > | and trailing dots/spaces)."""
+    for ch in '\\/:*?"<>|':
+        name = name.replace(ch, "_")
+    name = name.rstrip(" .")
+    return name if name else "_"
+
+
 def chip(text: str) -> "QtWidgets.QLabel":
     lbl = QtWidgets.QLabel(text)
     lbl.setObjectName("chip")
@@ -1499,7 +1508,7 @@ class MainWindow(QtWidgets.QMainWindow):
             suggested = os.path.dirname(m.bin_path)
             if m.camera_name:
                 suggested = os.path.join(
-                    suggested, m.camera_name.replace(".", "_") + "_png"
+                    suggested, _safe_name(m.camera_name) + "_png"
                 )
             self.out_edit.setText(suggested)
 
@@ -1568,7 +1577,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     od = (
                         out
                         if len(bins) == 1
-                        else os.path.join(out, stem.replace(".", "_"))
+                        else os.path.join(out, _safe_name(stem))
                     )
                     o = opts
                     self._sig.log.emit(

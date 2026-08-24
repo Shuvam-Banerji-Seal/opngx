@@ -21,7 +21,7 @@
 #define RES_ENGINE 101
 #define RES_STUDIO 102
 #define RES_DOCS   103
-#define APP_VERSION "1.5.3"
+#define APP_VERSION "1.5.4"
 #define APP_NAME    "opngx"
 #define PUBLISHER   "opngx contributors"
 
@@ -142,31 +142,52 @@ static void register_uninstall(void) {
     }
 }
 
+/* User PATH can legitimately exceed 4 KiB; the old fixed-size query then
+ * wrote the TRUNCATED value back, silently destroying the user's PATH.
+ * Query the real size, refuse to touch anything we cannot hold whole. */
+#define OPNGX_PATH_MAX 32768
+
+static int read_user_path(char **out) {
+    DWORD sz = 0;
+    if (RegGetValueA(HKEY_CURRENT_USER, "Environment", "Path",
+                     RRF_RT_REG_EXPAND_SZ | RRF_RT_REG_SZ,
+                     NULL, NULL, &sz) != ERROR_SUCCESS || sz == 0)
+        return 0;
+    if (sz > OPNGX_PATH_MAX) return -1;            /* refuse, protect user */
+    char *buf = (char *)calloc(1, sz + 1);
+    if (!buf) return -1;
+    DWORD got = sz;
+    if (RegGetValueA(HKEY_CURRENT_USER, "Environment", "Path",
+                     RRF_RT_REG_EXPAND_SZ | RRF_RT_REG_SZ,
+                     NULL, buf, &got) != ERROR_SUCCESS) {
+        free(buf);
+        return -1;
+    }
+    *out = buf;
+    return 1;
+}
+
+static void set_user_path(const char *value) {
+    RegSetKeyValueA(HKEY_CURRENT_USER, "Environment", "Path",
+                    REG_EXPAND_SZ, value, (DWORD)(strlen(value) + 1));
+    SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
+                        (LPARAM) "Environment", SMTO_ABORTIFHUNG, 2000, NULL);
+}
+
 static void add_to_user_path(void) {
-    const char *needle = "\\opngx";
-    char cur[4096] = "";
-    DWORD sz = sizeof cur;
-    HKEY h;
-    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Environment", 0,
-                      KEY_QUERY_VALUE, &h) == ERROR_SUCCESS) {
-        DWORD type = 0;
-        RegQueryValueExA(h, "Path", NULL, &type, (BYTE *)cur, &sz);
-        RegCloseKey(h);
-    }
-    if (strstr(cur, needle)) return;               /* already present */
-    char next[4600];
-    if (cur[0]) snprintf(next, sizeof next, "%s;%s", cur, g_install);
-    else        snprintf(next, sizeof next, "%s", g_install);
-    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Environment", 0,
-                      KEY_SET_VALUE, &h) == ERROR_SUCCESS) {
-        RegSetValueExA(h, "Path", 0, REG_EXPAND_SZ, (const BYTE *)next,
-                       (DWORD)(strlen(next) + 1));
-        RegCloseKey(h);
-        /* tell running apps the environment changed */
-        SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
-                            (LPARAM) "Environment", SMTO_ABORTIFHUNG,
-                            2000, NULL);
-    }
+    char *cur = NULL;
+    int rc = read_user_path(&cur);
+    if (rc < 0) return;                            /* too large: leave it */
+    if (rc == 1 && strstr(cur, "\\opngx")) { free(cur); return; }
+    size_t need = (rc == 1 ? strlen(cur) : 0) + strlen(g_install) + 2;
+    if (need > OPNGX_PATH_MAX) { free(cur); return; }
+    char *next = (char *)calloc(1, need);
+    if (!next) { free(cur); return; }
+    if (rc == 1 && cur[0]) snprintf(next, need, "%s;%s", cur, g_install);
+    else                    snprintf(next, need, "%s", g_install);
+    set_user_path(next);
+    free(next);
+    free(cur);
 }
 
 /* --------------------------- shortcuts ----------------------------- */
@@ -243,34 +264,37 @@ static int run_uninstall(void) {
              APP_NAME);
     RegDeleteTreeA(HKEY_CURRENT_USER, key);
 
-    /* strip ourselves from PATH */
-    char cur[4096] = "";
-    DWORD sz = sizeof cur;
-    HKEY h;
-    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Environment", 0,
-                      KEY_QUERY_VALUE, &h) == ERROR_SUCCESS) {
-        RegQueryValueExA(h, "Path", NULL, NULL, (BYTE *)cur, &sz);
-        RegCloseKey(h);
-        char next[4096] = "";
-        char *tok = strtok(cur, ";");
-        int first = 1;
-        while (tok) {
-            if (!strstr(tok, "\\opngx")) {
-                if (!first) strncat(next, ";", sizeof next - strlen(next) - 1);
-                strncat(next, tok, sizeof next - strlen(next) - 1);
-                first = 0;
+    /* strip ourselves from PATH (size-safe: never rewrite a huge PATH) */
+    char *cur = NULL;
+    int prc = read_user_path(&cur);
+    if (prc == 1) {
+        char *next = (char *)calloc(1, strlen(cur) + 2);
+        if (next) {
+            char *tok = strtok(cur, ";");
+            int first = 1;
+            while (tok) {
+                if (!strstr(tok, "\\opngx")) {
+                    if (!first) strncat(next, ";", 1);
+                    strncat(next, tok, strlen(tok));
+                    first = 0;
+                }
+                tok = strtok(NULL, ";");
             }
-            tok = strtok(NULL, ";");
+            if (!first) set_user_path(next);
+            free(next);
         }
-        if (RegOpenKeyExA(HKEY_CURRENT_USER, "Environment", 0,
-                          KEY_SET_VALUE, &h) == ERROR_SUCCESS) {
-            RegSetValueExA(h, "Path", 0, REG_EXPAND_SZ, (const BYTE *)next,
-                           (DWORD)(strlen(next) + 1));
-            RegCloseKey(h);
-        }
+        free(cur);
     }
-    MessageBoxA(NULL, "opngx has been removed.", "Uninstall",
-                MB_OK | MB_ICONINFORMATION);
+    /* if the engine exe is still there it was locked by a running app */
+    char note[160] = "";
+    if (GetFileAttributesA(g_engine_path) != INVALID_HANDLE_VALUE)
+        snprintf(note, sizeof note,
+                 "\n\nNOTE: %s could not be deleted because it is running.\n"
+                 "Close opngx and delete the folder manually.",
+                 g_engine_path);
+    char msg[320];
+    snprintf(msg, sizeof msg, "opngx has been removed.%s", note);
+    MessageBoxA(NULL, msg, "Uninstall", MB_OK | MB_ICONINFORMATION);
     return 0;
 }
 
@@ -298,7 +322,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
 
     if (MessageBoxA(NULL,
         "opngx " APP_VERSION "\n\n"
-        "Fast, pixel-exact Optronis .bin \xE2\x86\x92 PNG extractor.\n\n"
+        "Fast, pixel-exact Optronis .bin -> PNG extractor.\n\n"
         "This will:\n"
         "  1. Install the command-line engine to your user folder\n"
         "     (no admin rights needed)\n"
@@ -332,7 +356,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
             si.cb = sizeof si;
             if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE,
                                CREATE_NO_WINDOW, NULL, g_install, &si, &pi)) {
-                WaitForSingleObject(pi.hProcess, 20000);
+                WaitForSingleObject(pi.hProcess, 60000);
                 CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
             }
             DeleteFileA(docs_zip);

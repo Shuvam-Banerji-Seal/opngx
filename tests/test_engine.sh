@@ -250,6 +250,23 @@ else
 fi
 check "backslash+drive-letter output path (mkdir_p drive skip)"
 
+
+echo "== T-20: non-ASCII (UTF-8) output directory =="
+case "$ENGINE" in
+  *wine*|*.exe) UDIR="$TMP/brow ünïcode" ;;   # wine argv is ACP-mangled
+  *)            UDIR="$TMP/brow ünïcode भीम" ;;  # real Windows: wmain UTF-16 argv
+esac
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+                  --footage "$TMP/fix/cam_9.9/cam_9.9.footage" \
+                  --out "$UDIR" --prefix cam_ -j 4 2>"$TMP/t20err.txt" || \
+                  { cat "$TMP/t20err.txt"; false; }
+[ "$(ls "$UDIR" | wc -l)" -eq 200 ]
+check "UTF-8 output dir: 200 PNGs (wide-API conversion)"
+"$ENGINE" verifybin --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" \
+    "$UDIR" --prefix cam_ --json 2>/dev/null | grep -q '"passed":true'
+check "UTF-8 output dir: verifybin PASS"
+
 echo
 echo "RESULTS: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

@@ -8,11 +8,87 @@
 /* ------------------------------------------------------------------ */
 #ifdef _WIN32
 /* ============================ Windows ============================= */
+#include <io.h>
+#include <fcntl.h>
+
+/* The A-suffixed Win32 APIs use the system ANSI codepage, which is NOT
+ * UTF-8: any non-ASCII path (C:\Users\José, D:\भीम\x.bin) would fail or
+ * mangle. Python hands us UTF-8, so convert explicitly and use the W
+ * APIs everywhere a path crosses into the kernel. */
+static wchar_t *win_wpath(const char *u8) {
+    /* Python hands us UTF-8, but a Windows ANSI `main` argv arrives in the
+     * system codepage. MB_ERR_INVALID_CHARS is essential: without it an
+     * invalid-UTF-8 byte "succeeds" as U+FFFD replacements and the correct
+     * ACP interpretation never gets a chance (found via Wine: open err=3). */
+    UINT cps[2] = { CP_UTF8, CP_ACP };
+    UINT flags[2] = { MB_ERR_INVALID_CHARS, 0 };
+    static int dbg = -1;
+    if (dbg < 0) dbg = getenv("OPNGX_DEBUG_WPATH") ? 1 : 0;
+    for (int i = 0; i < 2; i++) {
+        int n = MultiByteToWideChar(cps[i], flags[i], u8, -1, NULL, 0);
+        if (n <= 0) {
+            if (dbg) fprintf(stderr, "[wpath] cp=%u FAILED err=%lu\n",
+                             (unsigned)cps[i], (unsigned long)GetLastError());
+            continue;
+        }
+        wchar_t *w = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
+        if (!w) return NULL;
+        if (MultiByteToWideChar(cps[i], flags[i], u8, -1, w, n) == n) {
+            if (dbg) {
+                fprintf(stderr, "[wpath] cp=%u n=%d wide:", (unsigned)cps[i], n);
+                for (int k = 0; k < n && k < 24; k++)
+                    fprintf(stderr, " %04x", (unsigned)w[k]);
+                fprintf(stderr, "\n");
+            }
+            return w;
+        }
+        if (dbg) fprintf(stderr, "[wpath] cp=%u second pass failed\n",
+                         (unsigned)cps[i]);
+        free(w);
+    }
+    return NULL;
+}
+
+FILE *port_fopen_u8(const char *path, const char *mode) {
+    /* _wfopen is unreliable (NULL even with a valid wide path on some
+     * Windows/Wine msvcrt combinations). Go through the kernel handle:
+     * CreateFileW -> _open_osfhandle -> _fdopen. */
+    DWORD access = GENERIC_READ;
+    DWORD disp = OPEN_EXISTING;
+    int oflags = _O_RDONLY;
+    if (strchr(mode, 'r')) {
+        if (strchr(mode, '+')) { access |= GENERIC_WRITE; oflags = _O_RDWR; }
+    } else if (strchr(mode, 'a')) {
+        access = GENERIC_WRITE;
+        disp = OPEN_ALWAYS;
+        oflags = _O_WRONLY | _O_CREAT | _O_APPEND;
+    } else { /* 'w' */
+        access = GENERIC_WRITE;
+        disp = CREATE_ALWAYS;
+        oflags = _O_WRONLY | _O_CREAT | _O_TRUNC;
+    }
+    oflags |= strchr(mode, 'b') ? _O_BINARY : _O_TEXT;
+
+    wchar_t *wp = win_wpath(path);
+    if (!wp) return NULL;
+    HANDLE h = CreateFileW(wp, access, FILE_SHARE_READ, NULL, disp,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    free(wp);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    int fd = _open_osfhandle((intptr_t)h, oflags);
+    if (fd < 0) { CloseHandle(h); return NULL; }
+    FILE *fp = _fdopen(fd, mode);
+    if (!fp) _close(fd);
+    return fp;
+}
 
 int port_map_file(const char *path, opngx_mapped_file *out) {
     memset(out, 0, sizeof *out);
-    HANDLE fh = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+    wchar_t *wp = win_wpath(path);
+    if (!wp) return -1;
+    HANDLE fh = CreateFileW(wp, GENERIC_READ, FILE_SHARE_READ, NULL,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(wp);
     if (fh == INVALID_HANDLE_VALUE) return -1;
     LARGE_INTEGER sz;
     if (!GetFileSizeEx(fh, &sz) || sz.QuadPart <= 0) {
@@ -40,8 +116,11 @@ void port_unmap_file(opngx_mapped_file *m) {
 }
 
 int port_write_whole_file(const char *path, const void *buf, size_t n) {
-    HANDLE fh = CreateFileA(path, GENERIC_WRITE, 0, NULL,
+    wchar_t *wp = win_wpath(path);
+    if (!wp) return -1;
+    HANDLE fh = CreateFileW(wp, GENERIC_WRITE, 0, NULL,
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(wp);
     if (fh == INVALID_HANDLE_VALUE) return -1;
     size_t off = 0;
     while (off < n) {
@@ -66,18 +145,28 @@ int port_mkdir_p(const char *path) {
     for (char *q = tmp + 1; *q; q++)
         if (*q == '/' || *q == '\\') {
             char keep = *q; *q = '\0';
-            /* skip drive components ("X:") and empty ones — CreateDirectoryA
+            /* skip drive components ("X:") and empty ones — CreateDirectory
              * on a drive root returns an error that is NOT ALREADY_EXISTS,
              * which made every absolute-Windows-path output dir fail
              * (the field-reported SQ_100_s1 bug) */
-            if (!(q - tmp == 2 && tmp[1] == ':') && q != tmp + 1)
-                if (!CreateDirectoryA(tmp, NULL) &&
-                    GetLastError() != ERROR_ALREADY_EXISTS)
+            if (!(q - tmp == 2 && tmp[1] == ':') && q != tmp + 1) {
+                wchar_t *wc = win_wpath(tmp);
+                if (!wc) return -1;
+                BOOL okc = CreateDirectoryW(wc, NULL);
+                free(wc);
+                if (!okc && GetLastError() != ERROR_ALREADY_EXISTS)
                     return -1;
+            }
             *q = keep;
         }
-    if (!CreateDirectoryA(tmp, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
-        return -1;
+    {
+        wchar_t *wc = win_wpath(tmp);
+        if (!wc) return -1;
+        BOOL okc = CreateDirectoryW(wc, NULL);
+        free(wc);
+        if (!okc && GetLastError() != ERROR_ALREADY_EXISTS)
+            return -1;
+    }
     return 0;
 }
 
@@ -99,20 +188,102 @@ int port_detect_gpus(char *buf, size_t cap) {
     return found;
 }
 
+
+/* ---------------- UTF-8 directory enumeration (Win32) ---------------- */
+struct port_dir {
+    HANDLE h;
+    char *utf8_cur;                 /* entry RETURNED to the caller */
+    char *utf8_next;                /* pre-read ahead entry         */
+    int done;
+};
+
+port_dir *port_opendir(const char *u8path) {
+    wchar_t *wp = win_wpath(u8path);
+    if (!wp) return NULL;
+    size_t wl = wcslen(wp);
+    wchar_t *pattern = (wchar_t *)malloc((wl + 3) * sizeof(wchar_t));
+    if (!pattern) { free(wp); return NULL; }
+    memcpy(pattern, wp, wl * sizeof(wchar_t));
+    pattern[wl] = L'\\'; pattern[wl + 1] = L'*'; pattern[wl + 2] = 0;
+    port_dir *d = (port_dir *)calloc(1, sizeof *d);
+    if (!d) { free(pattern); free(wp); return NULL; }
+    d->utf8_cur = (char *)calloc(1, 1024);
+    d->utf8_next = (char *)calloc(1, 1024);
+    if (!d->utf8_cur || !d->utf8_next) {
+        free(d->utf8_cur); free(d->utf8_next);
+        free(d); free(pattern); free(wp);
+        return NULL;
+    }
+    WIN32_FIND_DATAW fd;
+    d->h = FindFirstFileW(pattern, &fd);
+    free(pattern);
+    free(wp);
+    if (d->h == INVALID_HANDLE_VALUE) {
+        free(d->utf8_cur); free(d->utf8_next); free(d);
+        return NULL;
+    }
+    WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1,
+                        d->utf8_cur, 1024, NULL, NULL);
+    return d;
+}
+
+const char *port_readdir_utf8(port_dir *d) {
+    if (!d || d->done) return NULL;
+    char *rv = d->utf8_cur;         /* the entry we promise to return */
+    if (d->h == INVALID_HANDLE_VALUE) { d->done = 1; return NULL; }
+    WIN32_FIND_DATAW fd;
+    if (!FindNextFileW(d->h, &fd)) {
+        FindClose(d->h);
+        d->h = INVALID_HANDLE_VALUE;
+        d->done = 1;
+        return rv;                  /* last entry; next call -> NULL */
+    }
+    /* decode the NEXT entry into the spare buffer, then swap roles —
+     * writing into utf8_cur would clobber the string we just returned */
+    WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1,
+                        d->utf8_next, 1024, NULL, NULL);
+    char *tmp = d->utf8_cur;
+    d->utf8_cur = d->utf8_next;
+    d->utf8_next = tmp;
+    return rv;
+}
+
+void port_closedir(port_dir *d) {
+    if (!d) return;
+    if (d->h != INVALID_HANDLE_VALUE) FindClose(d->h);
+    free(d->utf8_cur);
+    free(d->utf8_next);
+    free(d);
+}
+
 int port_remove_flat_dir(const char *path) {
-    WIN32_FIND_DATAA fd;
-    char pattern[1100];
-    snprintf(pattern, sizeof pattern, "%s\\*", path);
-    HANDLE h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) return -1;
+    wchar_t *wp = win_wpath(path);
+    if (!wp) return -1;
+    size_t wl = wcslen(wp);
+    wchar_t *pattern = (wchar_t *)malloc((wl + 3) * sizeof(wchar_t));
+    if (!pattern) { free(wp); return -1; }
+    memcpy(pattern, wp, wl * sizeof(wchar_t));
+    pattern[wl] = L'\\'; pattern[wl + 1] = L'*'; pattern[wl + 2] = 0;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pattern, &fd);
+    free(pattern);
+    if (h == INVALID_HANDLE_VALUE) { free(wp); return -1; }
     do {
-        if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
-        char full[1200];
-        snprintf(full, sizeof full, "%s\\%s", path, fd.cFileName);
-        DeleteFileA(full);
-    } while (FindNextFileA(h, &fd));
+        if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L".."))
+            continue;
+        wchar_t *full = (wchar_t *)malloc((wl + 2 + wcslen(fd.cFileName) + 1)
+                                          * sizeof(wchar_t));
+        if (!full) continue;
+        memcpy(full, wp, wl * sizeof(wchar_t));
+        full[wl] = L'\\';
+        wcscpy(full + wl + 1, fd.cFileName);
+        DeleteFileW(full);
+        free(full);
+    } while (FindNextFileW(h, &fd));
     FindClose(h);
-    return RemoveDirectoryA(path) ? 0 : -1;
+    BOOL removed = RemoveDirectoryW(wp);
+    free(wp);
+    return removed ? 0 : -1;
 }
 
 
@@ -173,6 +344,37 @@ int port_cpu_count(void) {
 #else
 /* ========================= POSIX / Linux / macOS ==================== */
 #include <stdlib.h>
+#include <dirent.h>
+
+struct port_dir {
+    DIR *dp;
+    char name[1024];
+};
+
+port_dir *port_opendir(const char *u8path) {
+    DIR *dp = opendir(u8path);
+    if (!dp) return NULL;
+    port_dir *d = (port_dir *)calloc(1, sizeof *d);
+    if (!d) { closedir(dp); return NULL; }
+    d->dp = dp;
+    return d;
+}
+
+const char *port_readdir_utf8(port_dir *d) {
+    if (!d) return NULL;
+    struct dirent *e = readdir(d->dp);
+    if (!e) return NULL;
+    snprintf(d->name, sizeof d->name, "%s", e->d_name);
+    return d->name;
+}
+
+void port_closedir(port_dir *d) {
+    if (!d) return;
+    if (d->dp) closedir(d->dp);
+    free(d);
+}
+
+
 #include <time.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -219,6 +421,10 @@ int port_write_whole_file(const char *path, const void *buf, size_t n) {
     }
     close(fd);
     return 0;
+}
+
+FILE *port_fopen_u8(const char *path, const char *mode) {
+    return fopen(path, mode);   /* POSIX paths are bytes already */
 }
 
 static int mkdir_posix(const char *p) { return mkdir(p, 0755); }

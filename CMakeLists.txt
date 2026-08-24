@@ -77,7 +77,7 @@ opngx_apply_backend(opngx-engine)
 
 if(WIN32)
   # fully static CLI: no runtime DLL hunting whatsoever
-  target_link_options(opngx-engine PRIVATE -static -static-libgcc)
+  target_link_options(opngx-engine PRIVATE -static -static-libgcc -municode)
 endif()
 
 # ---------- shared library for Python bindings ----------
