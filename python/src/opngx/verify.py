@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,16 +28,35 @@ class VerifyReport:
 
 
 def _engine_binary() -> str | None:
-    """Locate the opngx-engine CLI for native-speed verification."""
+    """Locate the opngx-engine CLI for native-speed verification.
+
+    Windows-aware: the packaged studio bundles opngx-engine.exe next to
+    libopngx.dll (inside _MEIPASS for onefile builds), and the installed
+    setup puts it on PATH — so check all of those, with and without .exe.
+    """
+    import sys
+
     from ._engine import library_path
 
+    cands: list[Path] = []
+    names = ("opngx-engine.exe", "opngx-engine")
     lp = library_path()
     if lp:
-        cand = Path(lp).parent / "opngx-engine"
-        if cand.exists():
-            return str(cand)
-    env = Path(__file__).resolve().parents[3] / "build" / "opngx-engine"
-    return str(env) if env.exists() else None
+        here = Path(lp).parent
+        cands += [here / n for n in names]
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        cands += [Path(mei) / n for n in names]
+    try:
+        cands += [Path(sys.executable).resolve().parent / n for n in names]
+    except Exception:
+        pass
+    env = Path(__file__).resolve().parents[3] / "build"
+    cands += [env / n for n in names]
+    for c in cands:
+        if c.exists():
+            return str(c)
+    return shutil.which("opngx-engine")
 
 
 def verify_against_bin(

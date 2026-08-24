@@ -52,6 +52,7 @@ jobs:
           python -m pip install --quiet pyinstaller numpy pillow PySide6 imageio-ffmpeg
           pip install --quiet "./python[qt]"
           Copy-Item build-win/libopngx.dll .
+          Copy-Item build-win/opngx-engine.exe .
           pyinstaller --noconfirm opngx.spec
 
       - name: UI selftest — construct MainWindow inside the packaged exe
@@ -65,6 +66,36 @@ jobs:
           $env:OPNGX_SELFTEST_LOG = $log
           $p = Start-Process -FilePath "dist\opngx-studio.exe" `
                  -ArgumentList "--selftest-ui" -Wait -PassThru -NoNewWindow
+          "exit code: 0x{0:X8} ({0})" -f $p.ExitCode
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written)" }
+          exit $p.ExitCode
+
+      - name: Engine selftest — native extract + bundled verifybin in the exe
+        shell: pwsh
+        env:
+          OPNGX_SELFTEST_LOG: selftest-engine.log
+        run: |
+          # Regression for the user Windows failure: native extract must
+          # succeed and the BUNDLED engine CLI must verify it (SQ_100 case)
+          $log = Join-Path $PWD "selftest-engine.log"
+          $env:OPNGX_SELFTEST_LOG = $log
+          $p = Start-Process -FilePath "dist\opngx-studio.exe" `
+                 -ArgumentList "--selftest-engine" -Wait -PassThru -NoNewWindow
+          "exit code: 0x{0:X8} ({0})" -f $p.ExitCode
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written)" }
+          exit $p.ExitCode
+
+      - name: Video selftest — bundled ffmpeg renders inside the exe
+        shell: pwsh
+        env:
+          OPNGX_SELFTEST_LOG: selftest-video.log
+        run: |
+          # Regression for "The system cannot find the file specified":
+          # render_video must use the BUNDLED ffmpeg, not PATH "ffmpeg"
+          $log = Join-Path $PWD "selftest-video.log"
+          $env:OPNGX_SELFTEST_LOG = $log
+          $p = Start-Process -FilePath "dist\opngx-studio.exe" `
+                 -ArgumentList "--selftest-video" -Wait -PassThru -NoNewWindow
           "exit code: 0x{0:X8} ({0})" -f $p.ExitCode
           if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written)" }
           exit $p.ExitCode

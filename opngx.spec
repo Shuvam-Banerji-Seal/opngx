@@ -23,6 +23,12 @@ except Exception:
     pass
 
 binaries = [(dll, ".")] if os.path.exists(dll) else []
+
+# bundle the CLI engine so the portable studio is self-contained:
+# verify_against_bin / verifybin work with zero external files
+engine_exe = os.path.join(root, "build-win", "opngx-engine.exe")
+if os.path.exists(engine_exe):
+    binaries.append((engine_exe, "."))
 if ffbin:
     # bundle under a flat, predictable name so resolve_ffmpeg can find it
     import shutil as _sh

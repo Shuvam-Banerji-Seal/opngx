@@ -427,7 +427,20 @@ int opngx_job_run(opngx_job *j) {
         j->p.progress_fn(j->stats.frames_written, N, j->p.progress_user);
 
     if (hard_fail) {
-        snprintf(j->err, sizeof j->err, "extraction failed (mask 0x%x): see errno messages above", hard_fail);
+        const char *what =
+            (hard_fail & 16) ? "encoder buffer/encode failure" :
+            (hard_fail & 8)  ? "file write failure (disk full? permission? "
+                               "output path unavailable?)" :
+            (hard_fail & 4)  ? "zlib container wrap failure" :
+            (hard_fail & 2)  ? "deflate compression failure" :
+            (hard_fail & 1)  ? "worker buffer allocation failure (out of memory)"
+                             : "unknown worker error";
+        snprintf(j->err, sizeof j->err,
+                 "extraction aborted: %s (mask 0x%x, %lld frame(s) written "
+                 "of %lld). Output dir: %.260s",
+                 what, hard_fail,
+                 (long long)j->stats.frames_written, (long long)N,
+                 j->out_dir ? j->out_dir : "");
         return -1;
     }
     if (atomic_load(&j->cancel)) return 2; /* cancelled */

@@ -383,7 +383,7 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("opngx studio")
         self.resize(1180, 800)
-        self.setMinimumSize(980, 680)
+        self.setMinimumSize(760, 520)
         self.setAcceptDrops(True)
 
         self.meta: Optional[opngx.FootageMetadata] = None
@@ -915,7 +915,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tip(obrowse, "Choose…", "Select the output directory.")
         self.fmt_combo.currentTextChanged.connect(self._fmt_changed)
 
-        split.addWidget(left)
+        # 720p laptops / scaled 4K displays: never clip the settings —
+        # the whole left column scrolls instead
+        left_scroll = QtWidgets.QScrollArea()
+        left_scroll.setWidget(left)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        split.addWidget(left_scroll)
 
         # ===== right column =====
         right = QtWidgets.QWidget()

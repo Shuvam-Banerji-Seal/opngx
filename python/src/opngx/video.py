@@ -196,8 +196,17 @@ def render_video(
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
+    # CRITICAL: use the RESOLVED ffmpeg (bundled _MEIPASS copy, app dir,
+    # or PATH). Passing the bare name "ffmpeg" made Windows fail with
+    # WinError 2 "The system cannot find the file specified" whenever the
+    # user had no ffmpeg on PATH — even though the installer bundles one.
+    ffmpeg_bin = resolve_ffmpeg()
+    if not ffmpeg_bin:
+        raise RuntimeError(
+            "ffmpeg was not found (bundled copy missing and not on PATH).\n"
+            "Reinstall opngx, or install ffmpeg and try again.")
     cmd = [
-        "ffmpeg",
+        ffmpeg_bin,
         "-y",
         "-loglevel",
         "error",

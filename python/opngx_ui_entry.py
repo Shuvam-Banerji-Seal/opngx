@@ -73,6 +73,73 @@ def _debug_ffmpeg():
     return 0
 
 
+def _selftest_log():
+    """Windowed (console=False) exes have no stdout on Windows — route
+    everything (incl. C-level output) into OPNGX_SELFTEST_LOG."""
+    import os
+    import sys
+
+    log_path = os.environ.get("OPNGX_SELFTEST_LOG", "selftest-ui.log")
+    logf = open(log_path, "w", buffering=1)
+    try:
+        os.dup2(logf.fileno(), 1)
+        os.dup2(logf.fileno(), 2)
+    except OSError:
+        pass
+    sys.stdout = sys.stderr = logf
+    return logf
+
+
+def _selftest_engine() -> int:
+    """Full native round-trip INSIDE the packaged exe:
+    synthesize a recording -> extract via the ctypes engine -> verify with
+    the bundled opngx-engine CLI (verifybin). Proves the exact chain that
+    failed on user Windows machines (SQ_100_s1 case)."""
+    import os
+    import struct
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    logf = _selftest_log()
+    print("SELFTEST-ENGINE start")
+    try:
+        from opngx._engine import load_library
+        from opngx.verify import _engine_binary, verify_against_bin
+
+        assert load_library() is not None, "libopngx did not load"
+        w, h, n = 64, 48, 30
+        rng = np.random.default_rng(11)
+        d = Path(tempfile.mkdtemp(prefix="opngx_eng_selftest_"))
+        binp = d / "SQ_100_s1.bin"
+        with open(binp, "wb") as f:
+            for i in range(n):
+                f.write(struct.pack("<Q", 5_000_000 + i * 2000))
+                f.write(rng.integers(0, 256, size=(h * w), dtype=np.uint8).tobytes())
+        out = d / "SQ_100_s1_png"          # spaces-free but real subdir
+        from opngx.extractor import Extractor
+
+        st = Extractor(str(binp), width=w, height=h).extract(
+            str(out), mode="raw", jobs=2, prefix="SQ_100_")
+        assert st.frames_written == n, f"extract wrote {st.frames_written}"
+        eng = _engine_binary()
+        assert eng, "bundled opngx-engine CLI not found"
+        print(f"engine cli: {eng}")
+        rep = verify_against_bin(str(binp), str(out), mode="raw",
+                                 width=w, height=h, prefix="SQ_100_")
+        assert rep.passed, rep.first_error
+        print(f"SELFTEST-ENGINE PASS ({n} frames verified vs source bin)")
+        return 0
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        print("SELFTEST-ENGINE FAIL")
+        return 1
+    finally:
+        logf.flush()
+
+
 def _selftest_ui() -> int:
     """Construct the full studio offscreen inside the packaged exe.
 
@@ -86,18 +153,9 @@ def _selftest_ui() -> int:
     (OPNGX_SELFTEST_LOG, default selftest-ui.log) that CI prints.
     """
     import os
-    import sys
     import traceback
 
-    log_path = os.environ.get("OPNGX_SELFTEST_LOG", "selftest-ui.log")
-    logf = open(log_path, "w", buffering=1)
-    try:
-        os.dup2(logf.fileno(), 1)
-        os.dup2(logf.fileno(), 2)
-    except OSError:
-        pass
-    sys.stdout = sys.stderr = logf
-
+    logf = _selftest_log()
     print(f"SELFTEST-UI start (pid={os.getpid()})")
 
     from PySide6 import QtWidgets  # noqa: PLC0415
@@ -161,6 +219,8 @@ if __name__ == "__main__":
         raise SystemExit(_selftest_video())
     if "--selftest-ui" in sys.argv:
         raise SystemExit(_selftest_ui())
+    if "--selftest-engine" in sys.argv:
+        raise SystemExit(_selftest_engine())
     from opngx.ui import main  # noqa: E402
 
     raise SystemExit(main())

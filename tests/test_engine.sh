@@ -220,6 +220,20 @@ done
 [ $ok -eq 1 ]
 check "--start 100 --frames 50 produces byte-identical slice of full run"
 
+
+echo "== T-18: output directory containing spaces (Windows-user pattern) =="
+SPDIR="$TMP/Download 10-02-2025"
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+                  --footage "$TMP/fix/cam_9.9/cam_9.9.footage" \
+                  --out "$SPDIR/SQ_100_s1_png" --prefix SQ_100_ --timestamps -j 4 2>/dev/null
+[ "$(ls "$SPDIR/SQ_100_s1_png" | wc -l)" -eq 201 ]
+check "spaces in output path: 200 PNGs + timestamps CSV"
+"$ENGINE" verifybin --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" \
+    "$SPDIR/SQ_100_s1_png" --prefix SQ_100_ --json 2>/dev/null | grep -q '"passed":true'
+check "spaces in output path: verifybin PASS"
+
 echo
 echo "RESULTS: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]
+

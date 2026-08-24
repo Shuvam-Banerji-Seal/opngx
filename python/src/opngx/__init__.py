@@ -14,7 +14,7 @@ from .quality import QualityMode
 from .verify import VerifyReport, verify, verify_against_bin
 from .video import render_video, read_frame_gray, ffmpeg_available
 
-__version__ = "1.5.2"
+__version__ = "1.5.3"
 
 
 def engine_diagnostics() -> list[str]:

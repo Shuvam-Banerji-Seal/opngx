@@ -49,9 +49,14 @@ class Extractor:
     Uses the native engine when available; falls back to a numpy/zlib engine.
     """
 
-    def __init__(self, bin_path: str | Path,
-                 footage_path: str | Path | None = None,
-                 *, width: int = 0, height: int = 0):
+    def __init__(
+        self,
+        bin_path: str | Path,
+        footage_path: str | Path | None = None,
+        *,
+        width: int = 0,
+        height: int = 0,
+    ):
         self.meta: FootageMetadata = probe(bin_path, footage_path)
         # manual geometry override — for recordings without a .footage
         # sidecar the user supplies width/height (remembered by the UI)
@@ -59,8 +64,7 @@ class Extractor:
             self.meta.width = int(width)
             self.meta.height = int(height)
             self.meta.frame_stride = 8 + self.meta.width * self.meta.height
-            self.meta.capacity_frames = (
-                self.meta.file_size // self.meta.frame_stride)
+            self.meta.capacity_frames = self.meta.file_size // self.meta.frame_stride
 
     # ------------------------------------------------------------------ #
     def extract(
@@ -73,7 +77,7 @@ class Extractor:
         gamma: Optional[float] = None,
         bit_depth: int = 8,
         channels: int = 6,  # 6 RGBA or 0 grayscale fast path
-        fmt: str = "png",   # png | bmp | tif | jpg
+        fmt: str = "png",  # png | bmp | tif | jpg
         jpeg_quality: int = 90,
         backend: str = "auto",  # auto | libdeflate | zlib
         jobs: int = 0,
@@ -192,19 +196,22 @@ class Extractor:
         p.gamma = gamma
         p.bit_depth = bit_depth
         p.channels = channels
-        p.format = {"png": 0, "bmp": 1, "tif": 2, "tiff": 2,
-                    "jpg": 3, "jpeg": 3}.get(str(fmt).lower(), 0)
+        p.format = {"png": 0, "bmp": 1, "tif": 2, "tiff": 2, "jpg": 3, "jpeg": 3}.get(
+            str(fmt).lower(), 0
+        )
         p.jpeg_quality = jpeg_quality
         if p.format != 0:
-            p.bit_depth = min(p.bit_depth, 8)   # 16-bit container is PNG-only
+            p.bit_depth = min(p.bit_depth, 8)  # 16-bit container is PNG-only
         p.out_dir = str(out_dir).encode()
         p.prefix = prefix.encode()
-        p.ext = ("" if (ext == ".Png" and str(fmt).lower() != "png")
-                 else ext.encode())
+        p.ext = "" if (ext == ".Png" and str(fmt).lower() != "png") else ext.encode()
         p.jobs = jobs or os.cpu_count() or 1
         p.level = level
-        p.backend = {"auto": BACKEND_AUTO, "libdeflate": BACKEND_LIBDEFLATE,
-                     "zlib": BACKEND_ZLIB}.get(backend, BACKEND_AUTO)
+        p.backend = {
+            "auto": BACKEND_AUTO,
+            "libdeflate": BACKEND_LIBDEFLATE,
+            "zlib": BACKEND_ZLIB,
+        }.get(backend, BACKEND_AUTO)
         p.export_timestamps = int(export_timestamps)
         p.export_metadata = int(export_metadata)
         p.verbose = 0
@@ -269,8 +276,21 @@ class Extractor:
             if rc == 2:
                 result.cancelled = True
             elif rc != 0:
+                # run-phase failures live in the job's OWN error string —
+                # the create-time buffer is empty here, which produced the
+                # useless "native run failed: unknown" on Windows.
+                job_err = ""
+                try:
+                    raw = lib.opngx_job_errstr(job)
+                    if raw:
+                        job_err = raw.decode(errors="replace")
+                except Exception:
+                    pass
+                if not job_err:
+                    job_err = err.value.decode(errors="replace")
+                detail = f" (rc={rc})" if rc not in (0, 1) else ""
                 raise RuntimeError(
-                    f"native run failed: {err.value.decode() or 'unknown'}"
+                    f"native run failed{detail}: {job_err or 'no detail from engine'}"
                 )
             return result
         finally:
