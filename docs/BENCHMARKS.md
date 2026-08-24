@@ -75,6 +75,36 @@ Two honest observations:
 Thread scaling at L6 on this bin: 4→1190 · 8→1750 · 12→2034 · 16→2046 fps
 (saturates around physical cores; SMT adds little once deflate caches fill).
 
+## v1.6.1 — SIMD checksums (libdeflate crc32/adler32)
+
+The zlib container's adler32 runs over the UNCOMPRESSED scanlines
+(76–307 KB/frame) and the IDAT CRC over the compressed block — both were
+table-driven. Delegating to libdeflate's SIMD checksums (byte-identical
+output, same algorithms) moved the burst tiers hard (brow_1_4, 4000
+frames, j16, best-of-2):
+
+| config | v1.6.0 | v1.6.1 | gain |
+|---|---:|---:|---:|
+| L1 gray  | 5610 fps | **8557 fps** | **+53%** |
+| L1 rgba  | 2796 fps | **3535 fps** | **+26%** |
+| L6 gray  | 2135 fps | **2518 fps** | **+18%** |
+| L6 rgba  |  983 fps |  1009 fps |  +3% |
+
+## Storage bottleneck experiment (v1.6.1)
+
+NVMe vs tmpfs, same runs — the disk is NOT the bottleneck at any tier:
+
+| config | NVMe | tmpfs |
+|---|---:|---:|
+| L6 rgba | 983 | 983 |
+| L6 gray | 2135 | 2128 |
+| L1 rgba | 2796 | 2846 |
+| L1 gray | 5610 | 5774 |
+
+Raw sequential bin read: ~1.5 GB/s; 2000×55 KB file creation: ~9 300
+files/s — both far above every extract tier. Memory: mmap read-only +
+per-worker steady-state buffers (zero per-frame allocation since v1.5).
+
 ## Full-bin production run
 
 ```

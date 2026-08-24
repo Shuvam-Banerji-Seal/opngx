@@ -2,9 +2,19 @@
 #include "pngout.h"
 #include <string.h>
 
+#if defined(OPNGX_HAVE_LIBDEFLATE)
+#include <libdeflate.h>
+/* libdeflate's checksums are SIMD-accelerated (PCLMULQDQ CRC / vector
+ * adler). At burst speeds the table-driven versions below were costing
+ * up to ~25% of the per-frame budget, so when libdeflate is linked we
+ * delegate — outputs stay byte-identical (same algorithms/semantics). */
+#endif
+
+#if !defined(OPNGX_HAVE_LIBDEFLATE)
 /* ---------- CRC32 (PNG polynomial, reflected) ----------
  * Table is a compile-time constant: no lazy-init race between worker
- * threads inside the OpenMP loop. */
+ * threads. Only compiled for the zlib-fallback build (libdeflate
+ * builds delegate to libdeflate_crc32). */
 static const uint32_t crc_table[256] = {
     0x00000000u, 0x77073096u, 0xEE0E612Cu, 0x990951BAu, 0x076DC419u, 0x706AF48Fu, 0xE963A535u, 0x9E6495A3u,
     0x0EDB8832u, 0x79DCB8A4u, 0xE0D5E91Eu, 0x97D2D988u, 0x09B64C2Bu, 0x7EB17CBDu, 0xE7B82D07u, 0x90BF1D91u,
@@ -39,17 +49,25 @@ static const uint32_t crc_table[256] = {
     0xBDBDF21Cu, 0xCABAC28Au, 0x53B39330u, 0x24B4A3A6u, 0xBAD03605u, 0xCDD70693u, 0x54DE5729u, 0x23D967BFu,
     0xB3667A2Eu, 0xC4614AB8u, 0x5D681B02u, 0x2A6F2B94u, 0xB40BBE37u, 0xC30C8EA1u, 0x5A05DF1Bu, 0x2D02EF8Du,
 };
+#endif /* !OPNGX_HAVE_LIBDEFLATE */
 
 uint32_t opngx_crc32(uint32_t crc, const void *buf, size_t len) {
+#if defined(OPNGX_HAVE_LIBDEFLATE)
+    return (uint32_t)libdeflate_crc32(crc, buf, len);
+#else
     const uint8_t *p = (const uint8_t *)buf;
     crc ^= 0xFFFFFFFFu;
     for (size_t i = 0; i < len; i++)
         crc = crc_table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
     return crc ^ 0xFFFFFFFFu;
+#endif
 }
 
 /* ---------- Adler-32 (zlib trailer), NMAX-blocked ---------- */
 uint32_t opngx_adler32(const void *buf, size_t len) {
+#if defined(OPNGX_HAVE_LIBDEFLATE)
+    return (uint32_t)libdeflate_adler32(1, buf, len);
+#else
     const uint8_t *p = (const uint8_t *)buf;
     uint32_t a = 1, b = 0;
     while (len) {
@@ -60,6 +78,7 @@ uint32_t opngx_adler32(const void *buf, size_t len) {
         b %= 65521u;
     }
     return (b << 16) | a;
+#endif
 }
 
 /* ---------- chunk helpers ---------- */
