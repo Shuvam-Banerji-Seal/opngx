@@ -267,6 +267,25 @@ check "UTF-8 output dir: 200 PNGs (wide-API conversion)"
     "$UDIR" --prefix cam_ --json 2>/dev/null | grep -q '"passed":true'
 check "UTF-8 output dir: verifybin PASS"
 
+
+echo "== T-21: batch --layout format (v1.6 tree: <out>/<stem>/<FMT>/) =="
+mkdir -p "$TMP/batch16"
+"$ENGINE" batch --in-dir "$TMP/fix" --out-root "$TMP/batch16" \
+    --layout format --format jpg --prefix cam_ -j 4 2>/dev/null
+[ -d "$TMP/batch16/cam_9_9/JPG" ]
+[ "$(ls "$TMP/batch16/cam_9_9/JPG" | wc -l)" -eq 200 ]
+check "batch layout=format: 200 JPGs under cam_9_9/JPG"
+python3 -c "
+from PIL import Image
+im = Image.open('$TMP/batch16/cam_9_9/JPG/cam_00000.jpg')
+assert im.size == (64, 48)
+"
+check "batch layout=format: JPG decodes at fixture geometry"
+mkdir -p "$TMP/batch16flat"
+"$ENGINE" batch --in-dir "$TMP/fix" --out-root "$TMP/batch16flat" --prefix cam_ -j 4 2>/dev/null
+[ "$(ls "$TMP/batch16flat/cam_9_9" | wc -l)" -eq 200 ]
+check "batch layout=flat (default): back-compat 200 PNGs"
+
 echo
 echo "RESULTS: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

@@ -31,7 +31,8 @@ static void usage(void) {
 "\n"
 "Usage:\n"
 "  opngx-engine extract --bin FILE [--footage FILE] --out DIR [options]\n"
-"  opngx-engine batch   --in-dir DIR --out-root DIR [options]\n"
+"  opngx-engine batch   --in-dir DIR --out-root DIR [--layout flat|format]\n"
+"                       [--format png|jpg|bmp|tif] [options]\n"
 "  opngx-engine verify  REF_DIR OUT_DIR [--prefix brow] [--ext .Png]\n"
 "  opngx-engine verifybin --bin FILE OUT_DIR [--footage F] [-m MODE]\n"
 "                       [--prefix brow_] [--ext .Png] [--json]\n"
@@ -205,6 +206,8 @@ static int cmd_batch(int argc, char **argv) {
     int jobs = opngx_cpu_count(), level = 6;
     int timestamps = 0, metadata = 0;
     const char *mode_s = "reference";
+    const char *fmt_s = "png";
+    int layout_format = 0;   /* v1.6: <out>/<stem>/<FMT>/ instead of flat */
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--in-dir")) indir = argv[++i];
@@ -213,6 +216,13 @@ static int cmd_batch(int argc, char **argv) {
         else if (!strcmp(a, "--jobs") || !strcmp(a, "-j")) jobs = atoi(argv[++i]);
         else if (!strcmp(a, "--level") || !strcmp(a, "-l")) level = atoi(argv[++i]);
         else if (!strcmp(a, "--mode") || !strcmp(a, "-m")) mode_s = argv[++i];
+        else if (!strcmp(a, "--format") || !strcmp(a, "-F")) fmt_s = argv[++i];
+        else if (!strcmp(a, "--layout")) {
+            ++i;
+            if (!strcmp(argv[i], "format")) layout_format = 1;
+            else if (!strcmp(argv[i], "flat")) layout_format = 0;
+            else { fprintf(stderr, "bad layout: %s (flat|format)\n", argv[i]); return 2; }
+        }
         else if (!strcmp(a, "--timestamps")) timestamps = 1;
         else if (!strcmp(a, "--metadata")) metadata = 1;
         else { fprintf(stderr, "unknown option: %s\n", a); return 2; }
@@ -220,6 +230,17 @@ static int cmd_batch(int argc, char **argv) {
     if (!indir || !outroot) { usage(); return 2; }
     opngx_mode mode;
     if (parse_mode(mode_s, &mode)) { fprintf(stderr, "bad mode\n"); return 2; }
+    int fmt = OPNGX_FMT_PNG;
+    const char *fmt_dir = "PNG", *fmt_ext = ".Png";
+    if (!strcasecmp(fmt_s, "jpg") || !strcasecmp(fmt_s, "jpeg")) {
+        fmt = OPNGX_FMT_JPG; fmt_dir = "JPG"; fmt_ext = ".jpg";
+    } else if (!strcasecmp(fmt_s, "bmp")) {
+        fmt = OPNGX_FMT_BMP; fmt_dir = "BMP"; fmt_ext = ".bmp";
+    } else if (!strcasecmp(fmt_s, "tif") || !strcasecmp(fmt_s, "tiff")) {
+        fmt = OPNGX_FMT_TIF; fmt_dir = "TIF"; fmt_ext = ".tif";
+    } else if (!strcasecmp(fmt_s, "png")) {
+        /* defaults above */
+    } else { fprintf(stderr, "bad format: %s\n", fmt_s); return 2; }
 
     port_dir *d = port_opendir(indir);
     if (!d) { perror("opendir"); return 1; }
@@ -255,8 +276,13 @@ static int cmd_batch(int argc, char **argv) {
         snprintf(foot, sizeof foot, "%.1190s.footage", stem);
         /* dir name: basename with '.' -> '_' */
         const char *base = strrchr(stem, '/'); base = base ? base+1 : stem;
-        snprintf(outdir, sizeof outdir, "%.1000s/%.180s", outroot, base);
-        for (char *q = outdir + strlen(outroot) + 1; *q; q++) if (*q == '.') *q = '_';
+        if (layout_format)
+            snprintf(outdir, sizeof outdir, "%.900s/%.180s/%s",
+                     outroot, base, fmt_dir);
+        else
+            snprintf(outdir, sizeof outdir, "%.1000s/%.180s", outroot, base);
+        for (char *q = outdir + strlen(outroot) + 1; *q; q++)
+            if (*q == '.') *q = '_';
 
         fprintf(stderr, "opngx: batch %d/%d: %s -> %s\n", k+1, nbins, bins[k], outdir);
         opngx_params p; memset(&p, 0, sizeof p);
@@ -265,6 +291,8 @@ static int cmd_batch(int argc, char **argv) {
         p.mode = mode; p.jobs = jobs; p.level = level; p.backend = OPNGX_BACKEND_AUTO;
         p.bit_depth = 8; p.gamma = 1.0;
         p.channels = 6;
+        p.format = fmt;
+        if (!prefix) p.ext = fmt_ext;
         p.num_frames = -1; p.frame_stride = -1;
         p.export_timestamps = timestamps; p.export_metadata = metadata;
 

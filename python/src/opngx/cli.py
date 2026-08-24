@@ -149,12 +149,16 @@ def main(argv: list[str] | None = None) -> int:
                 if k in extras:
                     print(f"{k}: {extras[k]}")
             if m.frames_match is not None:
-                print(f"frames xml vs file: {m.num_images} vs "
-                      f"{m.capacity_frames} "
-                      f"({'match' if m.frames_match else 'MISMATCH'})")
+                print(
+                    f"frames xml vs file: {m.num_images} vs "
+                    f"{m.capacity_frames} "
+                    f"({'match' if m.frames_match else 'MISMATCH'})"
+                )
             if m.span_s:
-                print(f"clock span: {m.span_s:,.3f} s "
-                      f"(us ticks) -> effective {m.effective_fps_us:,.2f} fps")
+                print(
+                    f"clock span: {m.span_s:,.3f} s "
+                    f"(us ticks) -> effective {m.effective_fps_us:,.2f} fps"
+                )
             if extras:
                 others = [
                     k
@@ -276,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         st = ex.extract(
             out,
             mode=args.mode,
+            fmt=getattr(args, "format", "png"),
             brightness=args.brightness,
             contrast=args.contrast,
             gamma=args.gamma,
@@ -304,6 +309,12 @@ def main(argv: list[str] | None = None) -> int:
         for b in bins:
             stem = b.stem
             outdir = Path(args.out) / stem.replace(".", "_")
+            if getattr(args, "layout", "flat") == "format":
+                from opngx.ui.qt_app import _run_out_dir  # reuse the helper
+
+                outdir = _run_out_dir(
+                    str(args.out), str(b), getattr(args, "format", "png")
+                )
             print(f"opngx: batch {b} -> {outdir}")
             rc |= run_one(str(b), str(outdir))
         return rc

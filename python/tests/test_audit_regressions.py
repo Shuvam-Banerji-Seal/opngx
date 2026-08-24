@@ -469,6 +469,8 @@ _QT_SELF_WHITELIST = {
     "palette",
     "font",
     "sizeHint",
+    "restoreGeometry",
+    "saveGeometry",
 }
 
 
@@ -583,9 +585,18 @@ def test_ar12_video_render_streams_and_cancels(fixture_dir, tmp_path):
         if not first_progress_at:
             first_progress_at.append(time.perf_counter() - t0)
 
-    st = render_video(binp, str(out), mode="raw", width=64, height=48,
-                      start=0, count=120, fps=30, crf=30,
-                      progress=progress)
+    st = render_video(
+        binp,
+        str(out),
+        mode="raw",
+        width=64,
+        height=48,
+        start=0,
+        count=120,
+        fps=30,
+        crf=30,
+        progress=progress,
+    )
     assert st["frames_written"] == 120
     assert out.exists() and out.stat().st_size > 1024
     assert first_progress_at, "progress never fired"
@@ -604,29 +615,61 @@ def test_ar12_video_render_streams_and_cancels(fixture_dir, tmp_path):
         state["n"] += 1
 
     def should_cancel() -> bool:
-        return state["n"] >= 2   # cancel once writing has begun
+        return state["n"] >= 2  # cancel once writing has begun
 
-    st2 = render_video(binp, str(out2), mode="raw", width=64, height=48,
-                       start=0, count=120, fps=30, crf=30,
-                       progress=cancel_after_first,
-                       should_cancel=should_cancel)
+    st2 = render_video(
+        binp,
+        str(out2),
+        mode="raw",
+        width=64,
+        height=48,
+        start=0,
+        count=120,
+        fps=30,
+        crf=30,
+        progress=cancel_after_first,
+        should_cancel=should_cancel,
+    )
     assert st2["cancelled"] is True
 
 
 # --------------------------------------------------------------------- AR-13
 def test_ar13_windows_filename_sanitizer():
     """Camera names from vendor XML must become filename-safe on Windows."""
-    import importlib
-
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    try:
-        qt = importlib.import_module("opngx.ui.qt_app")
-    except ImportError:
-        pytest.skip("PySide6 not installed")
-    f = qt._safe_name
+    from opngx.layout import safe_name as f
     assert f("cam:1.2?") == "cam_1.2_"
     assert f('a/b\\c*d"e<f>g|h') == "a_b_c_d_e_f_g_h"
     assert f("trailing dots...") == "trailing dots"
     assert f("trailing space ") == "trailing space"
-    assert f("brow_1.2") == "brow_1.2"          # mid-name dots are legal
-    assert f("...") == "_"                       # degenerate -> safe placeholder
+    assert f("brow_1.2") == "brow_1.2"  # mid-name dots are legal
+    assert f("...") == "_"  # degenerate -> safe placeholder
+
+
+# --------------------------------------------------------------------- AR-14
+def test_ar14_v16_output_tree_helpers():
+    """v1.6 layout: <mother>/<recording>/<FMT>/ + sibling MP4 folder."""
+    from opngx.layout import mp4_dir, run_out_dir, safe_name
+
+    assert run_out_dir("D:/out", "D:/src/SQ_100_s1.bin") == os.path.join(
+        "D:/out", "SQ_100_s1", "PNG"
+    )
+    assert run_out_dir("D:/out", "D:/src/brow_1.2.bin", "jpg") == os.path.join(
+        "D:/out", "brow_1.2", "JPG"
+    )  # mid-name dots are legal
+    assert mp4_dir("D:/out", "D:/src/SQ_100_s1.bin") == os.path.join(
+        "D:/out", "SQ_100_s1", "MP4"
+    )
+    # windows-unsafe stems are sanitized (colon/question -> underscore)
+    rd = run_out_dir("out", "src/evil:name?.bin", "png")
+    assert "evil_name_" in rd and ":" not in rd and "?" not in rd
+    assert safe_name("...") == "_"
+
+
+def test_ar14b_studio_uses_v16_tree():
+    """The studio's extract/verify/video paths must all speak the v1.6 tree."""
+    text = QT_APP.read_text()
+    assert 'run_out_dir(out, b, o["fmt"])' in text, "extract must target run dir"
+    assert "self._current_run_dir(" in text, "verify must target run dir"
+    assert 'mp4_dir = os.path.join(os.path.dirname(stem_dir), "MP4")' in text
+    # splitters persisted across sessions
+    assert "QSettings" in text and "closeEvent" in text

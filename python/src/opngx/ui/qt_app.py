@@ -21,6 +21,7 @@ import time
 from typing import Any, Optional
 
 import opngx
+from opngx.layout import mp4_dir, run_out_dir, safe_name
 
 # --------------------------------------------------------------------------- #
 #  Qt import guard so the package stays installable without PySide6
@@ -255,6 +256,12 @@ machine. Expect ≈(cores×100)% total CPU during extraction.<br>
 <b>level</b> — DEFLATE effort 1–12: 1–2 fastest/larger, 6 balanced
 (vendor-like size), 9+ smallest/slowest.
 
+<h3 style='color:#93c5fd'>Output tree (v1.6)</h3>
+Every run writes into <b>&lt;output&gt;/&lt;recording&gt;/&lt;FMT&gt;/</b> —
+pick a mother folder once and each recording gets its own subfolder with
+one folder per format (PNG, JPG, BMP, TIF). <b>Render video</b> joins the
+same tree under <b>MP4</b>. The Verify buttons automatically target the
+current recording's folder.<br><br>
 <h3 style='color:#93c5fd'>Sidecar exports</h3>
 <b>timestamps CSV</b> — per-frame camera-clock ticks for timing analysis.<br>
 <b>metadata JSON</b> — geometry/settings/engine provenance record.
@@ -356,14 +363,6 @@ Full-scale evidence: 50 000/50 000 frames verified pixel-exact
 """
 
 
-def _safe_name(name: str) -> str:
-    """Filename-safe form of a camera/recording name (Windows forbids
-    \\ / : * ? " < > | and trailing dots/spaces)."""
-    for ch in '\\/:*?"<>|':
-        name = name.replace(ch, "_")
-    name = name.rstrip(" .")
-    return name if name else "_"
-
 
 def chip(text: str) -> "QtWidgets.QLabel":
     lbl = QtWidgets.QLabel(text)
@@ -409,6 +408,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._menu()
         self._build()
+        self._restore_layout()
 
     # ------------------------------------------------------------- helpers
     def _card(self, title: str) -> tuple["QtWidgets.QFrame", "QtWidgets.QVBoxLayout"]:
@@ -578,9 +578,9 @@ class MainWindow(QtWidgets.QMainWindow):
         outer.addLayout(head)
 
         # ---------------- splitter body ----------------
-        split = QtWidgets.QSplitter(Qt.Horizontal)
-        split.setChildrenCollapsible(False)
-        outer.addWidget(split, 1)
+        self.split = QtWidgets.QSplitter(Qt.Horizontal)
+        self.split.setChildrenCollapsible(False)
+        outer.addWidget(self.split, 1)
 
         # ===== left column =====
         left = QtWidgets.QWidget()
@@ -888,7 +888,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         lv.addWidget(set_card)
         lv.addStretch(1)
-
         # --- output card ---
         out_card, ov = self._card("output")
         orow = QtWidgets.QHBoxLayout()
@@ -910,7 +909,6 @@ class MainWindow(QtWidgets.QMainWindow):
         nrow.addWidget(self.ext_edit)
         nrow.addStretch(1)
         ov.addLayout(nrow)
-        lv.addWidget(out_card)
         self._tip(
             self.prefix_edit,
             "Filename prefix",
@@ -924,13 +922,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tip(obrowse, "Choose…", "Select the output directory.")
         self.fmt_combo.currentTextChanged.connect(self._fmt_changed)
 
-        # 720p laptops / scaled 4K displays: never clip the settings —
-        # the whole left column scrolls instead
+        # ---- resizable left column (v1.6) ----
+        # settings scroll when space is tight, and the OUTPUT pane is a
+        # draggable splitter chunk — every rectangle can be resized live
+        out_panel = QtWidgets.QWidget()
+        op_lay = QtWidgets.QVBoxLayout(out_panel)
+        op_lay.setContentsMargins(0, 0, 0, 0)
+        op_lay.addWidget(out_card)
+
         left_scroll = QtWidgets.QScrollArea()
         left_scroll.setWidget(left)
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        split.addWidget(left_scroll)
+
+        self.left_vsplit = QtWidgets.QSplitter(Qt.Vertical)
+        self.left_vsplit.setChildrenCollapsible(False)
+        self.left_vsplit.addWidget(left_scroll)
+        self.left_vsplit.addWidget(out_panel)
+        self.left_vsplit.setStretchFactor(0, 1)
+        self.left_vsplit.setSizes([560, 150])
+        self.split.addWidget(self.left_vsplit)
 
         # ===== right column =====
         right = QtWidgets.QWidget()
@@ -938,8 +949,8 @@ class MainWindow(QtWidgets.QMainWindow):
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(10)
 
-        vsplit = QtWidgets.QSplitter(Qt.Vertical)
-        vsplit.setChildrenCollapsible(False)
+        self.vsplit = QtWidgets.QSplitter(Qt.Vertical)
+        self.vsplit.setChildrenCollapsible(False)
 
         info_card, iv = self._card("recording info")
         self.info_table = QtWidgets.QTableWidget(0, 2)
@@ -952,7 +963,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.info_table.setHorizontalHeaderLabels(["field", "value"])
         iv.addWidget(self.info_table)
-        vsplit.addWidget(info_card)
+        self.vsplit.addWidget(info_card)
         self._tip(
             self.info_table,
             "Metadata",
@@ -1007,12 +1018,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(4000)
         gv.addWidget(self.log_view)
-        vsplit.addWidget(log_card)
+        self.vsplit.addWidget(log_card)
 
-        vsplit.setSizes([340, 260])
-        rv.addWidget(vsplit)
-        split.addWidget(right)
-        split.setSizes([520, 620])
+        self.vsplit.setSizes([340, 260])
+        rv.addWidget(self.vsplit)
+        self.split.addWidget(right)
+        self.split.setSizes([520, 620])
 
         # ---------------- action bar ----------------
         bar = QtWidgets.QHBoxLayout()
@@ -1020,8 +1031,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.extract_btn.setObjectName("accent")
         self.extract_btn.setToolTip(
             "<b>Extract frames</b><br>Decode the recording with the quality "
-            "settings above and write one image per frame to the output "
-            "folder. Progress bar + CPU chip show it working."
+            "settings above. Files land in the v1.6 tree: "
+            "&lt;output&gt;/&lt;recording&gt;/&lt;FMT&gt;/ (e.g. "
+            "out\\SQ_100_s1\\PNG\\). Progress bar + CPU chip show it working."
         )
         self.cancel_btn = QtWidgets.QPushButton("■  Cancel")
         self.cancel_btn.setObjectName("danger")
@@ -1080,6 +1092,42 @@ class MainWindow(QtWidgets.QMainWindow):
         if opngx.engine_backend() == "python-fallback":
             for line in opngx.engine_diagnostics():
                 self._log("  " + line, "warn")
+
+    # ------------------------------------------------------- layout persistence
+    def _restore_layout(self) -> None:
+        """Restore window geometry and splitter proportions from the
+        previous session (v1.6: the UI is fully user-resizable, and it
+        remembers how YOU arranged it)."""
+        self._settings = QtCore.QSettings("opngx", "opngx-studio")
+        geo = self._settings.value("win/geometry")
+        if geo is not None:
+            try:
+                self.restoreGeometry(geo)
+            except Exception:
+                pass
+        for key, sp in (
+            ("split/main", self.split),
+            ("split/left", self.left_vsplit),
+            ("split/right", self.vsplit),
+        ):
+            val = self._settings.value(key)
+            if val:
+                try:
+                    sizes = [int(x) for x in val]
+                    if len(sizes) == sp.count() and sum(sizes) > 0:
+                        sp.setSizes(sizes)
+                except Exception:
+                    pass
+
+    def closeEvent(self, e: Any) -> None:  # noqa: N802
+        try:
+            self._settings.setValue("win/geometry", self.saveGeometry())
+            self._settings.setValue("split/main", self.split.sizes())
+            self._settings.setValue("split/left", self.left_vsplit.sizes())
+            self._settings.setValue("split/right", self.vsplit.sizes())
+        except Exception:
+            pass
+        super().closeEvent(e)
 
     def _poll_sysmon(self) -> None:
         try:
@@ -1188,10 +1236,15 @@ class MainWindow(QtWidgets.QMainWindow):
         crf = QtWidgets.QSpinBox()
         crf.setRange(14, 28)
         crf.setValue(18)
+        # v1.6 tree: MP4 joins its sibling folder <out>/<recording>/MP4/
+        stem_dir = run_out_dir(
+            self.out_edit.text().strip() or ".", self.meta.bin_path, "png"
+        )
+        mp4_dir = os.path.join(os.path.dirname(stem_dir), "MP4")
         out_edit = QtWidgets.QLineEdit(
             os.path.join(
-                self.out_edit.text().strip() or ".",
-                (self.meta.camera_name or "video").replace(".", "_") + ".mp4",
+                mp4_dir,
+                safe_name(self.meta.camera_name or "video") + ".mp4",
             )
         )
         save = QtWidgets.QPushButton("…")
@@ -1507,9 +1560,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.out_edit.text():
             suggested = os.path.dirname(m.bin_path)
             if m.camera_name:
-                suggested = os.path.join(
-                    suggested, _safe_name(m.camera_name) + "_png"
-                )
+                suggested = os.path.join(suggested, safe_name(m.camera_name) + "_png")
             self.out_edit.setText(suggested)
 
     def _fill_info(self, rows) -> None:
@@ -1574,11 +1625,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     if self._cancel_requested:
                         break
                     stem = os.path.splitext(os.path.basename(b))[0]
-                    od = (
-                        out
-                        if len(bins) == 1
-                        else os.path.join(out, _safe_name(stem))
-                    )
+                    # v1.6 tree: <mother>/<recording>/<FMT>/ for every run
+                    od = run_out_dir(out, b, o["fmt"])
                     o = opts
                     self._sig.log.emit(
                         f"extract {os.path.basename(b)} → {od}  "
@@ -1611,6 +1659,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._cancel_requested = True
         self._log("cancel requested…", "warn")
 
+    def _current_run_dir(self, fmt: str) -> str:
+        """Where the current recording's frames live under the v1.6 tree.
+        Falls back to the raw output folder when the structured dir does
+        not exist (pre-1.6 extractions)."""
+        out = self.out_edit.text().strip()
+        if not out or not self.meta:
+            return out
+        run_dir = run_out_dir(out, self.meta.bin_path, fmt)
+        return run_dir if os.path.isdir(run_dir) else out
+
     def _verify_bin(self) -> None:
         """Verify the output folder against the loaded .bin itself —
         no vendor reference directory required (ADD-10)."""
@@ -1629,7 +1687,7 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 rep = opngx.verify_against_bin(
                     self.meta.bin_path,
-                    out,
+                    self._current_run_dir(opts["fmt"]),
                     mode=opts["mode"],
                     brightness=opts["brightness"],
                     contrast=opts["contrast"],
@@ -1670,7 +1728,9 @@ class MainWindow(QtWidgets.QMainWindow):
         def run() -> None:
             try:
                 rep = opngx.verify(
-                    ref, self.out_edit.text().strip(), prefix=self.prefix_edit.text()
+                    ref,
+                    self._current_run_dir("png"),
+                    prefix=self.prefix_edit.text(),
                 )
                 msg = (
                     "<b style='color:#34d399'>PASS</b> — every compared "

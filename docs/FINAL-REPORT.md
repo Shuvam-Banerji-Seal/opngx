@@ -1,7 +1,7 @@
 # opngx — Final Report
 
 **Repo:** https://github.com/Shuvam-Banerji-Seal/opngx
-**Version:** 1.5.4 · **License:** MIT · **CI:** green (Linux gcc/clang × libdeflate/zlib-only + native Windows msys2)
+**Version:** 1.6.0 · **License:** MIT · **CI:** green (Linux gcc/clang × libdeflate/zlib-only + native Windows msys2)
 
 ## 1. What was built
 
