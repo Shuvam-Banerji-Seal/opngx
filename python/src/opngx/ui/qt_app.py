@@ -413,6 +413,14 @@ class MainWindow(QtWidgets.QMainWindow):
         v.addWidget(t)
         return card, v
 
+    def _std_icon(self, sp) -> "QtGui.QIcon":
+        """Style-provided icon, or a null icon when the active
+        style does not supply one (never a crash)."""
+        try:
+            return self.style().standardIcon(sp)
+        except Exception:
+            return QtGui.QIcon()
+
     @staticmethod
     def _tip(widget: QtWidgets.QWidget, title: str, body: str) -> None:
         widget.setToolTip(
@@ -580,8 +588,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         browse = QtWidgets.QPushButton(" Open…")
         probe = QtWidgets.QPushButton(" Read info")
-        browse.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DirOpenIcon))
-        probe.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_FileDialogInfoView))
+        browse.setIcon(self._std_icon(QtWidgets.QStyle.SP_DirOpenIcon))
+        probe.setIcon(self._std_icon(QtWidgets.QStyle.SP_FileDialogInfoView))
         row.addWidget(self.bin_edit, 1)
         row.addWidget(browse)
         row.addWidget(probe)
@@ -877,7 +885,7 @@ class MainWindow(QtWidgets.QMainWindow):
         orow = QtWidgets.QHBoxLayout()
         self.out_edit = QtWidgets.QLineEdit()
         obrowse = QtWidgets.QPushButton(" Choose…")
-        obrowse.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogSaveButton))
+        obrowse.setIcon(self._std_icon(QtWidgets.QStyle.SP_DialogSaveButton))
         orow.addWidget(self.out_edit, 1)
         orow.addWidget(obrowse)
         ov.addLayout(orow)
@@ -1014,14 +1022,14 @@ class MainWindow(QtWidgets.QMainWindow):
             "on the main bar below."
         )
         verify = QtWidgets.QPushButton("✓  Verify…")
-        verify.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogApplyButton))
+        verify.setIcon(self._std_icon(QtWidgets.QStyle.SP_DialogApplyButton))
         verify.setToolTip(
             "<b>Verify pixel-exactness</b><br>Pick a reference folder (or use "
             "the source bin via the button next to this) — every frame is "
             "decoded and compared."
         )
         verify_bin = QtWidgets.QPushButton("✓  Verify vs source bin")
-        verify_bin.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload))
+        verify_bin.setIcon(self._std_icon(QtWidgets.QStyle.SP_BrowserReload))
         verify_bin.setToolTip(
             "<b>Verify against the recording itself</b><br>No vendor "
             "reference folder needed: every extracted frame is re-derived "
