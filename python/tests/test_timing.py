@@ -75,3 +75,21 @@ def test_real_metadata_json_includes_extras(tmp_path):
     assert st.frames_written == 3
     meta = json.loads((tmp_path / "metadata.json").read_text())
     assert meta["camera_name"] and meta["width"] == 256
+
+
+def test_probe_tick_sample_fixture(fixture_dir):
+    """O(1) clock sample: fixture ticks are 10_000_000 + i*2000."""
+    m = opngx.probe(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    assert m.first_tick == 10_000_000
+    assert m.last_tick == 10_000_000 + 199 * 2000
+    assert m.span_s == pytest.approx(199 * 2000 / 1e6)
+    assert m.effective_fps_us == pytest.approx(500.0)
+    assert m.frames_match is True
+
+
+@pytest.mark.skipif(not SAMPLE_BIN.exists(), reason="real sample data absent")
+def test_probe_tick_sample_real():
+    m = opngx.probe(SAMPLE_BIN)
+    assert m.frames_match is True
+    assert m.span_s == pytest.approx(99.998, abs=1e-2)
+    assert m.effective_fps_us == pytest.approx(500.0, abs=0.01)

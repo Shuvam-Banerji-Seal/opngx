@@ -198,6 +198,7 @@ static int write_metadata(opngx_job *j, const footage_t *ft) {
     fprintf(fp, "  \"bit_depth\": %d,\n", j->p.bit_depth);
     if (ft && ft->camera_name[0]) fprintf(fp, "  \"camera_name\": \"%s\",\n", ft->camera_name);
     if (ft && ft->framerate > 0) fprintf(fp, "  \"framerate_nominal\": %g,\n", ft->framerate);
+    if (ft && ft->framerate_real > 0) fprintf(fp, "  \"framerate_real\": %g,\n", ft->framerate_real);
     if (ft && ft->exposure >= 0) fprintf(fp, "  \"exposure_us\": %g,\n", ft->exposure);
 
     /* timestamp-derived stats */

@@ -23,6 +23,7 @@ class FootageMetadata:
     height: int = 0
     num_images: int = -1  # from XML; -1 unknown
     framerate: float = -1.0
+    framerate_real: float = -1.0  # achieved capture rate (vendor tag)
     exposure_us: float = -1.0
     time_marker_reference: int = -1
     camera_name: str = ""
@@ -35,6 +36,13 @@ class FootageMetadata:
     capacity_frames: int = 0  # frames that fit in the file
     verified_operating_point: bool = False  # B=49 C=18 G=1 (pixel-exact proven)
     extra: dict[str, str] = field(default_factory=dict)  # every other scalar tag
+    # O(1) clock sample from the first/last frame headers (ticks; the
+    # verified operating point uses 1 µs ticks — hence the _us suffix)
+    first_tick: int = -1
+    last_tick: int = -1
+    span_s: float | None = None
+    effective_fps_us: float | None = None
+    frames_match: bool | None = None  # XML NumberOfImages == frames on disk
 
     @property
     def pixels_per_frame(self) -> int:
@@ -101,6 +109,8 @@ def probe(
         meta.num_images = int(ni) if ni else -1
         fr = text(".//Framerate")
         meta.framerate = float(fr) if fr else -1.0
+        frr = text(".//FramerateReal")
+        meta.framerate_real = float(frr) if frr else -1.0
         ex = text(".//Exposure")
         meta.exposure_us = float(ex) if ex else -1.0
         tmr = text(".//TimeMarkerReference")
@@ -140,6 +150,21 @@ def probe(
         meta.verified_operating_point = (
             meta.brightness == 49.0 and meta.contrast == 18.0 and meta.gamma == 1.0
         )
+        if meta.num_images > 0:
+            meta.frames_match = meta.num_images == meta.capacity_frames
+        # O(1) clock sample: read just the first and last frame headers
+        try:
+            with open(bp, "rb") as fh:
+                meta.first_tick = int.from_bytes(fh.read(8), "little")
+                if meta.capacity_frames > 1:
+                    fh.seek((meta.capacity_frames - 1) * meta.frame_stride)
+                    meta.last_tick = int.from_bytes(fh.read(8), "little")
+            if meta.last_tick >= meta.first_tick > 0 and meta.capacity_frames > 1:
+                ticks = meta.last_tick - meta.first_tick
+                meta.span_s = ticks / 1e6  # ticks are µs at the verified point
+                meta.effective_fps_us = (meta.capacity_frames - 1) / meta.span_s
+        except OSError:
+            pass
     return meta
 
 

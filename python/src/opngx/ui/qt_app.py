@@ -171,9 +171,17 @@ QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 
 /* ---------- menus ---------- */
 QMenuBar { background: #050505; color: #dfe6df; }
-QMenuBar::item:selected { background: #14200f; border-radius: 6px; }
+QMenuBar::item { background: transparent; color: #dfe6df; padding: 4px 10px; }
+QMenuBar::item:selected { background: #14200f; color: #ffffff; border-radius: 6px; }
 QMenu { background: #0d0f0d; color: #ffffff; border: 1px solid #2f4a2c; }
-QMenu::item:selected { background: #35542f; }
+QMenu::item {
+    background: transparent; color: #ffffff;
+    padding: 6px 26px 6px 14px;
+}
+QMenu::item:selected { background: #35542f; color: #ffffff; }
+QMenu::item:disabled { color: #5d6b5d; }
+QMenu::separator { height: 1px; background: #1f261f; margin: 5px 8px; }
+QMenu::indicator { width: 14px; height: 14px; margin-left: 6px; }
 
 QToolTip {
     background: #070807; color: #eaf2ea;
@@ -456,7 +464,17 @@ class MainWindow(QtWidgets.QMainWindow):
         d.resize(720, 560)
         v = QtWidgets.QVBoxLayout(d)
         tb = QtWidgets.QTextBrowser()
-        tb.setHtml(html)
+        # document text color must be set on the DOCUMENT, not the widget:
+        # the widget-QSS color does not reach HTML body text on all themes
+        tb.document().setDefaultStyleSheet(
+            "body { color: #e6ece6; } a { color: #8fbf7f; }"
+        )
+        tb.setHtml(f"<body>{html}</body>")
+        tb.setStyleSheet(
+            "QTextBrowser { background: #070807; "
+            "color: #e6ece6; border: 1px solid #1f261f; "
+            "border-radius: 10px; }"
+        )
         v.addWidget(tb)
         close = QtWidgets.QPushButton("Close")
         close.clicked.connect(d.accept)
@@ -927,12 +945,8 @@ class MainWindow(QtWidgets.QMainWindow):
         wv.addWidget(self.viewer_img, 1)
         vrow = QtWidgets.QHBoxLayout()
         self.prev_btn = QtWidgets.QPushButton("◀")
-        self.prev_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ArrowBack))
         self.prev_btn.setFixedWidth(44)
         self.next_btn = QtWidgets.QPushButton("▶")
-        self.next_btn.setIcon(
-            self.style().standardIcon(QtWidgets.QStyle.SP_ArrowForward)
-        )
         self.next_btn.setFixedWidth(44)
         self.frame_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.frame_slider.setRange(0, 0)
@@ -981,9 +995,6 @@ class MainWindow(QtWidgets.QMainWindow):
         bar = QtWidgets.QHBoxLayout()
         self.extract_btn = QtWidgets.QPushButton("▶  Extract")
         self.extract_btn.setObjectName("accent")
-        self.extract_btn.setIcon(
-            self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay)
-        )
         self.extract_btn.setToolTip(
             "<b>Extract frames</b><br>Decode the recording with the quality "
             "settings above and write one image per frame to the output "
@@ -991,16 +1002,12 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.cancel_btn = QtWidgets.QPushButton("■  Cancel")
         self.cancel_btn.setObjectName("danger")
-        self.cancel_btn.setIcon(
-            self.style().standardIcon(QtWidgets.QStyle.SP_MediaStop)
-        )
         self.cancel_btn.setToolTip(
             "<b>Stop the current job</b><br>Works for both extraction and "
             "MP4 rendering; finishes the frame in flight, then stops."
         )
         self.cancel_btn.setEnabled(False)
         video_btn = QtWidgets.QPushButton("🎬  Render video…")
-        video_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaVolume))
         video_btn.setToolTip(
             "<b>Render MP4</b><br>Encode a frame range straight to H.264 "
             "with ffmpeg. A progress bar opens in this dialog and mirrors "
@@ -1234,10 +1241,8 @@ class MainWindow(QtWidgets.QMainWindow):
         bb = QtWidgets.QHBoxLayout()
         go = QtWidgets.QPushButton("▶  Render MP4")
         go.setObjectName("accent")
-        go.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay))
         cancel = QtWidgets.QPushButton("■  Stop")
         cancel.setObjectName("danger")
-        cancel.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaStop))
         cancel.clicked.connect(stop_render)
         bb.addWidget(go)
         bb.addWidget(cancel)
@@ -1429,6 +1434,34 @@ class MainWindow(QtWidgets.QMainWindow):
             ("geometry", f"{m.width} × {m.height} px" if m.width else "? × ? px"),
             ("frames in XML", f"{m.num_images:,}" if m.num_images > 0 else "?"),
             ("capacity from size", f"{m.capacity_frames:,}" or "?"),
+            (
+                "frames: XML vs file",
+                f"{m.num_images:,} vs {m.capacity_frames:,} — "
+                + (
+                    "✓ match"
+                    if m.frames_match
+                    else "⚠ MISMATCH (recording truncated or XML stale)"
+                    if m.frames_match is False
+                    else "n/a"
+                ),
+            ),
+            (
+                "clock span",
+                f"{m.span_s:,.3f} s" if m.span_s else "?",
+            ),
+            (
+                "effective fps (first→last tick, µs clock)",
+                f"{m.effective_fps_us:,.2f}" if m.effective_fps_us else "?",
+            ),
+            (
+                "framerate_real (achieved)",
+                f"{m.framerate_real:g} fps" if m.framerate_real > 0 else "?",
+            ),
+            (
+                "pixel fidelity",
+                "8-bit sensor mono · reference = vendor curve (clips raw≥139)"
+                " · raw = lossless sensor bytes",
+            ),
             ("frame stride", f"{m.frame_stride:,} B" if m.frame_stride else "?"),
             ("framerate", f"{m.framerate:g} fps" if m.framerate > 0 else "?"),
             ("exposure", f"{m.exposure_us:g} µs" if m.exposure_us > 0 else "?"),

@@ -189,6 +189,33 @@ static int list_names(const char *dir, const char *prefix, const char *ext,
 void verify_report_init(verify_report *r) { memset(r, 0, sizeof *r); }
 
 /* ---- parallel comparison core (portable worker pool) ---- */
+/* Reusable per-worker decode buffers. All files in a directory share one
+ * geometry, so after the first pair these hit steady state with zero
+ * allocation — 300 KB-class buffers previously went through
+ * mmap/munmap + page faults for every single compared file. */
+typedef struct {
+    uint8_t *file; size_t file_cap;
+    uint8_t *raw;  size_t raw_cap;
+    uint8_t *q;    size_t q_cap;
+} pslot;
+
+static void pslot_free(pslot *s) {
+    free(s->file); free(s->raw); free(s->q);
+    memset(s, 0, sizeof *s);
+}
+
+static uint8_t *grow_to(uint8_t *p, size_t *cap, size_t need) {
+    if (need <= *cap) return p;
+    free(p);
+    *cap = need * 2;              /* headroom avoids tight re-growths */
+    return malloc(*cap);
+}
+
+static unsigned png_bpp(const png_view *v) {
+    unsigned ch = v->color_type == 0 ? 1u : 4u;
+    return ch * (v->bit_depth == 16 ? 2u : 1u);
+}
+
 typedef struct {
     char **rn, **on;
     const char *ref_dir, *out_dir;
@@ -200,6 +227,7 @@ typedef struct {
     _Atomic int64_t not_in_ref;  /* out names absent from ref (subset check) */
     _Atomic uint64_t bytes_ok;
     _Atomic int err_taken;
+    pslot *slots;                /* 2 per worker, indexed by worker id */
 } vshared_t;
 
 static int zinflate_len(const uint8_t *in, size_t in_len,
@@ -207,12 +235,11 @@ static int zinflate_len(const uint8_t *in, size_t in_len,
 
 /* ---- shared decode/compare helpers (used by both verifiers) ---- */
 
-/* Decode one PNG file into stripped pixel rows (post-unfilter).
- * On success returns 0, *q_out holds h*w*bpp bytes and v is filled
+/* Decode one PNG file into stripped pixel rows (post-unfilter) using the
+ * slot's reusable buffers. On success returns 0 and v is filled
  * (v.idat already released). On failure returns -1 with `why` filled. */
-static int load_png_pixels(const char *path, png_view *v, uint8_t **q_out,
-                           unsigned *bpp_out, char *why, size_t why_cap) {
-    *q_out = NULL;
+static int load_png_pixels(const char *path, pslot *s, png_view *v,
+                           char *why, size_t why_cap) {
     memset(v, 0, sizeof *v);
     FILE *f = fopen(path, "rb");
     if (!f) { snprintf(why, why_cap, "open failed: %.400s", path); return -1; }
@@ -224,9 +251,8 @@ static int load_png_pixels(const char *path, png_view *v, uint8_t **q_out,
         snprintf(why, why_cap, "empty file: %.400s", path);
         return -1;
     }
-    uint8_t *b = malloc((size_t)l);
-    if (!b || fread(b, 1, (size_t)l, f) != (size_t)l) {
-        free(b);
+    s->file = grow_to(s->file, &s->file_cap, (size_t)l);
+    if (!s->file || fread(s->file, 1, (size_t)l, f) != (size_t)l) {
         fclose(f);
         snprintf(why, why_cap, "read failed: %.400s", path);
         return -1;
@@ -234,33 +260,28 @@ static int load_png_pixels(const char *path, png_view *v, uint8_t **q_out,
     fclose(f);
 
     int rc = -1;
-    uint8_t *r = NULL;
-    if (png_parse(b, (size_t)l, v)) {
+    if (png_parse(s->file, (size_t)l, v)) {
         snprintf(why, why_cap, "bad PNG structure: %.400s", path);
         goto out;
     }
     {
-        unsigned ch = v->color_type == 0 ? 1u : 4u;
-        unsigned bpp = ch * (v->bit_depth == 16 ? 2u : 1u);
-        if (bpp_out) *bpp_out = bpp;
-        size_t raw = (size_t)v->h * ((size_t)v->w * bpp + 1);
-        r = malloc(raw);
-        *q_out = malloc((size_t)v->h * v->w * bpp);
-        if (!r || !*q_out ||
-            zinflate_len(v->idat, v->idat_len, r, raw) ||
-            png_unfilter(r, v->w, v->h, bpp)) {
+        unsigned bpp = png_bpp(v);
+        size_t raw_need = (size_t)v->h * ((size_t)v->w * bpp + 1);
+        size_t q_need = (size_t)v->h * v->w * bpp;
+        s->raw = grow_to(s->raw, &s->raw_cap, raw_need);
+        s->q = grow_to(s->q, &s->q_cap, q_need);
+        if (!s->raw || !s->q ||
+            zinflate_len(v->idat, v->idat_len, s->raw, raw_need) ||
+            png_unfilter(s->raw, v->w, v->h, bpp)) {
             snprintf(why, why_cap, "inflate/unfilter failed: %.400s", path);
             goto out;
         }
-        png_strip_filters(r, v->w, v->h, bpp, *q_out);
+        png_strip_filters(s->raw, v->w, v->h, bpp, s->q);
         rc = 0;
     }
 out:
-    free(r);
     free(v->idat);
     v->idat = NULL;
-    free(b);
-    if (rc && *q_out) { free(*q_out); *q_out = NULL; }
     return rc;
 }
 
@@ -295,27 +316,25 @@ static int pixels_differ(const png_view *a, const uint8_t *qa,
 
 /* Compare one pair resolved BY NAME (subset-safe: a --start>0 extract
  * must verify against its own names, not against sorted positions). */
-static int verify_one_pair(vshared_t *vs, int64_t oi, int64_t ri) {
+static int verify_one_pair(vshared_t *vs, pslot *sa, pslot *sb,
+                           int64_t oi, int64_t ri) {
     char p1[1200], p2[1200];
     snprintf(p1, sizeof p1, "%.500s/%.600s", vs->ref_dir, vs->rn[ri]);
     snprintf(p2, sizeof p2, "%.500s/%.600s", vs->out_dir, vs->on[oi]);
 
     png_view v1, v2;
-    uint8_t *q1 = NULL, *q2 = NULL;
-    unsigned bpp1 = 0, bpp2 = 0;
     char why[256] = "";
     int bad = 0;
     uint64_t ok_bytes = 0;
 
-    if (load_png_pixels(p1, &v1, &q1, &bpp1, why, sizeof why) ||
-        load_png_pixels(p2, &v2, &q2, &bpp2, why, sizeof why)) {
+    if (load_png_pixels(p1, sa, &v1, why, sizeof why) ||
+        load_png_pixels(p2, sb, &v2, why, sizeof why)) {
         bad = 1;
         goto done;
     }
-    bad = pixels_differ(&v1, q1, &v2, q2, &ok_bytes);
+    bad = pixels_differ(&v1, sa->q, &v2, sb->q, &ok_bytes);
 
 done:
-    free(q1); free(q2);
     if (bad && !atomic_exchange(&vs->err_taken, 1)) {
         if (why[0])
             snprintf(vs->rep->first_error, sizeof vs->rep->first_error,
@@ -330,8 +349,8 @@ done:
 }
 
 static void vworker(const port_worker_ctx *w, void *ud) {
-    (void)w;
     vshared_t *vs = (vshared_t *)ud;
+    pslot *mine = &vs->slots[(size_t)w->index * 2u];
     const int64_t G = 64;
     for (;;) {
         int64_t i = atomic_fetch_add_explicit(&vs->cursor, G,
@@ -344,7 +363,7 @@ static void vworker(const port_worker_ctx *w, void *ud) {
                 atomic_fetch_add(&vs->not_in_ref, 1);
                 continue;
             }
-            if (verify_one_pair(vs, i, ri))
+            if (verify_one_pair(vs, &mine[0], &mine[1], i, ri))
                 atomic_fetch_add(&vs->mism, 1);
         }
     }
@@ -383,6 +402,16 @@ int opngx_verify(const char *ref_dir, const char *out_dir,
     int64_t common = on_n;
 
     vshared_t vs;
+    int nworkers = port_cpu_count();
+    vs.slots = calloc((size_t)nworkers * 2u, sizeof(pslot));
+    if (!vs.slots) {
+        for (int64_t i = 0; i < rn_n; i++) free(rn[i]);
+        free(rn);
+        for (int64_t i = 0; i < on_n; i++) free(on[i]);
+        free(on);
+        snprintf(err, err_cap, "oom: verifier slots");
+        return -1;
+    }
     vs.rn = rn; vs.on = on;
     vs.ref_dir = ref_dir; vs.out_dir = out_dir;
     vs.rep = rep;
@@ -390,7 +419,7 @@ int opngx_verify(const char *ref_dir, const char *out_dir,
     vs.not_in_ref = 0; vs.rn_n = rn_n;
     vs.err_taken = 0;
 
-    port_spawn_workers(port_cpu_count(), vworker, &vs);
+    port_spawn_workers(nworkers, vworker, &vs);
 
     int64_t matched = on_n - atomic_load(&vs.not_in_ref);
     rep->files_compared = matched;
@@ -415,6 +444,8 @@ int opngx_verify(const char *ref_dir, const char *out_dir,
         }
     }
 
+    for (int k = 0; k < nworkers * 2; k++) pslot_free(&vs.slots[k]);
+    free(vs.slots);
     for (int64_t i = 0; i < rn_n; i++) { free(rn[i]); }
     free(rn);
     for (int64_t i = 0; i < on_n; i++) { free(on[i]); }
@@ -448,7 +479,14 @@ typedef struct {
     _Atomic int64_t err_taken;
     _Atomic uint64_t bytes_ok;
     verify_report *rep;
+    struct bmem *mem;            /* one per worker */
 } bshared;
+
+typedef struct bmem {
+    pslot slot;                  /* decoded output PNG buffers      */
+    uint8_t *scratch; size_t scratch_cap;  /* expanded scanlines   */
+    uint8_t *qref;    size_t qref_cap;     /* expected pixel rows  */
+} bmem;
 
 static void fill_luts_for(const opngx_params *p, uint8_t *l8, uint16_t *l16) {
     double b, c, g = 1.0;
@@ -461,7 +499,7 @@ static void fill_luts_for(const opngx_params *p, uint8_t *l8, uint16_t *l16) {
     opngx_build_lut16(l16, b, c, g);
 }
 
-static int bverify_one(bshared *bs, const char *name) {
+static int bverify_one(bshared *bs, bmem *m, const char *name) {
     /* filename → absolute frame index */
     size_t plen = strlen(bs->p->prefix), elen = strlen(bs->p->ext);
     size_t L = strlen(name);
@@ -487,11 +525,12 @@ static int bverify_one(bshared *bs, const char *name) {
     const unsigned bpp = (bs->color_type == 0 ? 1u : 4u) * (bs->bits16 ? 2u : 1u);
     const size_t raw_len = (size_t)H * ((size_t)W * bpp + 1);
 
-    uint8_t *scratch = malloc(raw_len);
-    uint8_t *qref = malloc((size_t)W * H * bpp);
+    m->scratch = grow_to(m->scratch, &m->scratch_cap, raw_len);
+    m->qref = grow_to(m->qref, &m->qref_cap, (size_t)W * H * bpp);
+    uint8_t *scratch = m->scratch;
+    uint8_t *qref = m->qref;
     int rc = -1;
     png_view v;
-    uint8_t *q = NULL;
     char why[256] = "";
     if (!scratch || !qref) goto out;
 
@@ -512,10 +551,10 @@ static int bverify_one(bshared *bs, const char *name) {
     {
         char path[1200];
         snprintf(path, sizeof path, "%.500s/%.600s", bs->out_dir, name);
-        if (load_png_pixels(path, &v, &q, NULL, why, sizeof why)) goto out;
+        if (load_png_pixels(path, &m->slot, &v, why, sizeof why)) goto out;
     }
 
-    rc = pixels_differ(&v, q,
+    rc = pixels_differ(&v, m->slot.q,
                        &(png_view){
                            .w = W, .h = H,
                            .bit_depth = (uint32_t)(bs->bits16 ? 16 : 8),
@@ -526,9 +565,6 @@ static int bverify_one(bshared *bs, const char *name) {
         atomic_fetch_add(&bs->bytes_ok, (uint64_t)W * H * bpp);
 
 out:
-    free(scratch);
-    free(qref);
-    free(q);
     if (rc && !atomic_exchange(&bs->err_taken, 1))
         snprintf(bs->rep->first_error, sizeof bs->rep->first_error, "%s",
                  why[0] ? why : "pixel mismatch vs source bin");
@@ -536,8 +572,8 @@ out:
 }
 
 static void bworker(const port_worker_ctx *w, void *ud) {
-    (void)w;
     bshared *bs = ud;
+    bmem *my = &bs->mem[w->index];
     const int64_t G = 64;
     for (;;) {
         int64_t i = atomic_fetch_add_explicit(&bs->cursor, G,
@@ -545,7 +581,7 @@ static void bworker(const port_worker_ctx *w, void *ud) {
         if (i >= bs->n_on) break;
         int64_t end = i + G < bs->n_on ? i + G : bs->n_on;
         for (; i < end; i++)
-            if (bverify_one(bs, bs->on[i]))
+            if (bverify_one(bs, my, bs->on[i]))
                 atomic_fetch_add(&bs->mism, 1);
     }
 }
@@ -627,7 +663,16 @@ int opngx_verify_bin(const opngx_params *pin, verify_report *rep,
     bs.rep = rep;
     bs.cursor = 0;
 
-    port_spawn_workers(port_cpu_count(), bworker, &bs);
+    int nworkers = port_cpu_count();
+    bs.mem = calloc((size_t)nworkers, sizeof(bmem));
+    if (!bs.mem) {
+        port_unmap_file(&mf);
+        for (int64_t i = 0; i < bs.n_on; i++) free(bs.on[i]);
+        free(bs.on);
+        snprintf(err, err_cap, "oom: verifier slots");
+        return -1;
+    }
+    port_spawn_workers(nworkers, bworker, &bs);
 
     rep->files_compared = bs.n_on - atomic_load(&bs.badidx);
     rep->bytes_compared = atomic_load(&bs.bytes_ok);
@@ -648,6 +693,12 @@ int opngx_verify_bin(const opngx_params *pin, verify_report *rep,
         snprintf(rep->first_error + cur, sizeof rep->first_error - cur, "%s", note);
     }
 
+    for (int k = 0; k < nworkers; k++) {
+        pslot_free(&bs.mem[k].slot);
+        free(bs.mem[k].scratch);
+        free(bs.mem[k].qref);
+    }
+    free(bs.mem);
     for (int64_t i = 0; i < bs.n_on; i++) free(bs.on[i]);
     free(bs.on);
     port_unmap_file(&mf);

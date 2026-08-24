@@ -15,6 +15,7 @@ void footage_defaults(footage_t *f) {
     memset(f, 0, sizeof(*f));
     f->num_images = -1;
     f->framerate = -1;
+    f->framerate_real = -1;
     f->exposure = -1;
     f->time_marker_ref = -1;
     f->gamma = 1.0;
@@ -81,6 +82,7 @@ int footage_load(const char *path, footage_t *f) {
     if (parse_i64(xml, "ResolutionY", &iv) == 0) f->resolution_y = (uint32_t)iv;
     if (parse_i64(xml, "NumberOfImages", &iv) == 0) f->num_images = iv;
     if (parse_dbl(xml, "Framerate", &dv) == 0) f->framerate = dv;
+    if (parse_dbl(xml, "FramerateReal", &dv) == 0) f->framerate_real = dv;
     if (parse_dbl(xml, "Exposure", &dv) == 0) f->exposure = dv;
     if (parse_i64(xml, "TimeMarkerReference", &iv) == 0) f->time_marker_ref = iv;
 

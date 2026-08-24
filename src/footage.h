@@ -9,6 +9,7 @@ typedef struct {
     uint32_t resolution_y;
     int64_t  num_images;
     double   framerate;
+    double   framerate_real;   /* achieved capture rate (vendor tag) */
     double   exposure;
     int64_t  time_marker_ref;
     double   brightness;

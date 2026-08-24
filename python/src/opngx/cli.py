@@ -133,6 +133,13 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 if k in extras:
                     print(f"{k}: {extras[k]}")
+            if m.frames_match is not None:
+                print(f"frames xml vs file: {m.num_images} vs "
+                      f"{m.capacity_frames} "
+                      f"({'match' if m.frames_match else 'MISMATCH'})")
+            if m.span_s:
+                print(f"clock span: {m.span_s:,.3f} s "
+                      f"(us ticks) -> effective {m.effective_fps_us:,.2f} fps")
             if extras:
                 others = [
                     k

@@ -453,6 +453,8 @@ static int cmd_info(int argc, char **argv) {
             printf("resolution:   %ux%u\n", ft.resolution_x, ft.resolution_y);
             printf("num_images:   %lld\n", (long long)ft.num_images);
             printf("framerate:    %g\n", ft.framerate);
+            if (ft.framerate_real > 0)
+                printf("framerate_real: %g (achieved)\n", ft.framerate_real);
             printf("exposure_us:  %g\n", ft.exposure);
             printf("processing:   B=%.0f C=%.0f G=%g (%s)\n", ft.brightness, ft.contrast, ft.gamma,
                    (ft.brightness==49 && ft.contrast==18 && ft.gamma==1) ?
