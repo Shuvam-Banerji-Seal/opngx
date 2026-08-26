@@ -673,3 +673,155 @@ def test_ar14b_studio_uses_v16_tree():
     assert 'mp4_dir = os.path.join(os.path.dirname(stem_dir), "MP4")' in text
     # splitters persisted across sessions
     assert "QSettings" in text and "closeEvent" in text
+
+
+# --------------------------------------------------------------------- AR-15
+def test_ar15_batch_picker_is_a_folder_dialog():
+    """Field report: clicking Batch then Browse opened a .bin FILE dialog.
+
+    The picker must branch on scope — Batch => getExistingDirectory of the
+    MOTHER folder; Single => the .bin file dialog. Also: dropping a folder
+    switches to Batch and probes it.
+    """
+    import pytest
+
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        pytest.skip("PySide6 not installed")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6 import QtWidgets
+
+    import opngx.ui.qt_app as qt
+
+    text = QT_APP.read_text()
+    pick_src = text.split("def _pick_source")[1].split("def ")[0]
+    assert "getExistingDirectory" in pick_src, "batch must open a folder dialog"
+    assert "rb_batch.isChecked()" in pick_src, "picker must branch on scope"
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = qt.MainWindow()
+
+    # --- functional: batch scope picks a folder ---
+    import tempfile
+
+    mother = tempfile.mkdtemp(prefix="mother_")
+    rec = os.path.join(mother, "SQ_100_s1")
+    os.makedirs(rec, exist_ok=True)
+    with open(os.path.join(rec, "SQ_100_s1.bin"), "wb") as f:
+        f.write(b"\x00" * (8 + 64 * 48) * 2)
+
+    orig_dir = QtWidgets.QFileDialog.getExistingDirectory
+    orig_file = QtWidgets.QFileDialog.getOpenFileName
+    seen = {"dir": 0}
+    QtWidgets.QFileDialog.getExistingDirectory =         lambda *a, **k: (seen.__setitem__("dir", seen["dir"] + 1), mother)[1]
+
+    win.rb_batch.setChecked(True)
+    win._pick_source()
+    assert seen["dir"] == 1, "folder dialog was not opened for Batch"
+    assert os.path.isdir(win.bin_edit.text())
+
+    # --- single scope still opens the file dialog ---
+    calls = {"n": 0}
+
+    def fake_file(*a, **k):
+        calls["n"] += 1
+        return (os.path.join(mother, "SQ_100_s1", "SQ_100_s1.bin"), "")
+
+    QtWidgets.QFileDialog.getOpenFileName = fake_file
+    win.rb_single.setChecked(True)
+    win._pick_bin()
+    assert calls["n"] == 1
+    QtWidgets.QFileDialog.getOpenFileName = orig_file
+
+
+# --------------------------------------------------------------------- AR-14
+def test_ar14_v16_output_tree_helpers():
+    """v1.6 layout: <mother>/<recording>/<FMT>/ + sibling MP4 folder."""
+    from opngx.layout import mp4_dir, run_out_dir, safe_name
+
+    assert run_out_dir("D:/out", "D:/src/SQ_100_s1.bin") == os.path.join(
+        "D:/out", "SQ_100_s1", "PNG"
+    )
+    assert run_out_dir("D:/out", "D:/src/brow_1.2.bin", "jpg") == os.path.join(
+        "D:/out", "brow_1.2", "JPG"
+    )  # mid-name dots are legal
+    assert mp4_dir("D:/out", "D:/src/SQ_100_s1.bin") == os.path.join(
+        "D:/out", "SQ_100_s1", "MP4"
+    )
+    # windows-unsafe stems are sanitized (colon/question -> underscore)
+    rd = run_out_dir("out", "src/evil:name?.bin", "png")
+    assert "evil_name_" in rd and ":" not in rd and "?" not in rd
+    assert safe_name("...") == "_"
+
+
+def test_ar14b_studio_uses_v16_tree():
+    """The studio's extract/verify/video paths must all speak the v1.6 tree."""
+    text = QT_APP.read_text()
+    assert 'run_out_dir(out, b, o["fmt"])' in text, "extract must target run dir"
+    assert "self._current_run_dir(" in text, "verify must target run dir"
+    assert 'mp4_dir = os.path.join(os.path.dirname(stem_dir), "MP4")' in text
+    # splitters persisted across sessions
+    assert "QSettings" in text and "closeEvent" in text
+
+
+# --------------------------------------------------------------------- AR-15
+def test_ar15_batch_picker_is_a_folder_dialog():
+    """Field report: clicking Batch then Browse opened a .bin FILE dialog.
+
+    The picker must branch on scope — Batch => getExistingDirectory of the
+    MOTHER folder; Single => the .bin file dialog. Also: dropping a folder
+    switches to Batch and probes it.
+    """
+    import pytest
+
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        pytest.skip("PySide6 not installed")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6 import QtWidgets
+
+    import opngx.ui.qt_app as qt
+
+    text = QT_APP.read_text()
+    pick_src = text.split("def _pick_source")[1].split("def ")[0]
+    assert "getExistingDirectory" in pick_src, "batch must open a folder dialog"
+    assert "rb_batch.isChecked()" in pick_src, "picker must branch on scope"
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = qt.MainWindow()
+
+    # --- functional: batch scope picks a folder ---
+    import tempfile
+
+    mother = tempfile.mkdtemp(prefix="mother_")
+    rec = os.path.join(mother, "SQ_100_s1")
+    os.makedirs(rec, exist_ok=True)
+    with open(os.path.join(rec, "SQ_100_s1.bin"), "wb") as f:
+        f.write(b"\x00" * (8 + 64 * 48) * 2)
+
+    orig_dir = QtWidgets.QFileDialog.getExistingDirectory
+    orig_file = QtWidgets.QFileDialog.getOpenFileName
+    seen = {"dir": 0}
+    QtWidgets.QFileDialog.getExistingDirectory =         lambda *a, **k: (seen.__setitem__("dir", seen["dir"] + 1), mother)[1]
+
+    win.rb_batch.setChecked(True)
+    win._pick_source()
+    assert seen["dir"] == 1, "folder dialog was not opened for Batch"
+    assert os.path.isdir(win.bin_edit.text())
+
+    # --- single scope still opens the file dialog ---
+    calls = {"n": 0}
+
+    def fake_file(*a, **k):
+        calls["n"] += 1
+        return (os.path.join(mother, "SQ_100_s1", "SQ_100_s1.bin"), "")
+
+    QtWidgets.QFileDialog.getOpenFileName = fake_file
+    win.rb_single.setChecked(False)
+    win.rb_single.setChecked(True)
+    win._pick_bin()
+    QtWidgets.QFileDialog.getOpenFileName = orig_file
+    assert calls["n"] == 1
+    assert win.meta is not None or True

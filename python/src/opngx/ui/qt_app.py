@@ -222,12 +222,24 @@ FIELD_GUIDE = """
 <h2 style='color:#60a5fa'>Field guide</h2>
 <p>Every control in opngx studio, explained.</p>
 
-<h3 style='color:#93c5fd'>Source</h3>
-<b>Path</b> — one .bin recording, or a folder containing
-&lt;camera&gt;/&lt;name&gt;.bin pairs when <i>Batch folder</i> is selected.<br>
-<b>Probe</b> — reads metadata only: geometry, frame count, framerate,
-exposure and the vendor's display settings. Nothing is extracted.<br>
-<b>Drag &amp; drop</b> — drop a .bin file anywhere on this window.
+<h3 style='color:#93c5fd'>Source &amp; batch mother-folder architecture</h3>
+<b>Single bin</b> — pick one recording; Browse opens a file dialog.<br><br>
+<b>Batch folder</b> — Browse opens a FOLDER dialog. Point it at the
+mother folder that contains one sub-folder per recording, each holding
+the .bin/.footage pair:<br>
+<tt>mother/</tt><br>
+<tt>&nbsp;&nbsp;recording_1/ &nbsp;x.bin&nbsp; x.footage</tt><br>
+<tt>&nbsp;&nbsp;recording_2/ &nbsp;y.bin&nbsp; y.footage</tt><br>
+Every recording found is extracted, and the output MIRRORS the tree into
+your output mother folder:<br>
+<tt>out/</tt><br>
+<tt>&nbsp;&nbsp;recording_1/ PNG/ JPG/ BMP/ TIF/ MP4/</tt><br>
+<tt>&nbsp;&nbsp;recording_2/ ...</tt><br>
+The Verify buttons automatically target the current recording's folder.
+<b>Scan folders</b> (the Read info button in Batch scope) lists how many
+recordings were found before you commit.<br>
+<b>Drag &amp; drop</b> — a .bin anywhere switches to Single; a FOLDER
+anywhere switches to Batch.
 
 <h3 style='color:#93c5fd'>Quality mode</h3>
 <b>reference</b> — reproduces the vendor player's display transform exactly.
@@ -363,7 +375,6 @@ Full-scale evidence: 50 000/50 000 frames verified pixel-exact
 """
 
 
-
 def chip(text: str) -> "QtWidgets.QLabel":
     lbl = QtWidgets.QLabel(text)
     lbl.setObjectName("chip")
@@ -408,6 +419,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._menu()
         self._build()
+        self._on_scope_changed(False)  # set initial browse labels
         self._restore_layout()
 
     # ------------------------------------------------------------- helpers
@@ -595,8 +607,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bin_edit.setPlaceholderText(
             "path to .bin … or just drag a file onto this window"
         )
-        browse = QtWidgets.QPushButton(" Open…")
-        probe = QtWidgets.QPushButton(" Read info")
+        self._browse_btn = browse = QtWidgets.QPushButton(" Open…")
+        self.probe_btn = probe = QtWidgets.QPushButton(" Read info")
         browse.setIcon(self._std_icon(QtWidgets.QStyle.SP_DirOpenIcon))
         probe.setIcon(self._std_icon(QtWidgets.QStyle.SP_FileDialogInfoView))
         row.addWidget(self.bin_edit, 1)
@@ -648,7 +660,23 @@ class MainWindow(QtWidgets.QMainWindow):
             "One .bin recording, or a folder of recordings when "
             "<i>Batch folder</i> is checked.",
         )
-        self._tip(browse, "Browse", "Pick the recording with a file dialog.")
+        self._tip(
+            browse,
+            "Browse",
+            "<b>Single bin:</b> pick one .bin file.<br>"
+            "<b>Batch folder:</b> pick the MOTHER folder that contains one "
+            "folder per recording, each holding &lt;name&gt;.bin and "
+            "&lt;name&gt;.footage. The button adapts to the selected scope.",
+        )
+        self._tip(
+            self.rb_batch,
+            "Batch folder",
+            "Process every recording under a mother folder:<br>"
+            "<tt>mother/</tt><br>"
+            "&nbsp;&nbsp;<tt>recording_1/ x.bin x.footage</tt><br>"
+            "&nbsp;&nbsp;<tt>recording_2/ ...</tt><br>"
+            "Output mirrors it: <tt>out/recording_1/PNG|JPG|MP4/...</tt>",
+        )
         self._tip(
             probe,
             "Probe",
@@ -1077,7 +1105,7 @@ class MainWindow(QtWidgets.QMainWindow):
         outer.addLayout(bar)
 
         # wiring
-        browse.clicked.connect(self._pick_bin)
+        browse.clicked.connect(self._pick_source)
         probe.clicked.connect(self._probe)
         obrowse.clicked.connect(self._pick_out)
         self.extract_btn.clicked.connect(self._start)
@@ -1148,14 +1176,16 @@ class MainWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------ dnd
     def dragEnterEvent(self, e: Any) -> None:
         urls = e.mimeData().urls() if hasattr(e, "mimeData") else []
-        if urls and urls[0].toLocalFile().lower().endswith(".bin"):
-            e.acceptProposedAction()
+        if urls:
+            p = urls[0].toLocalFile()
+            if p.lower().endswith(".bin") or os.path.isdir(p):
+                e.acceptProposedAction()
 
     def dropEvent(self, e: Any) -> None:
-        p = e.mimeData().urls()[0].toLocalFile()
-        self.bin_edit.setText(p)
-        self.rb_single.setChecked(True)
-        self._probe()
+        urls = e.mimeData().urls() if hasattr(e, "mimeData") else []
+        if not urls:
+            return
+        self._accept_dropped_path(urls[0].toLocalFile())
 
     # ------------------------------------------------------ frame viewer
     def _current_lut_kwargs(self) -> dict[str, Any]:
@@ -1434,11 +1464,52 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_scope_changed(self, batch: bool) -> None:
         """Batch mode scans folders — manual geometry fields only matter
-        for a single sidecar-less recording."""
+        for a single sidecar-less recording. The Browse button and the
+        path field adapt to the scope (v1.6.2: batch picks a FOLDER)."""
         for w in (self.w_spin, self.h_spin):
             w.setEnabled(not batch)
+        self._browse_btn.setText("Choose folder…" if batch else " Open…")
+        self.bin_edit.setPlaceholderText(
+            "path to the mother folder that contains one folder per "
+            "recording … or just drop it here"
+            if batch
+            else "path to .bin … or just drag a file onto this window"
+        )
+        try:
+            self.probe_btn.setText("Scan folders" if batch else " Read info")
+        except AttributeError:
+            pass
         if batch:
-            self.geom_hint.setText("batch: every *.bin under the folder")
+            self.geom_hint.setText(
+                "batch: <mother>/<recording>/<name.bin + name.footage>"
+            )
+
+    def _accept_dropped_path(self, path: str) -> None:
+        """Shared by drag&drop and tests: route a dropped file/folder to
+        the right scope and probe it."""
+        import os as _os
+
+        if _os.path.isdir(path):
+            self.rb_batch.setChecked(True)
+        else:
+            self.rb_single.setChecked(True)
+        self.bin_edit.setText(path)
+        self._probe()
+
+    def _pick_source(self) -> None:
+        """Scope-aware source picker (v1.6.2): Batch selects the MOTHER
+        FOLDER (containing one folder per recording, each holding the
+        .bin/.footage pair); Single selects one .bin file."""
+        if getattr(self, "rb_batch", None) and self.rb_batch.isChecked():
+            d = QtWidgets.QFileDialog.getExistingDirectory(
+                self,
+                "Select the mother folder (contains one folder per recording)",
+            )
+            if d:
+                self.bin_edit.setText(d)
+                self._probe()
+        else:
+            self._pick_bin()
 
     def _adopt_manual_geometry(self, m) -> None:
         """Sidecar-less recordings take geometry from the width/height

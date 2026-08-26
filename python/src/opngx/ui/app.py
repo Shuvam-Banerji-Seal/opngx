@@ -778,13 +778,20 @@ GPU
         pass
 
     def _pick_bin(self) -> None:
-        p = filedialog.askopenfilename(
-            filetypes=[("Optronis footage", "*.bin"), ("All files", "*.*")]
-        )
-        if p:
-            self.bin_var.set(p)
-            self.scope_var.set("single")
-            self._probe()
+        """Scope-aware source picker: Batch selects the MOTHER folder."""
+        if self.scope_var.get() == "batch":
+            p = filedialog.askdirectory(
+                title="Select the mother folder (one folder per recording)")
+            if not p:
+                return
+        else:
+            p = filedialog.askopenfilename(
+                filetypes=[("Optronis footage", "*.bin"), ("All files", "*.*")]
+            )
+            if not p:
+                return
+        self.bin_var.set(p)
+        self._probe()
 
     def _pick_out(self) -> None:
         d = filedialog.askdirectory()
