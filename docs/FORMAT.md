@@ -68,7 +68,9 @@ what opngx proves in verification.
 | Item | Rule | Example |
 |---|---|---|
 | output dir | camera name, `.` → `_` | `brow_1.2` → `brow_1_2` |
-| file names | `{prefix}%05d{ext}` | `brow_00000.Png` |
+| file names | `{prefix}%05d{ext}` (widens to 6 digits after 99999) | `brow_00000.Png` → `brow_100000.Png` |
 | extension case | capital P | `.Png` |
+
+> **Rollover note:** `%05d` zero-pads to 5 digits; frame 100 000 becomes `brow_100000.Png` (6 digits, no truncation, no wrap). The verifier sorts **numerically** by the embedded index, so `100000` correctly follows `99999` (lexicographic would misorder). Current footage is 50 000 frames, so no existing recording hits the boundary; the tool is future-proof for ≥100k runs.
 
 opngx defaults reproduce these exactly (`--prefix brow_ --ext .Png`).

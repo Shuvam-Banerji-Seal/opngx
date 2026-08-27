@@ -1248,11 +1248,17 @@ class MainWindow(QtWidgets.QMainWindow):
             if opts["frames"] is not None
             else max(0, self.meta.capacity_frames - opts["start"])
         )
-        fps_default = (
-            int(round(self.meta.framerate))
-            if self.meta.framerate and self.meta.framerate > 0
-            else 30
-        )
+        # Prefer timestamp-derived effective fps (ground truth from
+        # first→last tick, µs clock) — it catches cases where nominal
+        # Framerate=100 but timestamps run at ~1000 fps.
+        fps_default = 30
+        if getattr(self.meta, "effective_fps_us", None) and self.meta.effective_fps_us > 0:
+            fps_default = int(round(self.meta.effective_fps_us))
+        elif getattr(self.meta, "framerate_real", -1) > 0:
+            fps_default = int(round(self.meta.framerate_real))
+        elif self.meta.framerate and self.meta.framerate > 0:
+            fps_default = int(round(self.meta.framerate))
+        fps_default = max(1, min(2000, fps_default))
 
         d = QtWidgets.QDialog(self)
         d.setWindowTitle("Render video")
@@ -1261,7 +1267,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         grid = QtWidgets.QGridLayout()
         fps = QtWidgets.QSpinBox()
-        fps.setRange(1, 500)
+        fps.setRange(1, 2000)
         fps.setValue(fps_default)
         crf = QtWidgets.QSpinBox()
         crf.setRange(14, 28)
@@ -1305,13 +1311,16 @@ class MainWindow(QtWidgets.QMainWindow):
         frames_lbl.setObjectName("hint")
         v.addWidget(frames_lbl)
         v.addWidget(dur_lbl)
-        self._tip(
-            fps,
-            "Frame rate",
-            f"Playback speed of the MP4. The camera recorded at "
-            f"{self.meta.framerate:g} fps — match it for real-time "
-            "playback; lower for slow-motion review.",
+        eff = getattr(self.meta, "effective_fps_us", None)
+        nominal = self.meta.framerate
+        tip_fps = (
+            f"Playback speed of the MP4. "
+            f"Timestamps imply {eff:.1f} fps effective" if eff and eff > 0 else ""
         )
+        if nominal and nominal > 0:
+            tip_fps += f" (nominal {nominal:g} fps from sidecar)" if tip_fps else f"Camera nominal {nominal:g} fps"
+        tip_fps += " — match effective for real-time, lower for slow-motion."
+        self._tip(fps, "Frame rate", tip_fps)
         self._tip(
             crf,
             "Quality (CRF)",

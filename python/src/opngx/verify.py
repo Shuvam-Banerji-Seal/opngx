@@ -215,8 +215,11 @@ def verify(
 
     def names(d):
         p = Path(d)
+        # Numeric sort by embedded frame index — handles 99999->100000
+        # rollover where lexicographic would place 100000 before 99999.
         return sorted(
-            x.name for x in p.glob(f"{prefix}*{ext}") if x.stem[len(prefix) :].isdigit()
+            (x.name for x in p.glob(f"{prefix}*{ext}") if x.stem[len(prefix) :].isdigit()),
+            key=lambda n: int(n[len(prefix) : -len(ext)] if ext else n[len(prefix) :]),
         )
 
     rn, on = names(ref_dir), names(out_dir)

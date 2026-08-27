@@ -176,10 +176,13 @@ static int list_names(const char *dir, const char *prefix, const char *ext,
         arr[n++] = strdup(e);
     }
     port_closedir(d);
-    /* sort */
+    /* sort numerically by embedded frame index (handles 99999->100000
+       rollover; lexicographic would place 100000 before 99999) */
     for (int64_t i = 1; i < n; i++) {
-        char *k = arr[i]; int64_t jj = i-1;
-        while (jj >= 0 && strcmp(arr[jj], k) > 0) { arr[jj+1] = arr[jj]; jj--; }
+        char *k = arr[i];
+        int64_t knum = atoll(k + plen);
+        int64_t jj = i-1;
+        while (jj >= 0 && atoll(arr[jj] + plen) > knum) { arr[jj+1] = arr[jj]; jj--; }
         arr[jj+1] = k;
     }
     *names = arr; *count = n;
