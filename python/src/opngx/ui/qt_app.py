@@ -1695,10 +1695,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 for b in bins:
                     if self._cancel_requested:
                         break
-                    stem = os.path.splitext(os.path.basename(b))[0]
-                    # v1.6 tree: <mother>/<recording>/<FMT>/ for every run
-                    od = run_out_dir(out, b, o["fmt"])
                     o = opts
+                    od = run_out_dir(out, b, o["fmt"])
                     self._sig.log.emit(
                         f"extract {os.path.basename(b)} → {od}  "
                         f"[mode={o['mode']} fmt={o['fmt']} depth={o['bit_depth']} "
