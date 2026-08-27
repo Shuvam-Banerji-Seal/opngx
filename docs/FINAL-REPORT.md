@@ -1,7 +1,7 @@
 # opngx — Final Report
 
 **Repo:** https://github.com/Shuvam-Banerji-Seal/opngx
-**Version:** 1.6.1 · **License:** MIT · **CI:** green (Linux gcc/clang × libdeflate/zlib-only + native Windows msys2)
+**Version:** 1.6.3 · **License:** MIT · **CI:** green (Linux gcc/clang × libdeflate/zlib-only + native Windows msys2)
 
 ## 1. What was built
 
@@ -27,13 +27,21 @@ alternative available, provably pixel-exact against the vendor exporter.
 
 ## 3. Correctness evidence
 
-* 19 shell gates + 16 pytest tests: synthetic fixtures computed independently
+* 27 shell gates + 51 pytest tests: synthetic fixtures computed independently
   via PIL, saturation boundaries, 16-bit scaling, gray path, Paeth/unfilter
   edge cases, truncation, jobs determinism, corruption detection,
-  zlib-backend round-trip (CRC-checked), start-range parity.
+  zlib-backend round-trip (CRC-checked), start-range parity, batch
+  structured tree (layout=format) with JPG decode, spaces & non-ASCII
+  (UTF-8) output dirs, Windows backslash+drive-letter paths.
 * Real-data validation: full 50,000-frame bin → **50,000/50,000 pixel-exact**
-  (15.36 GB of scanlines proven equal); subsets of all 5 bins pass.
-* Windows build verified under Wine: synthetic + real-data pixel-exact.
+  (15.36 GB of scanlines proven equal) plus full-bin verifybin against the
+  source bin (no vendor refs needed); subsets of all 5 bins pass.
+* Windows build verified under Wine: synthetic + real-data pixel-exact
+  (27/27 Linux + 27/27 Wine). Packaged selftests (UI/Engine/Video) green
+  on the real Windows runner.
+* Batch mother-folder architecture: `<mother>/<recording>/PNG|JPG|BMP|TIF|MP4/`
+  — mirrors input `Footages/<recording>/{.bin,.footage}` to output;
+  scope-aware Browse (folder vs file) + drag&drop + flat back-compat.
 
 ## 4. Performance (Ryzen 7 250, 8C/16T)
 

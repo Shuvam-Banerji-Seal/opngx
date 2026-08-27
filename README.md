@@ -52,12 +52,25 @@ opngx verify reference_dir/ frames/ --subset    # pixel-exact proof
 opngx verifybin --bin recording.bin frames/     # prove vs source, no refs needed
 opngx verify ref_dir/ frames/ --json            # machine-readable report
 
+# batch: mother folder → structured output tree
+# input mother folder layout (one sub-folder per recording):
+#   Footages/
+#     SQ_100_s1/  SQ_100_s1.bin  SQ_100_s1.footage
+#     SQ_100_s2/  SQ_100_s2.bin  SQ_100_s2.footage
+opngx batch Footages/ -o FramesOut/ --layout format --format png -j 16
+# → FramesOut/SQ_100_s1/PNG/*.Png
+# → FramesOut/SQ_100_s2/PNG/*.Png
+
 # standalone C binary (no python needed)
-./build/opngx-engine batch sbs/bin/ -o out_root/ -j 16
+./build/opngx-engine batch --in-dir sbs/bin/ --out-root out_root/ --layout format -j 16
 
 # GUI — opngx studio (Qt)
 opngx-ui          # black / coffee-green theme, frame viewer,
-                  # video rendering, drag & drop, live progress
+                   # video rendering, drag & drop, live progress
+                   # Batch: click "Batch folder" → Browse now opens a
+                   # FOLDER picker (select the mother folder above).
+                   # Output mirrors it: <out>/<recording>/PNG|JPG|BMP|TIF|MP4/
+                   # Also: drag & drop a folder → Batch, a .bin → Single.
 
 Requires PySide6 for the Qt edition ('pip install "opngx[qt]"');
 falls back to a Tkinter UI when absent.
