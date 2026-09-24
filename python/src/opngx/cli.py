@@ -9,6 +9,9 @@ from pathlib import Path
 
 import opngx
 
+# default extension per container, matching the C engine and the studio
+_DEFAULT_EXT = {"png": ".Png", "jpg": ".jpg", "bmp": ".bmp", "tif": ".tif"}
+
 
 def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--footage", help="path to .footage sidecar (default: auto)")
@@ -23,9 +26,37 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--brightness", type=float, default=None)
     p.add_argument("--contrast", type=float, default=None)
     p.add_argument("--gamma", type=float, default=None)
+    p.add_argument(
+        "--sidecar-transform",
+        action="store_true",
+        help="in reference mode take B/C/G from the .footage instead of the "
+        "values above (cycle 22)",
+    )
     p.add_argument("--bit-depth", type=int, default=8, choices=(8, 16))
+    p.add_argument(
+        "--channels",
+        choices=["rgba", "gray"],
+        default="rgba",
+        help="rgba (vendor-like) or gray (faster, ~2.5x, identical pixels)",
+    )
+    p.add_argument(
+        "-F",
+        "--format",
+        choices=["png", "jpg", "bmp", "tif"],
+        default="png",
+        help="output container (default: png)",
+    )
+    p.add_argument("-q", "--jpeg-quality", type=int, default=90)
+    p.add_argument(
+        "--crop",
+        default=None,
+        metavar="X,Y,W,H",
+        help="region of interest; W/H of 0 mean 'to the frame edge'",
+    )
     p.add_argument("--prefix", default="brow_", help="filename prefix")
-    p.add_argument("--ext", default=".Png", help='extension (default ".Png")')
+    p.add_argument(
+        "--ext", default=None, help="output extension (default: follows --format)"
+    )
     p.add_argument(
         "-j", "--jobs", type=int, default=0, help="worker threads (0 = all cores)"
     )
@@ -66,6 +97,13 @@ def main(argv: list[str] | None = None) -> int:
     pb = sub.add_parser("batch", help="extract every .bin under a directory tree")
     pb.add_argument("in_dir")
     _add_engine_args(pb)
+    pb.add_argument(
+        "--layout",
+        choices=["flat", "format"],
+        default="format",
+        help="format = <out>/<recording>/<FMT>/ tree (default), flat = legacy "
+        "<out>/<recording>/",
+    )
 
     pv = sub.add_parser("verify", help="pixel-exact verify out vs reference dir")
     pv.add_argument("ref_dir")
@@ -268,6 +306,18 @@ def main(argv: list[str] | None = None) -> int:
         print(rep)
         return 0 if rep.passed else 1
 
+    def _parse_crop(spec):
+        if not spec:
+            return None
+        parts = spec.replace(" ", "").split(",")
+        if len(parts) != 4:
+            raise SystemExit(f"opngx: --crop needs X,Y,W,H (got {spec!r})")
+        try:
+            x, y, w, h = (int(v) for v in parts)
+        except ValueError:
+            raise SystemExit(f"opngx: --crop needs integers (got {spec!r})")
+        return (x, y, w, h)
+
     def run_one(bin_path: str, out: str):
         ex = opngx.Extractor(bin_path, getattr(args, "footage", None))
 
@@ -277,18 +327,23 @@ def main(argv: list[str] | None = None) -> int:
             if done >= total:
                 sys.stderr.write("\n")
 
+        fmt = getattr(args, "format", "png")
+        ext = args.ext if args.ext else _DEFAULT_EXT[fmt]
         st = ex.extract(
             out,
             mode=args.mode,
-            fmt=getattr(args, "format", "png"),
+            fmt=fmt,
             brightness=args.brightness,
             contrast=args.contrast,
             gamma=args.gamma,
             bit_depth=args.bit_depth,
+            channels=0 if args.channels == "gray" else 6,
+            jpeg_quality=args.jpeg_quality,
+            crop=_parse_crop(getattr(args, "crop", None)),
             jobs=args.jobs,
             level=args.level,
             prefix=args.prefix,
-            ext=args.ext,
+            ext=ext,
             start=args.start,
             frames=args.frames,
             export_timestamps=args.timestamps,
@@ -301,20 +356,36 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.cmd == "extract":
             return run_one(args.bin, args.out)
-        # batch
+        # batch — walk the tree the same way the studio does: one level of
+        # nesting (vendor <root>/<recording>/<name>.bin) plus any loose .bin
+        from opngx.layout import batch_out_dir, recording_key, safe_name
+
         bins = sorted(Path(args.in_dir).glob("*/*.bin")) + sorted(
             Path(args.in_dir).glob("*.bin")
         )
+        if not bins:
+            print(f"opngx: no .bin files found under {args.in_dir}", file=sys.stderr)
+            return 1
+        # never let two recordings land in one output folder (cycle 22)
+        seen: dict[str, str] = {}
+        for b in bins:
+            key = recording_key(str(args.in_dir), str(b))
+            if key in seen and seen[key] != str(b):
+                print(
+                    f"opngx: error: '{key}' would receive both {seen[key]} and "
+                    f"{b}; rename the recording folders so they stay distinct",
+                    file=sys.stderr,
+                )
+                return 1
+            seen[key] = str(b)
         rc = 0
         for b in bins:
-            stem = b.stem
-            outdir = Path(args.out) / stem.replace(".", "_")
-            if getattr(args, "layout", "flat") == "format":
-                from opngx.ui.qt_app import _run_out_dir  # reuse the helper
-
-                outdir = _run_out_dir(
-                    str(args.out), str(b), getattr(args, "format", "png")
+            if args.layout == "format":
+                outdir = batch_out_dir(
+                    str(args.out), str(args.in_dir), str(b), args.format
                 )
+            else:
+                outdir = str(Path(args.out) / recording_key(str(args.in_dir), str(b)))
             print(f"opngx: batch {b} -> {outdir}")
             rc |= run_one(str(b), str(outdir))
         return rc

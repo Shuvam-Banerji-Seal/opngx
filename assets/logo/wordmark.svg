@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="520" height="120" viewBox="0 0 520 120" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2" y="2" width="116" height="116" rx="26" fill="#050505" stroke="#1f261f" stroke-width="3"/>
+  <g transform="translate(0,0)">
+    <path d="M 55.41 48.91 L 43.16 19.35 L 76.84 19.35 L 64.59 48.91 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 64.59 48.91 L 76.84 19.35 L 100.65 43.16 L 71.09 55.41 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 71.09 55.41 L 100.65 43.16 L 100.65 76.84 L 71.09 64.59 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 71.09 64.59 L 100.65 76.84 L 76.84 100.65 L 64.59 71.09 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 64.59 71.09 L 76.84 100.65 L 43.16 100.65 L 55.41 71.09 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 55.41 71.09 L 43.16 100.65 L 19.35 76.84 L 48.91 64.59 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 48.91 64.59 L 19.35 76.84 L 19.35 43.16 L 48.91 55.41 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 48.91 55.41 L 19.35 43.16 L 43.16 19.35 L 55.41 48.91 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="60" cy="60" r="12" fill="#4d8248" stroke="white" stroke-width="7"/>
+    <circle cx="60" cy="60" r="4.6" fill="white" opacity="0.92"/>
+  </g>
+  <text x="136" y="78" font-family="'Inter','Segoe UI',sans-serif" font-size="72" font-weight="800" letter-spacing="-3" fill="#0f172a">opn<tspan fill="#4d8248">gx</tspan></text>
+  <text x="136" y="102" font-family="'Inter','Segoe UI',sans-serif" font-size="16" font-weight="600" letter-spacing="6" fill="#64748b">PIXEL-EXACT • ULTRA-FAST</text>
+</svg>

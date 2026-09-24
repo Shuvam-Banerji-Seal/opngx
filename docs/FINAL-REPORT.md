@@ -1,7 +1,7 @@
 # opngx — Final Report
 
 **Repo:** https://github.com/Shuvam-Banerji-Seal/opngx
-**Version:** 1.6.4 · **License:** MIT · **CI:** green (Linux gcc/clang × libdeflate/zlib-only + native Windows msys2)
+**Version:** 1.7.0 · **License:** MIT · **CI:** green (Linux gcc/clang × libdeflate/zlib-only + native Windows msys2)
 
 ## 1. What was built
 
@@ -27,12 +27,36 @@ alternative available, provably pixel-exact against the vendor exporter.
 
 ## 3. Correctness evidence
 
-* 27 shell gates + 51 pytest tests: synthetic fixtures computed independently
-  via PIL, saturation boundaries, 16-bit scaling, gray path, Paeth/unfilter
-  edge cases, truncation, jobs determinism, corruption detection,
-  zlib-backend round-trip (CRC-checked), start-range parity, batch
+* **38 shell gates + 60 pytest tests**, all green on **both** the Linux
+  build and the Windows build under **Wine** (cycle 22): synthetic fixtures
+  computed independently via PIL, saturation boundaries, 16-bit scaling, gray
+  path, Paeth/unfilter edge cases, truncation, jobs determinism, corruption
+  detection, zlib-backend round-trip (CRC-checked), start-range parity, batch
   structured tree (layout=format) with JPG decode, spaces & non-ASCII
-  (UTF-8) output dirs, Windows backslash+drive-letter paths.
+  (UTF-8) output dirs, Windows backslash+drive-letter paths, **batch quality
+  flags**, **ROI crop pixel-exactness + verifier parity**, and **crop
+  validation**.
+
+### Cycle 22 — batch correctness audit
+
+A field report ("the whole batch is not getting applied") decomposed into
+**three independent defects plus a data-loss bug found by the bug hunt**,
+each reproduced before it was fixed:
+
+| Finding | Root cause | Gate |
+|---|---|---|
+| `reference` mode discarded the user's B/C/G | engine overwrote all three with sidecar values; the preview honoured them, so **the viewer lied about the file** | AR-17 / AR-18 |
+| `opngx-engine batch` rejected `--brightness/--contrast/--gamma/--channels/--bit-depth/--jpeg-quality` and hardcoded `gamma = 1.0` | the subcommand had a hand-rolled parser with a fraction of `extract`'s surface | T-22, AR-20 |
+| `opngx batch --layout` was an argparse error, and the layout branch imported a non-existent `_run_out_dir` from the Qt module | flags never registered; `getattr` hid the gap until runtime | AR-19 |
+| **data loss**: two recordings sharing a `.bin` filename overwrote each other (16 frames extracted, 8 on disk) | output folder keyed on the *filename* instead of the recording *folder* | AR-21, AR-22 |
+
+The new transform rule — *an explicitly supplied value always wins; the
+sidecar fills in only the fields left alone* — is implemented in the Python
+extractor, the C job creation path **and** the verifier, so extraction and
+verification cannot drift apart. It required turning an on/off switch into a
+per-field bitmask, because `brightness=0, contrast=0, gamma=1` are both
+legitimate defaults *and* legitimate user choices.
+
 * Real-data validation: full 50,000-frame bin → **50,000/50,000 pixel-exact**
   (15.36 GB of scanlines proven equal) plus full-bin verifybin against the
   source bin (no vendor refs needed); subsets of all 5 bins pass.

@@ -153,6 +153,7 @@ def render_video(
     fps: int = 30,
     crf: int = 18,
     preset: str = "medium",
+    crop: Optional[tuple[int, int, int, int]] = None,
     progress: Optional[Callable[[int, int], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
@@ -188,6 +189,23 @@ def render_video(
         g = meta.gamma if g is None else g
     lut = bytes(build_lut(b, c, g))
 
+    # region of interest (cycle 22): the MP4 must carry the SAME window the
+    # PNGs do, or the two outputs of one run disagree.
+    W, H = int(meta.width), int(meta.height)
+    if crop is None:
+        cx = cy = cw = ch = 0
+    else:
+        cx, cy, cw, ch = (int(v) for v in crop)
+    if cw == 0:
+        cw = W - cx
+    if ch == 0:
+        ch = H - cy
+    if cw < 1 or ch < 1 or cx + cw > W or cy + ch > H:
+        raise ValueError(
+            f"crop {cx},{cy} {cw}x{ch} does not fit inside the {W}x{H} frame"
+        )
+    cropped = bool(cx or cy or cw != W or ch != H)
+
     n = count if count is not None else meta.capacity_frames - start
     n = max(0, min(n, meta.capacity_frames - start))
     if n == 0:
@@ -204,7 +222,8 @@ def render_video(
     if not ffmpeg_bin:
         raise RuntimeError(
             "ffmpeg was not found (bundled copy missing and not on PATH).\n"
-            "Reinstall opngx, or install ffmpeg and try again.")
+            "Reinstall opngx, or install ffmpeg and try again."
+        )
     cmd = [
         ffmpeg_bin,
         "-y",
@@ -215,7 +234,7 @@ def render_video(
         "-pix_fmt",
         "gray",
         "-s",
-        f"{meta.width}x{meta.height}",
+        f"{cw}x{ch}",
         "-r",
         str(fps),
         "-i",
@@ -264,7 +283,19 @@ def render_video(
                     pieces = []
                     for i in range(s0, e0):
                         base = (start + i) * meta.frame_stride + 8
-                        raw = mm[base : base + px]
+                        if cropped:
+                            rows = [
+                                mm[
+                                    base + (cy + y) * W + cx : base
+                                    + (cy + y) * W
+                                    + cx
+                                    + cw
+                                ]
+                                for y in range(ch)
+                            ]
+                            raw = b"".join(rows)
+                        else:
+                            raw = mm[base : base + px]
                         pieces.append(raw.translate(lut))
                     return chunk_idx, pieces
 

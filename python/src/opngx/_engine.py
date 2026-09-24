@@ -17,7 +17,7 @@ import struct
 from pathlib import Path
 from typing import Optional
 
-ABI_VERSION = 4
+ABI_VERSION = 5
 
 MODE_REFERENCE, MODE_RAW, MODE_CUSTOM = 0, 1, 2
 BACKEND_AUTO, BACKEND_LIBDEFLATE, BACKEND_ZLIB = 0, 1, 2
@@ -38,10 +38,18 @@ class OpngxParams(ctypes.Structure):
         ("brightness", ctypes.c_double),
         ("contrast", ctypes.c_double),
         ("gamma", ctypes.c_double),
+        # FIX-1: reference mode honours the three fields above unless this is
+        # set, in which case they are replaced by the .footage values.
+        ("use_sidecar_transform", ctypes.c_int),
         ("bit_depth", ctypes.c_int),
         ("channels", ctypes.c_int),  # 6 = RGBA (default), 0 = gray
         ("format", ctypes.c_int),  # 0 png, 1 bmp, 2 tif, 3 jpg
         ("jpeg_quality", ctypes.c_int),
+        # cycle 22: region of interest. crop_w/crop_h of 0 mean full frame.
+        ("crop_x", ctypes.c_uint32),
+        ("crop_y", ctypes.c_uint32),
+        ("crop_w", ctypes.c_uint32),
+        ("crop_h", ctypes.c_uint32),
         ("out_dir", ctypes.c_char_p),
         ("prefix", ctypes.c_char_p),
         ("ext", ctypes.c_char_p),

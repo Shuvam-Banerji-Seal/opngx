@@ -21,7 +21,7 @@ import time
 from typing import Any, Optional
 
 import opngx
-from opngx.layout import mp4_dir, run_out_dir, safe_name
+from opngx.layout import batch_out_dir, mp4_dir, run_out_dir, safe_name
 
 # --------------------------------------------------------------------------- #
 #  Qt import guard so the package stays installable without PySide6
@@ -238,16 +238,34 @@ your output mother folder:<br>
 The Verify buttons automatically target the current recording's folder.
 <b>Scan folders</b> (the Read info button in Batch scope) lists how many
 recordings were found before you commit.<br>
+<b>Batch window…</b> opens a card per recording: each card shows a real
+decoded frame, its geometry, frame count, fps, crop and live progress.
+Every setting you change in the main window applies to the WHOLE batch,
+and each card can be cropped on its own.<br>
 <b>Drag &amp; drop</b> — a .bin anywhere switches to Single; a FOLDER
 anywhere switches to Batch.
 
+<h3 style='color:#93c5fd'>Region of interest (crop)</h3>
+<b>Crop…</b> opens a picker over the current frame. Drag a rectangle (or
+type exact x/y/w/h), then choose whether it applies to this recording or
+to every recording in the batch. Cropping selects pixels, it never
+resamples, so a cropped frame is bit-identical to the matching rectangle
+of an uncropped one. The frame viewer, the PNGs, the MP4 and
+<i>Verify vs source bin</i> all use the same window, so what you see is
+what lands on disk.
+
 <h3 style='color:#93c5fd'>Quality mode</h3>
 <b>reference</b> — reproduces the vendor player's display transform exactly.
-Output pixels match Optronis-exported PNGs bit-for-bit (verified).<br>
+Output pixels match Optronis-exported PNGs bit-for-bit (verified). Takes
+brightness/contrast/gamma from each recording's own .footage sidecar.<br>
 <b>raw</b> — sensor bytes unchanged. The vendor transform clips bright
 pixels at raw ≥ 139; raw mode keeps them. Maximum fidelity.<br>
-<b>custom</b> — your own brightness / contrast / gamma.
-Formula: out = clamp(round((v+B)·(1+C/50)), 0..255), gamma applied after.
+<b>custom</b> — your own brightness / contrast / gamma, applied to every
+recording in the batch. Formula: out = clamp(round((v+B)·(1+C/50)), 0..255),
+gamma applied after.
+<br><span style='color:#fbbf24'>In reference mode the B/C/G fields show what
+the sidecar will use; type a value and opngx applies yours to every file in
+the batch, exactly as the preview shows.</span>
 
 <h3 style='color:#93c5fd'>Frame range</h3>
 <b>start</b> — first frame index (0-based). <b>count</b> — how many frames;
@@ -397,10 +415,45 @@ def _detect_gpus() -> list[str]:
         return []
 
 
+def _app_icon() -> "QtGui.QIcon":
+    """Window icon from the shipped logo suite (A-54).
+
+    Resolution order mirrors the engine discovery: PyInstaller _MEIPASS
+    first, then the source tree, then next to the installed exe. A missing
+    or unreadable file yields a null icon, which Qt renders as the default
+    — never a crash, because the studio must start on any machine.
+    """
+    import sys
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    roots = []
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        roots.append(mei)
+    roots += [
+        os.path.abspath(os.path.join(here, "..", "..", "..", "..", "assets", "logo")),
+        os.path.abspath(
+            os.path.join(here, "..", "..", "..", "..", "..", "assets", "logo")
+        ),
+        os.path.join(os.path.dirname(sys.executable), "assets", "logo"),
+        os.path.join(os.path.dirname(sys.executable), "assets_logo"),
+    ]
+    for r in roots:
+        p = os.path.join(r, "icon.png")
+        if os.path.isfile(p):
+            icon = QtGui.QIcon(p)
+            if not icon.isNull():
+                return icon
+    return QtGui.QIcon()
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("opngx studio")
+        icon = _app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.resize(1180, 800)
         self.setMinimumSize(760, 520)
         self.setAcceptDrops(True)
@@ -409,6 +462,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._running = False
         self._cancel_requested = False
         self._t_start = 0.0
+        self._crop: Optional[tuple[int, int, int, int]] = None
+        self._batch_win = None
         self._sig = WorkerSignals()
         self._sig.progress.connect(self._on_progress)
         self._sig.log.connect(self._log)
@@ -520,8 +575,8 @@ class MainWindow(QtWidgets.QMainWindow):
             f"engine: {opngx.engine_backend()}<br>"
             f"cpus: {os.cpu_count()} logical • gpus: {gpus}</p>"
             "<p>Ultra-fast, pixel-exact Optronis .bin → PNG/JPG/BMP/TIFF "
-            "extraction with MP4 rendering, frame viewer and built-in "
-            "verification. All CPU cores by default.</p>"
+            "extraction with MP4 rendering, frame viewer, region-of-interest "
+            "cropping and built-in verification. All CPU cores by default.</p>"
             "<p>Help menu documents every control; F1 opens the field guide.<br>"
             "License: MIT • "
             "<a href='https://github.com/Shuvam-Banerji-Seal/opngx'>"
@@ -1096,6 +1151,23 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.addWidget(video_btn)
         bar.addWidget(verify)
         bar.addWidget(verify_bin)
+        self.batch_btn = QtWidgets.QPushButton("▦  Batch window…")
+        self.batch_btn.setToolTip(
+            "<b>Batch window</b><br>One card per recording with a real decoded "
+            "frame, its geometry, frame count and crop. Set brightness / "
+            "contrast / gamma / format here and they apply to the WHOLE batch. "
+            "Crop a region per recording or for all of them at once."
+        )
+        self.batch_btn.clicked.connect(self._open_batch_window)
+        bar.addWidget(self.batch_btn)
+        self.crop_btn = QtWidgets.QPushButton("✂  Crop…")
+        self.crop_btn.setToolTip(
+            "<b>Region of interest</b><br>Drag a rectangle over the frame to "
+            "extract only that part of every frame. Pixels are selected, never "
+            "resampled, so a crop is pixel-exact."
+        )
+        self.crop_btn.clicked.connect(self._open_crop_editor)
+        bar.addWidget(self.crop_btn)
         self.progress = QtWidgets.QProgressBar()
         self.progress.setFixedHeight(16)
         bar.addWidget(self.progress, 1)
@@ -1208,6 +1280,15 @@ class MainWindow(QtWidgets.QMainWindow):
         img = QtGui.QImage(
             buf, m.width, m.height, m.width, QtGui.QImage.Format_Grayscale8
         ).copy()
+        # show the region of interest the extractor will actually write, so
+        # the viewer and the files can never disagree (cycle 22)
+        if self._crop:
+            x, y, w, h = self._crop
+            x = max(0, min(int(x), m.width - 1))
+            y = max(0, min(int(y), m.height - 1))
+            w = max(1, min(int(w), m.width - x))
+            h = max(1, min(int(h), m.height - y))
+            img = img.copy(x, y, w, h)
         pm = QtGui.QPixmap.fromImage(img)
         scaled = pm.scaled(
             self.viewer_img.width() - 2,
@@ -1216,7 +1297,11 @@ class MainWindow(QtWidgets.QMainWindow):
             Qt.SmoothTransformation,
         )
         self.viewer_img.setPixmap(scaled)
-        self.frame_lbl.setText(f"frame {idx:,} / {m.capacity_frames - 1:,}")
+        tail = ""
+        if self._crop:
+            _, _, cw, ch = self._crop
+            tail = f" • crop → {cw} × {ch} px"
+        self.frame_lbl.setText(f"frame {idx:,} / {m.capacity_frames - 1:,}{tail}")
 
     def _refresh_frame(self) -> None:
         if self.meta and self.frame_slider.maximum() > 0:
@@ -1252,7 +1337,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # first→last tick, µs clock) — it catches cases where nominal
         # Framerate=100 but timestamps run at ~1000 fps.
         fps_default = 30
-        if getattr(self.meta, "effective_fps_us", None) and self.meta.effective_fps_us > 0:
+        if (
+            getattr(self.meta, "effective_fps_us", None)
+            and self.meta.effective_fps_us > 0
+        ):
             fps_default = int(round(self.meta.effective_fps_us))
         elif getattr(self.meta, "framerate_real", -1) > 0:
             fps_default = int(round(self.meta.framerate_real))
@@ -1314,11 +1402,16 @@ class MainWindow(QtWidgets.QMainWindow):
         eff = getattr(self.meta, "effective_fps_us", None)
         nominal = self.meta.framerate
         tip_fps = (
-            f"Playback speed of the MP4. "
-            f"Timestamps imply {eff:.1f} fps effective" if eff and eff > 0 else ""
+            f"Playback speed of the MP4. Timestamps imply {eff:.1f} fps effective"
+            if eff and eff > 0
+            else ""
         )
         if nominal and nominal > 0:
-            tip_fps += f" (nominal {nominal:g} fps from sidecar)" if tip_fps else f"Camera nominal {nominal:g} fps"
+            tip_fps += (
+                f" (nominal {nominal:g} fps from sidecar)"
+                if tip_fps
+                else f"Camera nominal {nominal:g} fps"
+            )
         tip_fps += " — match effective for real-time, lower for slow-motion."
         self._tip(fps, "Frame rate", tip_fps)
         self._tip(
@@ -1404,6 +1497,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     count=n,
                     fps=fps.value(),
                     crf=crf.value(),
+                    crop=self._crop,
                     progress=pgs,
                     should_cancel=lambda: state["cancel"],
                 )
@@ -1561,14 +1655,121 @@ class MainWindow(QtWidgets.QMainWindow):
         if d:
             self.out_edit.setText(d)
 
+    # ------------------------------------------------- batch window / crop
+    def _open_batch_window(self) -> None:
+        """The dedicated batch surface (cycle 22): one card per recording."""
+        from opngx.ui.batch import BatchWindow, scan_batch
+
+        if self.rb_batch.isChecked():
+            root = self.bin_edit.text().strip()
+            if not root:
+                QtWidgets.QMessageBox.warning(
+                    self, "opngx", "Choose the batch mother folder first."
+                )
+                return
+        else:
+            root = os.path.dirname(self.bin_edit.text().strip()) or "."
+        if not scan_batch(root):
+            QtWidgets.QMessageBox.warning(
+                self, "opngx", f"No .bin recordings found under\n{root}"
+            )
+            return
+        out = self.out_edit.text().strip()
+        if not out:
+            QtWidgets.QMessageBox.warning(
+                self, "opngx", "Choose an output directory first."
+            )
+            return
+        win = BatchWindow(self, root, out, self._collect_opts())
+        if self._crop:
+            for it in win.items:
+                it.crop = self._crop
+                win.cards[it.bin_path].refresh()
+        win.show()
+        self._batch_win = win
+        self._log(f"batch window opened for {root} ({len(win.items)} recording(s))")
+
+    def load_batch_item(self, item) -> None:
+        """Adopt one recording from the batch window into the main viewer."""
+        if item.meta is None:
+            return
+        self.rb_single.setChecked(True)
+        self.bin_edit.setText(item.bin_path)
+        self.meta = item.meta
+        self._crop = item.crop
+        self._adopt_manual_geometry(self.meta)
+        m = self.meta
+        self._fill_info(
+            [
+                ("camera", m.camera_name or "?"),
+                ("geometry", f"{m.width} × {m.height} px"),
+                (
+                    "crop",
+                    "full frame"
+                    if not item.crop
+                    else f"{item.crop[0]},{item.crop[1]} {item.crop[2]}×{item.crop[3]}",
+                ),
+                (
+                    "output size",
+                    item.out_size,
+                ),
+                ("frames", f"{m.capacity_frames:,}"),
+                ("framerate", f"{m.framerate:g} fps" if m.framerate > 0 else "?"),
+                ("display B/C/G", f"{m.brightness:g} / {m.contrast:g} / {m.gamma:g}"),
+            ]
+        )
+        self.frame_slider.blockSignals(True)
+        self.frame_slider.setRange(0, max(0, m.capacity_frames - 1))
+        mid = m.capacity_frames // 2
+        self.frame_slider.setValue(mid)
+        self.frame_slider.blockSignals(False)
+        self._show_frame(mid)
+        self._log(f"loaded {os.path.basename(item.bin_path)} from the batch window")
+
+    def _open_crop_editor(self) -> None:
+        """Interactive ROI picker over a real decoded frame (cycle 22)."""
+        if not self.meta:
+            QtWidgets.QMessageBox.warning(self, "opngx", "Probe a recording first.")
+            return
+        if not self.meta.width or not self.meta.height:
+            QtWidgets.QMessageBox.warning(
+                self, "opngx", "This recording has no decodable frame yet."
+            )
+            return
+        m = self.meta
+        idx = int(self.frame_slider.value()) if self.frame_slider.maximum() else 0
+        try:
+            buf = opngx.read_frame_gray(m.bin_path, m, idx, mode="raw")
+        except Exception as exc:  # noqa: BLE001
+            QtWidgets.QMessageBox.critical(self, "opngx", str(exc))
+            return
+        img = QtGui.QImage(
+            buf, m.width, m.height, m.width, QtGui.QImage.Format_Grayscale8
+        ).copy()
+        from opngx.ui.batch import CropEditor
+
+        dlg = CropEditor(self, img, self._crop, (m.width, m.height))
+        dlg.exec()
+        self._crop = dlg.selection()
+        if self._batch_win is not None:
+            for it in self._batch_win.items:
+                it.crop = self._crop if dlg.apply_all.isChecked() else it.crop
+                self._batch_win.cards[it.bin_path].refresh()
+        if self._crop:
+            x, y, w, h = self._crop
+            self._log(f"crop set: {x},{y} {w}×{h} → output {w} × {h} px")
+        else:
+            self._log("crop cleared (full frame)")
+        self._show_frame(idx)
+
     def _probe(self) -> None:
         target = self.bin_edit.text().strip()
         if not target:
             return
         if self.rb_batch.isChecked():
-            bins = sorted(glob.glob(os.path.join(target, "*", "*.bin"))) + sorted(
-                glob.glob(os.path.join(target, "*.bin"))
-            )
+            from opngx.ui.batch import scan_batch
+
+            bins = scan_batch(target)
             self._fill_info(
                 [
                     ("scope", "batch folder"),
@@ -1576,7 +1777,10 @@ class MainWindow(QtWidgets.QMainWindow):
                     ("bins found", str(len(bins))),
                 ]
             )
-            self._log(f"batch scan: {len(bins)} bin(s) under {target}")
+            self._log(
+                f"batch scan: {len(bins)} bin(s) under {target} — "
+                "open the batch window to preview and crop each recording"
+            )
             return
         try:
             m = opngx.probe(target)
@@ -1705,7 +1909,14 @@ class MainWindow(QtWidgets.QMainWindow):
                     if self._cancel_requested:
                         break
                     o = opts
-                    od = run_out_dir(out, b, o["fmt"])
+                    # batch scope: key the folder on the RECORDING, not the
+                    # .bin filename — two cameras both holding "rec.bin"
+                    # used to collapse into one folder and overwrite each
+                    # other (cycle-22 field finding)
+                    if batch:
+                        od = batch_out_dir(out, root_dir, b, o["fmt"])
+                    else:
+                        od = run_out_dir(out, b, o["fmt"])
                     self._sig.log.emit(
                         f"extract {os.path.basename(b)} → {od}  "
                         f"[mode={o['mode']} fmt={o['fmt']} depth={o['bit_depth']} "
@@ -1721,6 +1932,7 @@ class MainWindow(QtWidgets.QMainWindow):
                             d_ / max(time.perf_counter() - self._t_start, 1e-9),
                         ),
                         should_cancel=lambda: self._cancel_requested,
+                        crop=self._crop,
                         **opts,
                     )
                 if last is not None:
@@ -1774,6 +1986,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     channels=opts["channels"],
                     prefix=opts["prefix"],
                     ext=opts["ext"],
+                    crop=self._crop,
                 )
                 msg = (
                     "<b style='color:#34d399'>PASS</b> — all "

@@ -1,5 +1,7 @@
 # opngx
 
+<img src="assets/logo/wordmark.png" alt="opngx" width="360">
+
 **Ultra-fast, pixel-exact extraction of Optronis TimeViewer `.bin` high-speed-camera footage to PNG — all CPU cores by default, GPU-aware, CLI + GUI + Python library.**
 
 ```
@@ -15,10 +17,13 @@
 | raw/lossless mode (no highlight clipping) | ✗ | ✗ | ✓ |
 | grayscale fast path (2.5× faster) | ✗ | ✗ | ✓ |
 | direct MP4 render from .bin | ✗ | manual | ✓ |
+| region-of-interest crop (pixel-exact) | ✗ | manual | ✓ |
+| batch window with a preview per recording | ✗ | ✗ | ✓ |
 | in-app frame viewer + verification | ✗ | ✗ | ✓ |
 | per-frame timestamps + metadata JSON | ✗ | ✗ | ✓ |
 | pixel-exact verification tool | ✗ | manual | built-in |
 | runs anywhere (Intel/AMD/ARM, any OS) | ✗ | ✓ | ✓ |
+
 
 The reverse-engineered format and the proven transform are documented in
 [`docs/FORMAT.md`](docs/FORMAT.md); measured performance in
@@ -60,9 +65,16 @@ opngx verify ref_dir/ frames/ --json            # machine-readable report
 opngx batch Footages/ -o FramesOut/ --layout format --format png -j 16
 # → FramesOut/SQ_100_s1/PNG/*.Png
 # → FramesOut/SQ_100_s2/PNG/*.Png
+# Every quality flag `extract` accepts works here too, and applies to the
+# WHOLE batch:
+opngx batch Footages/ -o FramesOut/ --mode custom \
+    --brightness 20 --contrast 30 --gamma 2.0 --channels gray
+# …and so does a crop, for every recording at once:
+opngx batch Footages/ -o FramesOut/ --crop 100,80,512,384
 
 # standalone C binary (no python needed)
-./build/opngx-engine batch --in-dir sbs/bin/ --out-root out_root/ --layout format -j 16
+./build/opngx-engine batch --in-dir sbs/bin/ --out-root out_root/ \
+    --layout format -j 16 --mode custom --gamma 2.0 --crop 0,0,256,256
 
 # GUI — opngx studio (Qt)
 opngx-ui          # black / coffee-green theme, frame viewer,
@@ -71,6 +83,17 @@ opngx-ui          # black / coffee-green theme, frame viewer,
                    # FOLDER picker (select the mother folder above).
                    # Output mirrors it: <out>/<recording>/PNG|JPG|BMP|TIF|MP4/
                    # Also: drag & drop a folder → Batch, a .bin → Single.
+                   # "Batch window…" gives every recording its own card
+                   # with a real decoded frame, geometry, fps and live
+                   # progress — the settings above apply to all of them.
+                   # "Crop…" opens a picker: drag a rectangle over the
+                   # frame, then apply it to this recording or all of them.
+                   # Cropping selects pixels, never resamples, so it is
+                   # pixel-exact and verifybin agrees.
+
+# Region of interest — pure pixel selection, no resampling
+opngx extract recording.bin -o frames/ --crop 100,80,512,384
+# output is 512x384; pixel (x,y) == LUT(source[crop_x+x, crop_y+y])
 
 Requires PySide6 for the Qt edition ('pip install "opngx[qt]"');
 falls back to a Tkinter UI when absent.
@@ -88,7 +111,14 @@ import opngx
 meta = opngx.probe("recording.bin")             # geometry, fps, settings
 st = opngx.extract("recording.bin", "frames/", mode="raw", jobs=0,
                    timestamps=True, progress=lambda d,t: print(f"{d}/{t}"))
+
+# v1.7: crop a region, and/or override the vendor transform
+st = opngx.extract("recording.bin", "roi/", mode="custom",
+                   brightness=20, contrast=30, gamma=2.0,
+                   crop=(100, 80, 512, 384))
+
 rep = opngx.verify("reference_dir/", "frames/") # pixel-exact check
+rep = opngx.verify_against_bin("recording.bin", "roi/", crop=(100,80,512,384))
 print(st, rep, sep="\n")
 ```
 

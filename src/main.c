@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <errno.h>
 #include <dirent.h>
 #ifndef _WIN32
 #include <unistd.h>
@@ -35,16 +36,22 @@ static void usage(void) {
 "                       [--format png|jpg|bmp|tif] [options]\n"
 "  opngx-engine verify  REF_DIR OUT_DIR [--prefix brow] [--ext .Png]\n"
 "  opngx-engine verifybin --bin FILE OUT_DIR [--footage F] [-m MODE]\n"
-"                       [--prefix brow_] [--ext .Png] [--json]\n"
+"                       [--prefix brow_] [--ext .Png] [--crop X,Y,W,H] [--json]\n"
 "  opngx-engine info    [--bin FILE] [--footage FILE]\n"
 "  opngx-engine bench   --bin FILE [--frames N] [--jobs N] [--level N]\n"
 "                       [--backend auto|libdeflate|zlib] [--repeat R]\n"
 "\n"
-"Extract options:\n"
+"Extract options (also accepted by `batch`):\n"
 "  -m, --mode MODE        reference | raw | custom      (default: reference)\n"
 "      --brightness F     custom brightness            (default 0)\n"
 "      --contrast F       custom contrast              (default 0)\n"
 "      --gamma F          custom gamma (1 = off)       (default 1)\n"
+"      --sidecar-transform  reference mode takes B/C/G from the .footage\n"
+"                           instead of the values above (default: use the\n"
+"                           values above, i.e. an explicit transform wins)\n"
+"      --crop X,Y,W,H     region of interest; W/H of 0 mean 'to the frame\n"
+"                         edge'. Output is exactly this source window,\n"
+"                         with no resampling.\n"
 "      --bit-depth N      8 or 16                      (default 8)\n"
 "      --channels C       rgba (6, default) or gray (0 fast path)\n"
 "      -F, --format F     png | bmp | tif | jpg                (default: png)\n"
@@ -64,6 +71,10 @@ static void usage(void) {
 }
 
 typedef struct { int64_t start, frames; } range_t;
+
+/* subrange support (bench/extract/batch/verifybin) — defined in extract.c */
+extern int64_t opngx__set_range(opngx_job *job, int64_t start, int64_t frames);
+
 
 static int parse_i64(const char *s, int64_t *out) {
     char *end; long long v = strtoll(s, &end, 10);
@@ -85,6 +96,30 @@ static int parse_backend(const char *s, opngx_backend *b) {
     return 0;
 }
 
+/* --crop X,Y,W,H  (cycle 22). W or H may be 0 to mean "to the frame edge",
+ * which is what the studio emits when the user drags a box that runs to
+ * the border. Negative or malformed input is a hard error. */
+static int parse_crop(const char *s, opngx_params *p) {
+    unsigned long long v[4];
+    const char *q = s;
+    for (int i = 0; i < 4; i++) {
+        if (!*q) return -1;
+        char *end;
+        errno = 0;
+        v[i] = strtoull(q, &end, 10);
+        if (end == q || errno == ERANGE) return -1;
+        q = end;
+        if (i < 3) {
+            if (*q != ',') return -1;
+            q++;
+        }
+    }
+    if (*q) return -1;
+    p->crop_x = (uint32_t)v[0]; p->crop_y = (uint32_t)v[1];
+    p->crop_w = (uint32_t)v[2]; p->crop_h = (uint32_t)v[3];
+    return 0;
+}
+
 static void print_stats(const opngx_stats *st) {
     fprintf(stderr,
         "opngx: %lld/%lld frames in %.2fs | %.0f frames/s | %.1f MiB/s input | backend=%s\n",
@@ -99,6 +134,9 @@ static int cmd_extract(int argc, char **argv) {
     p.jobs = opngx_cpu_count(); p.level = 6; p.backend = OPNGX_BACKEND_AUTO;
     p.bit_depth = 8; p.gamma = 1.0;
     p.channels = 6;
+    /* FIX-1: in reference mode each of B/C/G defaults to the sidecar value;
+     * a flag the user actually typed clears its bit so their number wins. */
+    p.use_sidecar_transform = 1 | 2 | 4;
     const char *bin = NULL, *footage = NULL, *outdir = NULL;
     range_t rng = {0, -1};
     int verbose = 0;
@@ -122,9 +160,17 @@ static int cmd_extract(int argc, char **argv) {
         else if (!strcmp(a, "--footage") || !strcmp(a, "-f")) NEXTSTR(footage);
         else if (!strcmp(a, "--out") || !strcmp(a, "-o")) NEXTSTR(outdir);
         else if (!strcmp(a, "--mode") || !strcmp(a, "-m")) NEXTPARSE(p.mode, parse_mode);
-        else if (!strcmp(a, "--brightness")) NEXTFUN(p.brightness, atof);
-        else if (!strcmp(a, "--contrast")) NEXTFUN(p.contrast, atof);
-        else if (!strcmp(a, "--gamma")) NEXTFUN(p.gamma, atof);
+        else if (!strcmp(a, "--brightness")) { NEXTFUN(p.brightness, atof); p.use_sidecar_transform &= ~1; }
+        else if (!strcmp(a, "--contrast")) { NEXTFUN(p.contrast, atof);   p.use_sidecar_transform &= ~2; }
+        else if (!strcmp(a, "--gamma")) { NEXTFUN(p.gamma, atof);          p.use_sidecar_transform &= ~4; }
+        else if (!strcmp(a, "--sidecar-transform")) p.use_sidecar_transform = 1 | 2 | 4;
+        else if (!strcmp(a, "--crop")) {
+            if (++i >= argc) { fprintf(stderr, "missing value after --crop\n"); return 2; }
+            if (parse_crop(argv[i], &p)) {
+                fprintf(stderr, "bad --crop '%s' (expected X,Y,W,H)\n", argv[i]);
+                return 2;
+            }
+        }
         else if (!strcmp(a, "--bit-depth")) NEXTFUN(p.bit_depth, atoi);
         else if (!strcmp(a, "--channels")) {
             /* 6 = RGBA (default), 0 = grayscale fast path */
@@ -181,7 +227,6 @@ static int cmd_extract(int argc, char **argv) {
     /* apply range: engine always starts at 0; emulate --start by skipping via
      * num_frames only when start==0. For start>0 we expose it as full run of
      * requested count beginning at start using the public struct: */
-    extern int64_t opngx__set_range(opngx_job*, int64_t start, int64_t frames);
     if (rng.start > 0 || rng.frames >= 0)
         opngx__set_range(job, rng.start, rng.frames);
 
@@ -201,33 +246,91 @@ static int cmd_extract(int argc, char **argv) {
 }
 
 /* ---- batch ---- */
+/* FIX-2 (cycle 22): this subcommand used to accept almost nothing —
+ * --brightness/--contrast/--gamma/--channels/--bit-depth/--jpeg-quality
+ * were all "unknown option", and the per-bin params block hardcoded
+ * p.gamma = 1.0. A batch run therefore could never apply the settings the
+ * studio shows, which is exactly the field report: "the whole batch is not
+ * getting applied". It now mirrors `extract`'s quality surface.
+ */
 static int cmd_batch(int argc, char **argv) {
     const char *indir = NULL, *outroot = NULL, *prefix = NULL;
+    const char *ext = NULL;
     int jobs = opngx_cpu_count(), level = 6;
-    int timestamps = 0, metadata = 0;
+    int timestamps = 0, metadata = 0, verbose = 0;
+    int channels = 6, jpeg_quality = 90;
+    int ext_given = 0;
+    int32_t w_override = 0, h_override = 0;
+    opngx_params shared; memset(&shared, 0, sizeof shared);
+    shared.gamma = 1.0; shared.format = OPNGX_FMT_PNG;
+    shared.bit_depth = 8; shared.jpeg_quality = 90;
+    shared.use_sidecar_transform = 1 | 2 | 4;   /* FIX-1, see cmd_extract */
     const char *mode_s = "reference";
     const char *fmt_s = "png";
     int layout_format = 0;   /* v1.6: <out>/<stem>/<FMT>/ instead of flat */
+    range_t rng = {0, -1};
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
-        if (!strcmp(a, "--in-dir")) indir = argv[++i];
-        else if (!strcmp(a, "--out-root")) outroot = argv[++i];
-        else if (!strcmp(a, "--prefix")) prefix = argv[++i];
+        #define NEXTSTR(var) do { \
+            if (++i >= argc) { fprintf(stderr, "missing value after %s\n", a); return 2; } \
+            (var) = argv[i]; \
+        } while (0)
+        if (!strcmp(a, "--in-dir")) NEXTSTR(indir);
+        else if (!strcmp(a, "--out-root")) NEXTSTR(outroot);
+        else if (!strcmp(a, "--prefix")) NEXTSTR(prefix);
+        else if (!strcmp(a, "--ext")) { NEXTSTR(ext); ext_given = 1; }
         else if (!strcmp(a, "--jobs") || !strcmp(a, "-j")) jobs = atoi(argv[++i]);
         else if (!strcmp(a, "--level") || !strcmp(a, "-l")) level = atoi(argv[++i]);
-        else if (!strcmp(a, "--mode") || !strcmp(a, "-m")) mode_s = argv[++i];
-        else if (!strcmp(a, "--format") || !strcmp(a, "-F")) fmt_s = argv[++i];
+        else if (!strcmp(a, "--mode") || !strcmp(a, "-m")) NEXTSTR(mode_s);
+        else if (!strcmp(a, "--brightness")) { shared.brightness = atof(argv[++i]); shared.use_sidecar_transform &= ~1; }
+        else if (!strcmp(a, "--contrast")) { shared.contrast = atof(argv[++i]); shared.use_sidecar_transform &= ~2; }
+        else if (!strcmp(a, "--gamma")) { shared.gamma = atof(argv[++i]); shared.use_sidecar_transform &= ~4; }
+        else if (!strcmp(a, "--bit-depth")) shared.bit_depth = atoi(argv[++i]);
+        else if (!strcmp(a, "--channels")) {
+            NEXTSTR(ext); /* placeholder replaced below */
+            if (!strcasecmp(ext, "gray") || !strcmp(ext, "0")) channels = 0;
+            else if (!strcasecmp(ext, "rgba") || !strcmp(ext, "6")) channels = 6;
+            else { fprintf(stderr, "bad channels: %s\n", ext); return 2; }
+        }
+        else if (!strcmp(a, "--jpeg-quality") || !strcmp(a, "-q")) jpeg_quality = atoi(argv[++i]);
+        else if (!strcmp(a, "--sidecar-transform")) shared.use_sidecar_transform = 1 | 2 | 4;
+        else if (!strcmp(a, "--width")) w_override = (int32_t)atoi(argv[++i]);
+        else if (!strcmp(a, "--height")) h_override = (int32_t)atoi(argv[++i]);
+        else if (!strcmp(a, "--start")) {
+            if (++i >= argc || parse_i64(argv[i], &rng.start)) {
+                fprintf(stderr, "bad --start\n"); return 2; }
+        }
+        else if (!strcmp(a, "--frames")) {
+            if (++i >= argc || parse_i64(argv[i], &rng.frames)) {
+                fprintf(stderr, "bad --frames\n"); return 2; }
+        }
+        else if (!strcmp(a, "--crop")) {
+            if (++i >= argc) { fprintf(stderr, "missing value after --crop\n"); return 2; }
+            if (parse_crop(argv[i], &shared)) {
+                fprintf(stderr, "bad --crop '%s' (expected X,Y,W,H)\n", argv[i]);
+                return 2;
+            }
+        }
+        else if (!strcmp(a, "--format") || !strcmp(a, "-F")) NEXTSTR(fmt_s);
         else if (!strcmp(a, "--layout")) {
-            ++i;
-            if (!strcmp(argv[i], "format")) layout_format = 1;
-            else if (!strcmp(argv[i], "flat")) layout_format = 0;
-            else { fprintf(stderr, "bad layout: %s (flat|format)\n", argv[i]); return 2; }
+            NEXTSTR(ext);
+            if (!strcmp(ext, "format")) layout_format = 1;
+            else if (!strcmp(ext, "flat")) layout_format = 0;
+            else { fprintf(stderr, "bad layout: %s (flat|format)\n", ext); return 2; }
         }
         else if (!strcmp(a, "--timestamps")) timestamps = 1;
         else if (!strcmp(a, "--metadata")) metadata = 1;
+        else if (!strcmp(a, "--verbose") || !strcmp(a, "-v")) verbose = 1;
+        else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(); return 0; }
         else { fprintf(stderr, "unknown option: %s\n", a); return 2; }
+        #undef NEXTSTR
     }
     if (!indir || !outroot) { usage(); return 2; }
+    if (rng.start < 0 || rng.frames < -1) { fprintf(stderr, "bad range\n"); return 2; }
+    if (shared.bit_depth != 8 && shared.bit_depth != 16) {
+        fprintf(stderr, "bad bit depth: %d (8 or 16)\n", shared.bit_depth); return 2; }
+    if (jpeg_quality < 1 || jpeg_quality > 100) {
+        fprintf(stderr, "bad jpeg quality: %d (1..100)\n", jpeg_quality); return 2; }
     opngx_mode mode;
     if (parse_mode(mode_s, &mode)) { fprintf(stderr, "bad mode\n"); return 2; }
     int fmt = OPNGX_FMT_PNG;
@@ -285,20 +388,42 @@ static int cmd_batch(int argc, char **argv) {
             if (*q == '.') *q = '_';
 
         fprintf(stderr, "opngx: batch %d/%d: %s -> %s\n", k+1, nbins, bins[k], outdir);
-        opngx_params p; memset(&p, 0, sizeof p);
+        opngx_params p = shared;   /* carry the parsed quality settings through */
         p.bin_path = bins[k]; p.footage_path = foot; p.out_dir = outdir;
         p.prefix = prefix;
         p.mode = mode; p.jobs = jobs; p.level = level; p.backend = OPNGX_BACKEND_AUTO;
-        p.bit_depth = 8; p.gamma = 1.0;
-        p.channels = 6;
+        p.channels = channels;
+        p.jpeg_quality = jpeg_quality;
         p.format = fmt;
-        if (!prefix) p.ext = fmt_ext;
+        p.width  = w_override  > 0 ? (uint32_t)w_override  : 0;
+        p.height = h_override > 0 ? (uint32_t)h_override : 0;
+        p.ext = ext_given ? ext : (prefix ? NULL : fmt_ext);
         p.num_frames = -1; p.frame_stride = -1;
         p.export_timestamps = timestamps; p.export_metadata = metadata;
+        p.verbose = verbose;
 
+        opngx_job *job;
         char err[512] = "";
-        int rc = opngx_extract(&p, NULL, err, sizeof err);
-        if (rc != 0 && rc != 2) { fprintf(stderr, "opngx: error: %s\n", err); rc_all = 1; }
+        job = opngx_job_create(&p, err, sizeof err);
+        if (!job) {
+            fprintf(stderr, "opngx: error: %s: %s\n", bins[k],
+                    err[0] ? err : "cannot prepare job");
+            rc_all = 1; continue;
+        }
+        if (rng.start > 0 || rng.frames >= 0) {
+            if (opngx__set_range(job, rng.start, rng.frames) < 0) {
+                fprintf(stderr, "opngx: error: bad frame range for %s\n", bins[k]);
+                opngx_job_free(job); rc_all = 1; continue;
+            }
+        }
+        int rc = opngx_job_run(job);
+        print_stats(opngx_job_stats(job));
+        if (rc != 0 && rc != 2) {
+            const char *je = opngx_job_errstr(job);
+            fprintf(stderr, "opngx: error: %s\n", je[0] ? je : "run failed");
+            rc_all = 1;
+        }
+        opngx_job_free(job);
     }
     return rc_all;
 }
@@ -369,6 +494,7 @@ static int cmd_verifybin(int argc, char **argv) {
     opngx_params p; memset(&p, 0, sizeof p);
     p.mode = OPNGX_MODE_REFERENCE; p.gamma = 1.0;
     p.bit_depth = 8; p.channels = 6;
+    p.use_sidecar_transform = 1 | 2 | 4;   /* FIX-1, see cmd_extract */
     p.num_frames = -1; p.frame_stride = -1;
     const char *outdir = NULL, *mode_s = "reference";
     int positional = 0, as_json = 0;
@@ -392,9 +518,17 @@ static int cmd_verifybin(int argc, char **argv) {
             else { fprintf(stderr, "bad channels: %s\n", argv[i]); return 2; }
         }
         else if (!strcmp(a, "-m") || !strcmp(a, "--mode")) mode_s = argv[++i];
-        else if (!strcmp(a, "--brightness")) p.brightness = atof(argv[++i]);
-        else if (!strcmp(a, "--contrast")) p.contrast = atof(argv[++i]);
-        else if (!strcmp(a, "--gamma")) p.gamma = atof(argv[++i]);
+        else if (!strcmp(a, "--brightness")) { p.brightness = atof(argv[++i]); p.use_sidecar_transform &= ~1; }
+        else if (!strcmp(a, "--contrast")) { p.contrast = atof(argv[++i]); p.use_sidecar_transform &= ~2; }
+        else if (!strcmp(a, "--gamma")) { p.gamma = atof(argv[++i]); p.use_sidecar_transform &= ~4; }
+        else if (!strcmp(a, "--sidecar-transform")) p.use_sidecar_transform = 1 | 2 | 4;
+        else if (!strcmp(a, "--crop")) {
+            if (++i >= argc) { fprintf(stderr, "missing value after --crop\n"); return 2; }
+            if (parse_crop(argv[i], &p)) {
+                fprintf(stderr, "bad --crop '%s' (expected X,Y,W,H)\n", argv[i]);
+                return 2;
+            }
+        }
         else if (!strcmp(a, "--json")) as_json = 1;
         else if (!positional) { outdir = a; positional++; }
         else { fprintf(stderr, "too many args\n"); return 2; }
@@ -404,7 +538,8 @@ static int cmd_verifybin(int argc, char **argv) {
             "usage: opngx-engine verifybin --bin FILE OUT_DIR [--footage F]\n"
             "       [--width W --height H] [-m reference|raw|custom]\n"
             "       [--brightness B --contrast C --gamma G] [--bit-depth 8|16]\n"
-            "       [--channels rgba|gray] [--prefix P] [--ext E] [--json]\n");
+            "       [--channels rgba|gray] [--prefix P] [--ext E]\n"
+            "       [--crop X,Y,W,H] [--sidecar-transform] [--json]\n");
         return 2;
     }
     if (parse_mode(mode_s, &p.mode)) { fprintf(stderr, "bad mode\n"); return 2; }

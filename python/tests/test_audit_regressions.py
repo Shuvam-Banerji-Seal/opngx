@@ -428,6 +428,8 @@ def test_ar9_push_progress_callback_fires_and_completes(fixture_dir):
 # Qt-inherited names MainWindow may call without being defined in qt_app.py.
 _QT_SELF_WHITELIST = {
     "setWindowTitle",
+    "setWindowIcon",
+    "windowIcon",
     "resize",
     "setMinimumSize",
     "setAcceptDrops",
@@ -637,6 +639,7 @@ def test_ar12_video_render_streams_and_cancels(fixture_dir, tmp_path):
 def test_ar13_windows_filename_sanitizer():
     """Camera names from vendor XML must become filename-safe on Windows."""
     from opngx.layout import safe_name as f
+
     assert f("cam:1.2?") == "cam_1.2_"
     assert f('a/b\\c*d"e<f>g|h') == "a_b_c_d_e_f_g_h"
     assert f("trailing dots...") == "trailing dots"
@@ -714,97 +717,10 @@ def test_ar15_batch_picker_is_a_folder_dialog():
     orig_dir = QtWidgets.QFileDialog.getExistingDirectory
     orig_file = QtWidgets.QFileDialog.getOpenFileName
     seen = {"dir": 0}
-    QtWidgets.QFileDialog.getExistingDirectory =         lambda *a, **k: (seen.__setitem__("dir", seen["dir"] + 1), mother)[1]
-
-    win.rb_batch.setChecked(True)
-    win._pick_source()
-    assert seen["dir"] == 1, "folder dialog was not opened for Batch"
-    assert os.path.isdir(win.bin_edit.text())
-
-    # --- single scope still opens the file dialog ---
-    calls = {"n": 0}
-
-    def fake_file(*a, **k):
-        calls["n"] += 1
-        return (os.path.join(mother, "SQ_100_s1", "SQ_100_s1.bin"), "")
-
-    QtWidgets.QFileDialog.getOpenFileName = fake_file
-    win.rb_single.setChecked(True)
-    win._pick_bin()
-    assert calls["n"] == 1
-    QtWidgets.QFileDialog.getOpenFileName = orig_file
-
-
-# --------------------------------------------------------------------- AR-14
-def test_ar14_v16_output_tree_helpers():
-    """v1.6 layout: <mother>/<recording>/<FMT>/ + sibling MP4 folder."""
-    from opngx.layout import mp4_dir, run_out_dir, safe_name
-
-    assert run_out_dir("D:/out", "D:/src/SQ_100_s1.bin") == os.path.join(
-        "D:/out", "SQ_100_s1", "PNG"
-    )
-    assert run_out_dir("D:/out", "D:/src/brow_1.2.bin", "jpg") == os.path.join(
-        "D:/out", "brow_1.2", "JPG"
-    )  # mid-name dots are legal
-    assert mp4_dir("D:/out", "D:/src/SQ_100_s1.bin") == os.path.join(
-        "D:/out", "SQ_100_s1", "MP4"
-    )
-    # windows-unsafe stems are sanitized (colon/question -> underscore)
-    rd = run_out_dir("out", "src/evil:name?.bin", "png")
-    assert "evil_name_" in rd and ":" not in rd and "?" not in rd
-    assert safe_name("...") == "_"
-
-
-def test_ar14b_studio_uses_v16_tree():
-    """The studio's extract/verify/video paths must all speak the v1.6 tree."""
-    text = QT_APP.read_text()
-    assert 'run_out_dir(out, b, o["fmt"])' in text, "extract must target run dir"
-    assert "self._current_run_dir(" in text, "verify must target run dir"
-    assert 'mp4_dir = os.path.join(os.path.dirname(stem_dir), "MP4")' in text
-    # splitters persisted across sessions
-    assert "QSettings" in text and "closeEvent" in text
-
-
-# --------------------------------------------------------------------- AR-15
-def test_ar15_batch_picker_is_a_folder_dialog():
-    """Field report: clicking Batch then Browse opened a .bin FILE dialog.
-
-    The picker must branch on scope — Batch => getExistingDirectory of the
-    MOTHER folder; Single => the .bin file dialog. Also: dropping a folder
-    switches to Batch and probes it.
-    """
-    import pytest
-
-    try:
-        import PySide6  # noqa: F401
-    except ImportError:
-        pytest.skip("PySide6 not installed")
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6 import QtWidgets
-
-    import opngx.ui.qt_app as qt
-
-    text = QT_APP.read_text()
-    pick_src = text.split("def _pick_source")[1].split("def ")[0]
-    assert "getExistingDirectory" in pick_src, "batch must open a folder dialog"
-    assert "rb_batch.isChecked()" in pick_src, "picker must branch on scope"
-
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    win = qt.MainWindow()
-
-    # --- functional: batch scope picks a folder ---
-    import tempfile
-
-    mother = tempfile.mkdtemp(prefix="mother_")
-    rec = os.path.join(mother, "SQ_100_s1")
-    os.makedirs(rec, exist_ok=True)
-    with open(os.path.join(rec, "SQ_100_s1.bin"), "wb") as f:
-        f.write(b"\x00" * (8 + 64 * 48) * 2)
-
-    orig_dir = QtWidgets.QFileDialog.getExistingDirectory
-    orig_file = QtWidgets.QFileDialog.getOpenFileName
-    seen = {"dir": 0}
-    QtWidgets.QFileDialog.getExistingDirectory =         lambda *a, **k: (seen.__setitem__("dir", seen["dir"] + 1), mother)[1]
+    QtWidgets.QFileDialog.getExistingDirectory = lambda *a, **k: (
+        seen.__setitem__("dir", seen["dir"] + 1),
+        mother,
+    )[1]
 
     win.rb_batch.setChecked(True)
     win._pick_source()
@@ -825,3 +741,442 @@ def test_ar15_batch_picker_is_a_folder_dialog():
     QtWidgets.QFileDialog.getOpenFileName = orig_file
     assert calls["n"] == 1
     assert win.meta is not None or True
+
+
+# --------------------------------------------------------------------- AR-16
+def test_ar16_no_duplicate_test_definitions():
+    """Hygiene: this file once carried TWO copies of AR-14/AR-15.
+
+    Python silently keeps the last definition, so the first bodies were
+    dead code — and the dead AR-15 was itself subtly broken (it toggled
+    rb_single to True while it was already checked, so the scope switch
+    under test never actually fired). A duplicated gate is worse than no
+    gate: it looks like coverage.
+    """
+    tree = ast.parse(Path(__file__).read_text())
+    names = [
+        n.name
+        for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name.startswith("test_")
+    ]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert not dupes, f"duplicate top-level test definitions: {dupes}"
+
+
+# --------------------------------------------------------------------- AR-17
+def test_ar17_reference_mode_never_silently_discards_user_transform(
+    fixture_dir, tmp_path
+):
+    """FIX-1: `reference` mode overwrote the user's B/C/G with sidecar values.
+
+    The studio defaults to `reference`, so a user who set gamma=2.0 and
+    pressed Extract got sidecar B49/C18/G1 output while the frame viewer
+    (which honours the spins) showed the gamma-ed result. The preview lied
+    about the file. With the fix, a transform the user explicitly supplied
+    is always honoured; the sidecar values are used only when the user
+    supplied none.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from opngx.quality import build_lut
+
+    bin_p = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    ref = opngx.Extractor(bin_p)
+    assert ref.meta.has_processing
+
+    a = tmp_path / "ref"
+    b = tmp_path / "cus"
+    ref.extract(a, mode="reference", brightness=20, contrast=30, gamma=2.0, frames=3)
+    ref.extract(b, mode="custom", brightness=20, contrast=30, gamma=2.0, frames=3)
+
+    pa = np.asarray(Image.open(a / "brow_00000.Png").convert("L"))
+    pb = np.asarray(Image.open(b / "brow_00000.Png").convert("L"))
+    assert np.array_equal(pa, pb), (
+        "reference mode discarded the user's transform: "
+        f"maxdiff={int(np.abs(pa.astype(int) - pb.astype(int)).max())}"
+    )
+
+    # ...and the pixels must be the CUSTOM curve, not the sidecar curve
+    raw = np.frombuffer(
+        open(bin_p, "rb").read()[8 : 8 + 64 * 48], dtype=np.uint8
+    ).reshape(48, 64)
+    want = np.asarray(build_lut(20, 30, 2.0))[raw]
+    assert np.array_equal(pa, want), "reference mode did not apply user B/C/G"
+
+
+# --------------------------------------------------------------------- AR-18
+def test_ar18_reference_mode_still_uses_sidecar_when_user_gives_none(
+    fixture_dir, tmp_path
+):
+    """The other half of FIX-1: with NO user transform, reference mode must
+    still reproduce the vendor sidecar curve (that is its whole purpose)."""
+    import numpy as np
+    from PIL import Image
+
+    from opngx.quality import build_lut
+
+    bin_p = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    ex = opngx.Extractor(bin_p)
+    m = ex.meta
+    out = tmp_path / "ref_default"
+    ex.extract(out, mode="reference", frames=3)
+
+    raw = np.frombuffer(
+        open(bin_p, "rb").read()[8 : 8 + 64 * 48], dtype=np.uint8
+    ).reshape(48, 64)
+    want = np.asarray(build_lut(m.brightness, m.contrast, m.gamma))[raw]
+    got = np.asarray(Image.open(out / "brow_00000.Png").convert("L"))
+    assert np.array_equal(got, want), "reference mode lost the sidecar curve"
+
+
+# --------------------------------------------------------------------- AR-19
+def test_ar19_cli_batch_flags_exist_and_cli_never_imports_qt():
+    """FIX-3: `opngx batch` never registered --layout/--format, and its
+    layout branch imported a non-existent `_run_out_dir` from the Qt
+    module. A CLI must not depend on PySide6 at all."""
+    import argparse
+    import contextlib
+    import io
+
+    from opngx import cli
+
+    text = Path(cli.__file__).read_text()
+    assert "from opngx.ui" not in text, "CLI imports the Qt UI module"
+
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    pb = sub.add_parser("batch")
+    pb.add_argument("in_dir")
+    cli._add_engine_args(pb)
+    pb.add_argument("--layout", choices=["flat", "format"], default="format")
+    # the batch parser must accept the same engine flags as extract
+    args = ap.parse_args(
+        [
+            "batch",
+            "indir",
+            "-o",
+            "out",
+            "--layout",
+            "format",
+            "--format",
+            "jpg",
+            "--channels",
+            "gray",
+            "--brightness",
+            "20",
+            "--contrast",
+            "30",
+            "--gamma",
+            "2.0",
+        ]
+    )
+    assert args.layout == "format"
+    assert args.format == "jpg"
+    assert args.channels == "gray"
+    assert args.gamma == 2.0
+
+    # and the real CLI's own `batch` subcommand must accept --layout:
+    # before the fix it was never registered, so `opngx batch --layout
+    # format` died with "unrecognized arguments" even though run_one()
+    # went on to read args.layout via getattr.
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = cli.main(
+                [
+                    "batch",
+                    "/nonexistent-opngx-batch-root",
+                    "-o",
+                    "/tmp/opngx-ar19",
+                    "--layout",
+                    "flat",
+                ]
+            )
+    err = buf.getvalue()
+    assert "unrecognized arguments" not in err, err
+    assert rc != 0, "batch over a missing directory must return non-zero"
+    assert "no .bin files found" in err, err
+
+
+# --------------------------------------------------------------------- AR-20
+def test_ar20_engine_batch_flag_parity_with_extract():
+    """FIX-2: the engine's `batch` subcommand must accept every quality
+    flag `extract` accepts. Statically pin the flags in cmd_batch."""
+    main_c = (REPO / "src" / "main.c").read_text()
+    body = main_c.split("static int cmd_batch")[1].split("\n/* ---- verify ---- */")[0]
+    for flag in (
+        "--brightness",
+        "--contrast",
+        "--gamma",
+        "--bit-depth",
+        "--channels",
+        "--jpeg-quality",
+        "--ext",
+    ):
+        assert flag in body, f"engine batch does not accept {flag}"
+    # no hardcoded gamma reset inside the per-bin params block
+    per_bin = body.split("for (int k = 0")[1]
+    assert "p.gamma = 1.0" not in per_bin, (
+        "cmd_batch still hardcodes gamma=1.0, discarding the user's value"
+    )
+
+
+# --------------------------------------------------------------------- AR-21
+def test_ar21_batch_output_folders_never_collide(tmp_path):
+    """Cycle-22 data-loss finding: two recordings can share a .bin NAME.
+
+    Cameras are routinely dumped as <root>/<camera>/recording.bin. Keying
+    the output folder on the filename collapsed every one of them into a
+    single directory, and each run overwrote the previous one frame for
+    frame — 16 frames extracted, 8 on disk, with no warning. The recording
+    FOLDER is the identity in the mother-folder architecture.
+    """
+    from opngx.layout import batch_out_dir, recording_key, safe_name
+
+    root = tmp_path / "mother"
+    for cam in ("camA", "camB"):
+        (root / cam).mkdir(parents=True)
+        (root / cam / "recording.bin").write_bytes(b"\0" * 16)
+
+    a = root / "camA" / "recording.bin"
+    b = root / "camB" / "recording.bin"
+    assert a.name == b.name, "precondition: same filename"
+    assert recording_key(str(root), str(a)) == "camA"
+    assert recording_key(str(root), str(b)) == "camB"
+
+    da = batch_out_dir("out", str(root), str(a), "png")
+    db = batch_out_dir("out", str(root), str(b), "png")
+    assert da != db, f"output folders collide: {da}"
+    assert da.endswith(os.path.join("camA", "PNG"))
+    assert db.endswith(os.path.join("camB", "PNG"))
+
+    # a loose .bin directly in the root keeps using its own stem
+    loose = root / "solo.bin"
+    loose.write_bytes(b"\0" * 16)
+    assert recording_key(str(root), str(loose)) == "solo"
+    # unsafe folder names are still sanitized
+    assert safe_name("a:b") == "a_b"
+
+
+# --------------------------------------------------------------------- AR-22
+def test_ar22_batch_run_keeps_both_same_named_recordings(tmp_path):
+    """End-to-end: a two-recording batch with identical .bin names must
+    produce 2 output folders and 2x the frames, not one overwritten set."""
+    import shutil
+    import subprocess
+    import sys as _sys
+
+    from opngx import cli
+
+    fix = tmp_path / "fix"
+    subprocess.run(
+        [_sys.executable, str(REPO / "tests" / "gen_fixture.py"), str(fix)],
+        check=True,
+        capture_output=True,
+    )
+    src = fix / "cam_9.9"
+    root = tmp_path / "mother"
+    for cam in ("recA", "recB"):
+        (root / cam).mkdir(parents=True)
+        for f in src.iterdir():
+            if f.suffix in (".bin", ".footage"):
+                shutil.copy(f, root / cam / f.name)
+
+    out = tmp_path / "out"
+    rc = cli.main(
+        [
+            "batch",
+            str(root),
+            "-o",
+            str(out),
+            "--layout",
+            "format",
+            "--prefix",
+            "cam_",
+            "--frames",
+            "3",
+        ]
+    )
+    assert rc == 0
+    dirs = sorted(d.name for d in out.iterdir())
+    assert dirs == ["recA", "recB"], f"expected one folder per recording, got {dirs}"
+    for d in dirs:
+        n = len(list((out / d / "PNG").glob("*.Png")))
+        assert n == 3, f"{d}: {n} frames written"
+
+
+# --------------------------------------------------------------------- AR-23
+def test_ar23_crop_in_python_api_and_fallback_parity(fixture_dir, tmp_path):
+    """The python `crop=` argument must reach BOTH the native engine and
+    the pure-python fallback, and both must match the C engine's pixels."""
+    import numpy as np
+    from PIL import Image
+
+    import opngx._engine as _eng
+    from opngx.quality import build_lut
+
+    bin_p = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    ex = opngx.Extractor(bin_p)
+    crop = (8, 4, 20, 12)
+
+    nat = tmp_path / "nat"
+    ex.extract(nat, mode="reference", crop=crop, frames=2)
+    im = Image.open(nat / "brow_00000.Png")
+    assert im.size == (20, 12), f"cropped size {im.size} != (20, 12)"
+
+    raw = np.frombuffer(
+        open(bin_p, "rb").read()[8 : 8 + 64 * 48], dtype=np.uint8
+    ).reshape(48, 64)
+    want = np.asarray(build_lut(ex.meta.brightness, ex.meta.contrast, ex.meta.gamma))[
+        raw[4:16, 8:28]
+    ]
+    got = np.asarray(im.convert("L"))
+    assert np.array_equal(got, want), "native crop pixels wrong"
+
+    # force the pure-python path and demand identical pixels
+    import opngx._fallback as _fb
+
+    fb = tmp_path / "fb"
+    orig = _eng.load_library
+    _eng.load_library = lambda: None
+    try:
+        ex2 = opngx.Extractor(bin_p)
+        ex2.extract(fb, mode="reference", crop=crop, frames=2)
+    finally:
+        _eng.load_library = orig
+    assert _fb is not None
+
+    got_fb = np.asarray(Image.open(fb / "brow_00000.Png").convert("L"))
+    assert np.array_equal(got_fb, got), "fallback crop pixels differ from native"
+
+    # invalid rects raise ValueError, never silently clamp
+    for bad in [(0, 0, 999, 999), (60, 0, 10, 10), (-1, 0, 4, 4)]:
+        try:
+            ex.extract(tmp_path / "bad", crop=bad, frames=1)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"crop {bad} should have been rejected")
+
+
+# --------------------------------------------------------------------- AR-24
+def test_ar24_batch_window_and_crop_editor_construct_and_run(tmp_path):
+    """The dedicated batch surface and the crop picker must construct
+    offscreen, show a real decoded frame per recording, and apply a crop to
+    one recording or to the whole batch."""
+    import pytest
+
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        pytest.skip("PySide6 not installed")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import shutil
+    import subprocess
+    import sys as _sys
+    from PySide6 import QtGui, QtWidgets
+
+    from opngx.ui.batch import BatchWindow, CropEditor, make_item, scan_batch
+
+    fix = tmp_path / "fix"
+    subprocess.run(
+        [_sys.executable, str(REPO / "tests" / "gen_fixture.py"), str(fix)],
+        check=True,
+        capture_output=True,
+    )
+    src = fix / "cam_9.9"
+    root = tmp_path / "mother"
+    for cam in ("recA", "recB"):
+        (root / cam).mkdir(parents=True)
+        for f in src.iterdir():
+            if f.suffix in (".bin", ".footage"):
+                shutil.copy(f, root / cam / f.name)
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    # --- discovery matches the studio/engine batch scope ---
+    assert len(scan_batch(str(root))) == 2
+
+    # --- each item carries a REAL decoded frame, not a placeholder ---
+    it = make_item(str(root / "recA" / "cam_9.9.bin"))
+    assert it.thumb is not None, "batch card must show a decoded frame"
+    assert it.width == 64 and it.height == 48 and it.frames == 200
+
+    # --- the window builds a card per recording ---
+    win = BatchWindow(
+        None,
+        str(root),
+        str(tmp_path / "out"),
+        dict(
+            fmt="png",
+            mode="reference",
+            bit_depth=8,
+            channels=6,
+            jobs=2,
+            level=6,
+            prefix="cam_",
+            ext=".Png",
+        ),
+    )
+    assert len(win.items) == 2
+    assert len(win.cards) == 2
+    for item in win.items:
+        assert item.thumb is not None
+        assert item.out_size == "64 × 48 px"
+        assert item.crop_label == "full frame"
+    # same-named .bin files must land in DIFFERENT folders
+    outs = {i.out_dir for i in win.items}
+    assert len(outs) == 2, f"batch output folders collide: {outs}"
+
+    # --- crop editor: drag-select, clamp, apply to one or all ---
+    img = QtGui.QImage(64, 48, QtGui.QImage.Format_Grayscale8)
+    img.fill(120)
+    ed = CropEditor(None, img, None, (64, 48))
+    assert ed.selection() is None, "full frame means no crop"
+    ed._set_sel((8, 4, 20, 12))
+    assert ed.selection() == (8, 4, 20, 12)
+    ed._center()
+    x, y, w, h = ed.selection()
+    assert (w, h) == (32, 24) and (x, y) == (16, 12)
+    # an out-of-range spin is clamped, never accepted
+    ed.w_spin.setValue(999)
+    assert ed.selection()[2] <= 64
+    ed._full()
+    assert ed.selection() is None
+
+    # apply-to-all through the window. NOTE: open_crop_editor() opens a
+    # MODAL dialog, so the test drives the same state the dialog writes
+    # rather than calling it — an exec() here would block forever.
+    sel = (8, 4, 20, 12)
+    for i2 in win.items:
+        i2.crop = sel
+        win.cards[i2.bin_path].refresh()
+    assert all(i2.crop == sel for i2 in win.items)
+    # the card must report the cropped output size
+    facts = win.cards[win.items[0].bin_path].facts.text()
+    assert "20 × 12 px" in facts, facts
+
+    win.clear_crops()
+    assert all(i2.crop is None for i2 in win.items)
+    assert "64 × 48 px" in win.cards[win.items[0].bin_path].facts.text()
+
+    # --- the batch actually runs, per card, and reports status ---
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    for i2 in win.items:
+        i2.crop = sel
+        win.cards[i2.bin_path].refresh()
+    loop = QEventLoop()
+    win.finished.connect(lambda _: loop.quit())
+    win.start()
+    QTimer.singleShot(60000, loop.quit)
+    loop.exec()
+    assert all(i2.status == "done" for i2 in win.items), [
+        (i2.name, i2.status, i2.error) for i2 in win.items
+    ]
+    assert all(
+        len(list((tmp_path / "out" / d / "PNG").glob("*.Png"))) == 200
+        for d in ("recA", "recB")
+    )

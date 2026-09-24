@@ -67,14 +67,15 @@ def verify_against_bin(
     width: int = 0,
     height: int = 0,
     mode: str = "reference",
-    brightness: float = 0.0,
-    contrast: float = 0.0,
-    gamma: float = 1.0,
+    brightness: float | None = None,
+    contrast: float | None = None,
+    gamma: float | None = None,
     bit_depth: int = 8,
     channels: int = 6,
     prefix: str = "brow_",
     ext: str = ".Png",
     frames: int | None = None,
+    crop: tuple[int, int, int, int] | None = None,
 ) -> VerifyReport:
     """ADD-7: verify an extract directory straight against its source .bin.
 
@@ -82,6 +83,13 @@ def verify_against_bin(
     the absolute index encoded in its filename — no vendor reference set
     required. Reference mode auto-detects the sibling .footage sidecar.
     Requires the native engine binary.
+
+    FIX-1/cycle 22: `brightness`/`contrast`/`gamma` now default to None,
+    matching ``Extractor.extract``. None means "take it from the sidecar";
+    a number means "the extraction used exactly this, so verify against
+    this". Previously the defaults were 0/0/1 and were always forwarded,
+    which — once reference mode stopped overwriting explicit values — would
+    have verified a vendor-curve extraction against an identity curve.
     """
     engine = _engine_binary()
     if not engine:
@@ -100,17 +108,19 @@ def verify_against_bin(
         ext,
         "-m",
         mode,
-        "--brightness",
-        str(brightness),
-        "--contrast",
-        str(contrast),
-        "--gamma",
-        str(gamma),
         "--bit-depth",
         str(bit_depth),
         "--channels",
         "gray" if channels == 0 else "rgba",
     ]
+    if brightness is None or contrast is None or gamma is None:
+        args += ["--sidecar-transform"]
+    if brightness is not None:
+        args += ["--brightness", str(brightness)]
+    if contrast is not None:
+        args += ["--contrast", str(contrast)]
+    if gamma is not None:
+        args += ["--gamma", str(gamma)]
     fp = Path(footage_path) if footage_path else Path(bin_path).with_suffix(".footage")
     if fp.exists():
         args += ["--footage", str(fp)]
@@ -118,6 +128,8 @@ def verify_against_bin(
         args += ["--width", str(width), "--height", str(height)]
     if frames is not None:
         args += ["--frames", str(frames)]
+    if crop is not None:
+        args += ["--crop", ",".join(str(int(v)) for v in crop)]
     args.append(str(out_dir))
     args += ["--json"]
 
@@ -218,7 +230,11 @@ def verify(
         # Numeric sort by embedded frame index — handles 99999->100000
         # rollover where lexicographic would place 100000 before 99999.
         return sorted(
-            (x.name for x in p.glob(f"{prefix}*{ext}") if x.stem[len(prefix) :].isdigit()),
+            (
+                x.name
+                for x in p.glob(f"{prefix}*{ext}")
+                if x.stem[len(prefix) :].isdigit()
+            ),
             key=lambda n: int(n[len(prefix) : -len(ext)] if ext else n[len(prefix) :]),
         )
 

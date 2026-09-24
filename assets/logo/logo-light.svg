@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f8fafc"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="1000" height="1000" rx="228" ry="228" fill="url(#bgL)" stroke="#e2e8f0" stroke-width="14"/>
+  <circle cx="512" cy="420" r="236" fill="#f1f5f9" stroke="#e2e8f0" stroke-width="3"/>
+  <g id="shutter">
+    <path d="M 491.34 370.11 L 435.46 235.22 L 588.54 235.22 L 532.66 370.11 Z" fill="white" stroke="white" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 532.66 370.11 L 588.54 235.22 L 696.78 343.46 L 561.89 399.34 Z" fill="white" stroke="white" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 561.89 399.34 L 696.78 343.46 L 696.78 496.54 L 561.89 440.66 Z" fill="white" stroke="white" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 561.89 440.66 L 696.78 496.54 L 588.54 604.78 L 532.66 469.89 Z" fill="white" stroke="white" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 532.66 469.89 L 588.54 604.78 L 435.46 604.78 L 491.34 469.89 Z" fill="white" stroke="white" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 491.34 469.89 L 435.46 604.78 L 327.22 496.54 L 462.11 440.66 Z" fill="white" stroke="white" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 462.11 440.66 L 327.22 496.54 L 327.22 343.46 L 462.11 399.34 Z" fill="white" stroke="white" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 462.11 399.34 L 327.22 343.46 L 435.46 235.22 L 491.34 370.11 Z" fill="white" stroke="white" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="512" cy="420" r="54" fill="#4d8248" stroke="white" stroke-width="7"/>
+    <circle cx="512" cy="420" r="20.5" fill="white" opacity="0.92"/>
+  </g>
+  <text x="512" y="760" text-anchor="middle" font-family="'Inter','Segoe UI',sans-serif" font-size="176" font-weight="800" letter-spacing="-7" fill="#0f172a">opn<tspan fill="#4d8248">gx</tspan></text>
+  <text x="512" y="822" text-anchor="middle" font-family="'Inter','Segoe UI',sans-serif" font-size="36" font-weight="600" letter-spacing="13" fill="#64748b">PIXEL — EXACT</text>
+</svg>

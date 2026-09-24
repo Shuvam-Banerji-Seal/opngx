@@ -39,6 +39,11 @@ struct opngx_job {
     size_t   idat_cap;
     size_t   file_cap;
 
+    /* region of interest (cycle 22). src_* is the full recorded frame;
+     * out_* is the cropped window that is actually encoded. */
+    uint32_t src_w, src_h;
+    uint32_t out_w, out_h;
+
     opngx_mapped_file mf;
     uint8_t *map;            /* == mf.map (convenience) */
     size_t   map_len;        /* == mf.len               */
@@ -93,19 +98,53 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
         j->p.width = ft.resolution_x;
         j->p.height = ft.resolution_y;
     }
+    /* FIX-1 (cycle 22): reference mode takes its B/C/G from the sidecar
+     * only when the caller asks for it (`use_sidecar_transform`). Before,
+     * an explicit user transform was silently discarded, so
+     * `reference --gamma 2.0` produced sidecar B49/C18/G1 pixels while the
+     * studio preview — which honours the spins — showed something else.
+     * The preview and the file must agree.
+     *
+     * We cannot infer "user supplied a value" from the struct: the
+     * defaults are brightness=0, contrast=0, gamma=1, which are also
+     * perfectly meaningful user choices (identity in reference terms).
+     * Hence the explicit flag. python/src/opngx/extractor.py resolves the
+     * transform itself and always passes use_sidecar_transform = 0. */
     if (j->p.mode == OPNGX_MODE_REFERENCE) {
         if (!have_ft) { snprintf(j->err, sizeof j->err,
             "reference mode needs a .footage sidecar (for Brightness/Contrast)"); goto fail; }
-        j->p.brightness = ft.brightness;
-        j->p.contrast = ft.contrast;
-        j->p.gamma = ft.gamma;
+        if (j->p.use_sidecar_transform & 1) j->p.brightness = ft.brightness;
+        if (j->p.use_sidecar_transform & 2) j->p.contrast   = ft.contrast;
+        if (j->p.use_sidecar_transform & 4) j->p.gamma      = ft.gamma;
         if (!(ft.brightness == 49.0 && ft.contrast == 18.0 && ft.gamma == 1.0))
             fprintf(stderr, "opngx: WARNING: footage settings (B=%.0f C=%.0f G=%g) differ from the "
                     "verified operating point (B=49 C=18 G=1); pixel fidelity not guaranteed.\n",
                     ft.brightness, ft.contrast, ft.gamma);
     }
 
+    /* --- region of interest (cycle 22) -----------------------------------
+     * crop is a pure source-window selection: nothing is resampled, so a
+     * cropped frame is byte-identical to the corresponding sub-rectangle
+     * of an uncropped one. crop_w/crop_h == 0 mean "full frame". */
+    if (j->p.crop_w == 0) j->p.crop_w = j->p.width;
+    if (j->p.crop_h == 0) j->p.crop_h = j->p.height;
+    if (j->p.crop_w == 0 || j->p.crop_h == 0) {
+        snprintf(j->err, sizeof j->err, "crop: empty output region");
+        goto fail;
+    }
+    if (j->p.crop_x >= j->p.width || j->p.crop_y >= j->p.height ||
+        j->p.crop_w > j->p.width  - j->p.crop_x ||
+        j->p.crop_h > j->p.height - j->p.crop_y) {
+        snprintf(j->err, sizeof j->err,
+            "crop %u,%u %ux%u does not fit inside the %ux%u frame",
+            j->p.crop_x, j->p.crop_y, j->p.crop_w, j->p.crop_h,
+            j->p.width, j->p.height);
+        goto fail;
+    }
+
     j->stride = j->p.frame_stride > 0 ? j->p.frame_stride : (int64_t)(8 + (size_t)j->p.width * j->p.height);
+    j->src_w = j->p.width; j->src_h = j->p.height;
+    j->out_w = j->p.crop_w; j->out_h = j->p.crop_h;
 
     /* --- map input --- */
     if (port_map_file(j->bin_path, &j->mf)) {
@@ -140,7 +179,9 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     size_t bytes_per_px;
     if (j->color_type == 0) bytes_per_px = (j->p.bit_depth == 16) ? 2 : 1;
     else                    bytes_per_px = (j->p.bit_depth == 16) ? 8 : 4;
-    j->raw_len = (size_t)j->p.height * ((size_t)j->p.width * bytes_per_px + 1);
+    /* scanline buffers are sized to the CROPPED window, not the full frame */
+    j->raw_len = (size_t)j->out_h * ((size_t)j->out_w * bytes_per_px + 1);
+
     j->idat_cap = j->raw_len + j->raw_len / 8 + 256; /* >= any deflate bound */
     j->file_cap = j->idat_cap + 128;
 
@@ -188,6 +229,10 @@ static int write_metadata(opngx_job *j, const footage_t *ft) {
     fprintf(fp, "  \"source_bin\": \"%s\",\n", j->bin_path);
     fprintf(fp, "  \"width\": %u,\n", j->p.width);
     fprintf(fp, "  \"height\": %u,\n", j->p.height);
+    fprintf(fp, "  \"output_width\": %u,\n", j->out_w);
+    fprintf(fp, "  \"output_height\": %u,\n", j->out_h);
+    fprintf(fp, "  \"crop\": {\"x\": %u, \"y\": %u, \"w\": %u, \"h\": %u},\n",
+            j->p.crop_x, j->p.crop_y, j->out_w, j->out_h);
     fprintf(fp, "  \"frames\": %lld,\n", (long long)j->frames_total);
     fprintf(fp, "  \"frame_stride_bytes\": %lld,\n", (long long)j->stride);
     fprintf(fp, "  \"mode\": \"%s\",\n",
@@ -234,7 +279,11 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
     opngx_job *j = sh->job;
 
     const int64_t N = j->frames_total;
-    const uint32_t W = j->p.width, H = j->p.height;
+    const uint32_t W = j->out_w, H = j->out_h;   /* encoded (cropped) size */
+    const uint32_t SW = j->src_w;                /* full recorded frame  */
+    const uint32_t CX = j->p.crop_x, CY = j->p.crop_y;
+    const int cropped = (CX != 0 || CY != 0 || W != SW || H != j->src_h);
+    const size_t src_win = (size_t)W * (size_t)H;   /* crop window bytes */
     const int64_t stride = j->stride;
     const int64_t base = j->start_index;
     const int bits16 = (j->p.bit_depth == 16);
@@ -248,12 +297,15 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
     uint8_t *scan = malloc(j->raw_len);
     uint8_t *idat = malloc(j->idat_cap);
     uint8_t *filebuf = malloc(j->file_cap);
+    /* only allocated when a crop is active; NULL keeps the uncropped path
+     * byte-for-byte and allocation-identical to before. */
+    uint8_t *win = cropped ? malloc(src_win) : NULL;
     char path[1200];
 
-    if (!c || !scan || !idat || !filebuf)
+    if (!c || !scan || !idat || !filebuf || (cropped && !win))
         atomic_fetch_add(&sh->hard, 1);
 
-    if (c && scan && idat && filebuf) {
+    if (c && scan && idat && filebuf && (!cropped || win)) {
         /* AR-1 fix: persist the compressor's real backend id. Nothing ever
          * wrote backend_seen before, so opngx_stats.backend_used claimed
          * "libdeflate" unconditionally — a lie on zlib-only builds. */
@@ -273,6 +325,15 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
 
                 const uint8_t *frame = j->map +
                     (size_t)(base + i) * (size_t)stride + 8;
+
+                if (cropped) {
+                    /* gather the crop window row-major; no resampling, so
+                     * cropped pixels equal the source sub-rectangle. */
+                    for (uint32_t y = 0; y < H; y++)
+                        memcpy(win + (size_t)y * W,
+                               frame + (size_t)(CY + y) * SW + CX, W);
+                    frame = win;
+                }
 
                 if (fmt != OPNGX_FMT_PNG) {
                     /* map then hand to the non-PNG encoder */
@@ -369,7 +430,7 @@ progress_bump:;
         }
     }
     cctx_free(c);
-    free(scan); free(idat); free(filebuf);
+    free(scan); free(idat); free(filebuf); free(win);
 }
 
 

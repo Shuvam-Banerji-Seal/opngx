@@ -41,14 +41,26 @@ if ffbin:
 
 hidden += ["imageio_ffmpeg"]
 
+icon_path = os.path.join(root, "assets", "logo", "icon.ico")
+icon_png = os.path.join(root, "assets", "logo", "icon.png")
 a = Analysis(
     ["python/opngx_ui_entry.py"],
-    pathex=[os.path.join(root, "python")],
+    # The package uses a src/ layout, so BOTH python/ (the entry script's
+    # own directory) and python/src (where opngx actually lives) must be on
+    # the path. Listing only python/ makes every `opngx.*` hidden import
+    # fail with "not found" whenever the build machine has no editable
+    # install of the package — which is exactly the case for a clean
+    # Windows/Wine builder.
+    pathex=[
+        os.path.join(root, "python"),
+        os.path.join(root, "python", "src"),
+    ],
     binaries=binaries,
     datas=[
         (os.path.join(root, "README.md"), "docs"),
         (os.path.join(root, "docs", "FORMAT.md"), "docs"),
         (os.path.join(root, "docs", "BENCHMARKS.md"), "docs"),
+        (icon_png, "assets/logo") if os.path.exists(icon_png) else (os.path.join(root, "README.md"), "docs"),
     ],
     hiddenimports=hidden,
     hookspath=[],
@@ -63,5 +75,5 @@ exe = EXE(
     name="opngx-studio",
     console=False,               # windowed app: no console flash
     upx=False,
-    icon=None,
+    icon=icon_path if os.path.exists(icon_path) else None,
 )

@@ -117,22 +117,25 @@ def _selftest_engine() -> int:
             for i in range(n):
                 f.write(struct.pack("<Q", 5_000_000 + i * 2000))
                 f.write(rng.integers(0, 256, size=(h * w), dtype=np.uint8).tobytes())
-        out = d / "SQ_100_s1_png"          # spaces-free but real subdir
+        out = d / "SQ_100_s1_png"  # spaces-free but real subdir
         from opngx.extractor import Extractor
 
         st = Extractor(str(binp), width=w, height=h).extract(
-            str(out), mode="raw", jobs=2, prefix="SQ_100_")
+            str(out), mode="raw", jobs=2, prefix="SQ_100_"
+        )
         assert st.frames_written == n, f"extract wrote {st.frames_written}"
         eng = _engine_binary()
         assert eng, "bundled opngx-engine CLI not found"
         print(f"engine cli: {eng}")
-        rep = verify_against_bin(str(binp), str(out), mode="raw",
-                                 width=w, height=h, prefix="SQ_100_")
+        rep = verify_against_bin(
+            str(binp), str(out), mode="raw", width=w, height=h, prefix="SQ_100_"
+        )
         assert rep.passed, rep.first_error
         print(f"SELFTEST-ENGINE PASS ({n} frames verified vs source bin)")
         return 0
     except Exception:
         import traceback
+
         traceback.print_exc()
         print("SELFTEST-ENGINE FAIL")
         return 1
@@ -191,6 +194,12 @@ def _selftest_ui() -> int:
             "h_spin",
             "cpu_chip",
             "ram_chip",
+            # v1.7 additions
+            "_open_batch_window",
+            "_open_crop_editor",
+            "load_batch_item",
+            "batch_btn",
+            "crop_btn",
         )
         missing = [a for a in required if not hasattr(win, a)]
         if missing:
@@ -212,11 +221,113 @@ def _selftest_ui() -> int:
         logf.flush()
 
 
+def _selftest_batch() -> int:
+    """Prove the v1.7 batch + crop path INSIDE the packaged exe.
+
+    Builds a two-recording mother folder with IDENTICAL .bin filenames
+    (the cycle-22 data-loss case), runs the batch through the UI's own
+    BatchWindow, crops both, and verifies the output is cropped, in two
+    separate folders. Exit 0 = pass."""
+    import os
+    import struct
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    logf = _selftest_log()
+    print("SELFTEST-BATCH start")
+    try:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6 import QtCore, QtWidgets  # noqa: PLC0415
+
+        from opngx.ui.batch import BatchWindow  # noqa: PLC0415
+
+        w, h, n = 64, 48, 6
+        d = Path(tempfile.mkdtemp(prefix="opngx_batch_selftest_"))
+        mother = d / "mother"
+        for cam in ("camA", "camB"):  # same .bin name in BOTH folders
+            (mother / cam).mkdir(parents=True)
+            rng = np.random.default_rng(3)
+            with open(mother / cam / "recording.bin", "wb") as f:
+                for i in range(n):
+                    f.write(struct.pack("<Q", 9_000_000 + i * 2000))
+                    f.write(
+                        rng.integers(0, 256, size=(h * w), dtype=np.uint8).tobytes()
+                    )
+            (mother / cam / "recording.footage").write_text(
+                '<?xml version="1.0"?><TimeViewer>'
+                "<SettingsProcessing><Brightness>49</Brightness>"
+                "<Contrast>18</Contrast><Gamma>1.0</Gamma>"
+                "</SettingsProcessing>"
+                "<ResolutionX>64</ResolutionX><ResolutionY>48</ResolutionY>"
+                "<NumberOfImages>6</NumberOfImages><Framerate>500</Framerate>"
+                "</TimeViewer>"
+            )
+
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        win = BatchWindow(
+            None,
+            str(mother),
+            str(d / "out"),
+            dict(
+                fmt="png",
+                mode="reference",
+                bit_depth=8,
+                channels=6,
+                jobs=2,
+                level=6,
+                prefix="brow_",
+                ext=".Png",
+            ),
+        )
+        assert len(win.items) == 2, f"expected 2 recordings, got {len(win.items)}"
+        assert all(i.thumb is not None for i in win.items), "cards must show a frame"
+        outs = {i.out_dir for i in win.items}
+        assert len(outs) == 2, f"output folders collide: {outs}"
+
+        crop = (8, 4, 20, 12)
+        for i in win.items:
+            i.crop = crop
+            win.cards[i.bin_path].refresh()
+
+        loop = QtCore.QEventLoop()
+        win.finished.connect(lambda _: loop.quit())
+        win.start()
+        QtCore.QTimer.singleShot(120000, loop.quit)
+        loop.exec()
+
+        bad = [(i.name, i.status, i.error) for i in win.items if i.status != "done"]
+        assert not bad, f"batch did not finish cleanly: {bad}"
+        from PIL import Image  # noqa: PLC0415
+
+        for cam in ("camA", "camB"):
+            files = sorted((d / "out" / cam / "PNG").glob("*.Png"))
+            assert len(files) == n, f"{cam}: {len(files)} files, expected {n}"
+            with Image.open(files[0]) as im:
+                assert im.size == (20, 12), f"{cam}: cropped size {im.size}"
+        print(
+            f"SELFTEST-BATCH PASS (2 recordings, same .bin name, "
+            f"crop {crop[2]}x{crop[3]}, {n} frames each)"
+        )
+        return 0
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        print("SELFTEST-BATCH FAIL")
+        return 1
+    finally:
+        logf.flush()
+
+
 if __name__ == "__main__":
     if "--debug-ffmpeg" in sys.argv:
         raise SystemExit(_debug_ffmpeg())
     if "--selftest-video" in sys.argv:
         raise SystemExit(_selftest_video())
+    if "--selftest-batch" in sys.argv:
+        raise SystemExit(_selftest_batch())
     if "--selftest-ui" in sys.argv:
         raise SystemExit(_selftest_ui())
     if "--selftest-engine" in sys.argv:

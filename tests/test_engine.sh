@@ -286,6 +286,115 @@ mkdir -p "$TMP/batch16flat"
 [ "$(ls "$TMP/batch16flat/cam_9_9" | wc -l)" -eq 200 ]
 check "batch layout=flat (default): back-compat 200 PNGs"
 
+
+echo "== T-22: batch honours EVERY quality flag (cycle-22 FIX-2) =="
+# The engine's batch subcommand used to hardcode gamma=1.0 and reject
+# --brightness/--contrast/--gamma/--channels/--bit-depth entirely, so a
+# batch run could never apply the settings the studio shows.
+mkdir -p "$TMP/b22root"
+"$ENGINE" batch --in-dir "$TMP/fix" --out-root "$TMP/b22root" --prefix cam_ \
+    --mode custom --brightness 20 --contrast 30 --gamma 2.0 --channels gray -j 4 2>"$TMP/t22err.txt"
+RC=$?
+[ $RC -eq 0 ] || { cat "$TMP/t22err.txt"; false; }
+check "batch accepts --brightness/--contrast/--gamma/--channels"
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/b22ref" --prefix cam_ \
+    --mode custom --brightness 20 --contrast 30 --gamma 2.0 --channels gray -j 4 2>/dev/null
+BATCHOUT="$TMP/b22root/cam_9_9"
+[ -d "$BATCHOUT" ] || BATCHOUT="$TMP/b22root/cam_9_9/PNG"
+if diff -r "$TMP/b22ref" "$BATCHOUT" >/dev/null 2>&1; then
+  check "batch pixels == single-extract pixels for the same B/C/G"
+else
+  bad "batch pixels == single-extract pixels for the same B/C/G"
+fi
+"$ENGINE" batch --in-dir "$TMP/fix" --out-root "$TMP/b22d16" --prefix cam_ \
+    --bit-depth 16 --channels gray -j 4 2>/dev/null
+D16="$TMP/b22d16/cam_9_9"
+[ -d "$D16" ] || D16="$TMP/b22d16/cam_9_9/PNG"
+python3 -c "
+from PIL import Image
+im = Image.open('$D16/cam_00000.Png')
+assert im.mode in ('I;16','I;16B','I;16L','I'), im.mode
+"
+check "batch --bit-depth 16 writes 16-bit PNGs"
+
+
+echo "== T-23: ROI crop is pixel-exact and verifybin agrees (cycle-22 FEAT-1) =="
+# Crop must be a pure source-window selection: output pixel (x,y) == LUT(src[crop_x+x, crop_y+y])
+# and the whole verifier pipeline must re-derive with the SAME crop or it false-fails.
+CX=8; CY=4; CW=20; CH=12
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/crop" --prefix cam_ \
+    --crop $CX,$CY,$CW,$CH -j 4 2>"$TMP/t23err.txt"
+RC=$?
+[ $RC -eq 0 ] || { cat "$TMP/t23err.txt"; false; }
+check "extract --crop x,y,w,h runs"
+python3 - "$TMP/crop/cam_00000.Png" "$TMP/fix/cam_9.9/cam_9.9.bin" $CX $CY $CW $CH << 'EOF'
+import sys
+import numpy as np
+from PIL import Image
+out_p, bin_p, cx, cy, cw, ch = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:7])
+im = Image.open(out_p)
+assert im.size == (cw, ch), f"cropped size {im.size} != {(cw, ch)}"
+got = np.asarray(im.convert("L"))
+full = np.frombuffer(open(bin_p, "rb").read()[8:8 + 64 * 48], dtype=np.uint8).reshape(48, 64)
+# gamma=1, B=49 C=18 -> independent LUT, same verified formula
+mul = 1 + 18 / 50
+lut = np.clip(np.floor((np.arange(256, dtype=np.float64) + 49) * mul + 0.5), 0, 255).astype(np.uint8)
+want = lut[full[cy:cy + ch, cx:cx + cw]]
+assert np.array_equal(got, want), f"crop mismatch: {np.abs(got.astype(int)-want.astype(int)).max()}"
+EOF
+check "crop pixels == independent source window + LUT"
+"$ENGINE" verifybin --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --crop $CX,$CY,$CW,$CH \
+    "$TMP/crop" --prefix cam_ --json 2>/dev/null | grep -q '"passed":true'
+check "verifybin with matching --crop PASS"
+"$ENGINE" verifybin --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" \
+    "$TMP/crop" --prefix cam_ --json 2>/dev/null | grep -q '"passed":false'
+check "verifybin WITHOUT --crop correctly fails (crop is not invisible)"
+# identity: crop 0,0,W,H must equal a normal full-frame extract. Compare the
+# PNG payloads only — the reference dir carries timestamp/metadata sidecars
+# that the crop run does not request.
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropfull" --prefix cam_ \
+    --crop 0,0,64,48 -j 4 2>/dev/null
+python3 - "$TMP/fix/out" "$TMP/cropfull" << 'EOF'
+import hashlib, os, sys
+a, b = sys.argv[1], sys.argv[2]
+fa = sorted(f for f in os.listdir(a) if f.endswith(".Png"))
+fb = sorted(f for f in os.listdir(b) if f.endswith(".Png"))
+assert fa == fb, f"file sets differ: {len(fa)} vs {len(fb)}"
+for f in fa:
+    da = hashlib.sha256(open(os.path.join(a, f), "rb").read()).hexdigest()
+    db = hashlib.sha256(open(os.path.join(b, f), "rb").read()).hexdigest()
+    assert da == db, f"{f} differs: {da[:12]} vs {db[:12]}"
+EOF
+check "crop 0,0,W,H is byte-identical to no-crop extract"
+
+
+echo "== T-24: crop validation rejects impossible rects =="
+# Each case must fail with a CROP-specific diagnostic. A bare
+# "unknown option: --crop" also exits non-zero, so checking rc alone
+# would let this gate pass against a binary that has no crop at all.
+CROPBAD=0
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropbad" --prefix cam_ \
+    --crop 0,0,999,999 2>"$TMP/t24a.txt"
+[ $? -ne 0 ] && grep -qi "crop" "$TMP/t24a.txt" && ! grep -qi "unknown option" "$TMP/t24a.txt" || CROPBAD=1
+check "crop larger than frame is rejected with a crop-specific error"
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropbad2" --prefix cam_ \
+    --crop 60,0,10,10 2>"$TMP/t24b.txt"
+[ $? -ne 0 ] && grep -qi "crop" "$TMP/t24b.txt" || CROPBAD=1
+check "crop overflowing the right edge is rejected"
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropbad3" --prefix cam_ \
+    --crop 0,0,0,0 2>"$TMP/t24c.txt"
+[ $? -ne 0 ] && grep -qi "crop" "$TMP/t24c.txt" || CROPBAD=1
+check "crop 0,0,0,0 (degenerate) is rejected"
+[ $CROPBAD -eq 0 ]
+
 echo
 echo "RESULTS: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

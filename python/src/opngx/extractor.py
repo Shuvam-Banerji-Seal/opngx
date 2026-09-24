@@ -88,6 +88,7 @@ class Extractor:
         frames: Optional[int] = None,
         export_timestamps: bool = False,
         export_metadata: bool = False,
+        crop: Optional[tuple[int, int, int, int]] = None,
         progress: Optional[Callable[[int, int], None]] = None,
         should_cancel: Optional[Callable[[], bool]] = None,
     ) -> ExtractStats:
@@ -96,9 +97,19 @@ class Extractor:
             raise ValueError("reference mode requires a .footage sidecar")
         if self.meta.width == 0 or self.meta.height == 0:
             raise ValueError("unknown geometry; provide a .footage sidecar")
+        crop = self._resolve_crop(crop)
 
         # Resolve transform defaults ONCE so native and fallback paths
         # always produce identical pixels for the same call (audit #13).
+        #
+        # FIX-1 (cycle 22): an EXPLICIT user transform is always honoured.
+        # Previously `reference` overwrote brightness/contrast/gamma with
+        # the sidecar's, so a user who set gamma=2.0 in the studio got
+        # sidecar B49/C18/G1 output while the frame viewer — which honours
+        # the spins — showed the gamma-ed result. The preview lied about
+        # the file, in batch exactly as in single scope. Sidecar values are
+        # now used only when the caller supplies none, which keeps
+        # reference mode's vendor-parity purpose intact.
         if mode is QualityMode.RAW:
             brightness = contrast = 0.0
             gamma = 1.0
@@ -107,9 +118,9 @@ class Extractor:
             contrast = contrast if contrast is not None else 0.0
             gamma = gamma if gamma is not None else 1.0
         else:  # REFERENCE
-            brightness = self.meta.brightness
-            contrast = self.meta.contrast
-            gamma = self.meta.gamma
+            brightness = self.meta.brightness if brightness is None else brightness
+            contrast = self.meta.contrast if contrast is None else contrast
+            gamma = self.meta.gamma if gamma is None else gamma
 
         lib = load_library()
         if lib is not None:
@@ -135,6 +146,7 @@ class Extractor:
                 export_metadata,
                 progress,
                 should_cancel,
+                crop=crop,
             )
         return self._run_fallback(
             out_dir,
@@ -156,7 +168,38 @@ class Extractor:
             export_metadata,
             progress,
             should_cancel,
+            crop=crop,
         )
+
+    # ------------------------------------------------------------------ #
+    def _resolve_crop(
+        self, crop: Optional[tuple[int, int, int, int]]
+    ) -> tuple[int, int, int, int]:
+        """Validate/normalise a crop rect against this recording's geometry.
+
+        Returns (x, y, w, h) always concrete (0,0,W,H for "whole frame") so
+        every consumer — engine, fallback, metadata, verify — agrees on one
+        representation. Same rules as opngx_job_create in C.
+        """
+        W, H = int(self.meta.width), int(self.meta.height)
+        if crop is None:
+            return (0, 0, W, H)
+        if len(crop) != 4:
+            raise ValueError("crop must be (x, y, w, h)")
+        x, y, w, h = (int(v) for v in crop)
+        if x < 0 or y < 0:
+            raise ValueError(f"crop origin must be >= 0, got ({x}, {y})")
+        if w == 0:
+            w = W - x
+        if h == 0:
+            h = H - y
+        if w < 1 or h < 1:
+            raise ValueError(f"crop {x},{y} {w}x{h} is empty")
+        if x + w > W or y + h > H:
+            raise ValueError(
+                f"crop {x},{y} {w}x{h} does not fit inside the {W}x{H} frame"
+            )
+        return (x, y, w, h)
 
     # ------------------------------------------------------------------ #
     def _run_native(
@@ -182,6 +225,7 @@ class Extractor:
         export_metadata,
         progress,
         should_cancel,
+        crop=(0, 0, 0, 0),
     ) -> ExtractStats:
         p = OpngxParams()
         p.bin_path = self.meta.bin_path.encode()
@@ -194,8 +238,12 @@ class Extractor:
         p.brightness = brightness
         p.contrast = contrast
         p.gamma = gamma
+        # the transform is already resolved here, so the engine must not
+        # substitute the sidecar values (FIX-1)
+        p.use_sidecar_transform = 0
         p.bit_depth = bit_depth
         p.channels = channels
+        p.crop_x, p.crop_y, p.crop_w, p.crop_h = crop
         p.format = {"png": 0, "bmp": 1, "tif": 2, "tiff": 2, "jpg": 3, "jpeg": 3}.get(
             str(fmt).lower(), 0
         )
@@ -318,6 +366,7 @@ class Extractor:
         export_metadata,
         progress,
         should_cancel,
+        crop=(0, 0, 0, 0),
     ) -> ExtractStats:
         from . import _fallback
 
@@ -361,6 +410,7 @@ class Extractor:
             g,
             bit_depth,
             jobs,
+            crop=crop,
             progress=cb,
             cancelled=should_cancel,
         )
@@ -378,7 +428,13 @@ class Extractor:
                     wcsv.writerow([start + i, int(t), f"0x{int(t):016X}"])
         if export_metadata:
             meta = dict(self.meta.to_dict())
-            meta.update(engine="python-fallback", frames_extracted=written)
+            meta.update(
+                engine="python-fallback",
+                frames_extracted=written,
+                output_width=crop[2],
+                output_height=crop[3],
+                crop={"x": crop[0], "y": crop[1], "w": crop[2], "h": crop[3]},
+            )
             with open(Path(out_dir) / "metadata.json", "w") as f:
                 json.dump(meta, f, indent=2)
 

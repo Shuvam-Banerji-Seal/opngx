@@ -18,8 +18,8 @@
 extern "C" {
 #endif
 
-#define OPNGX_VERSION "1.6.4"
-#define OPNGX_ABI_VERSION 4
+#define OPNGX_VERSION "1.7.0"
+#define OPNGX_ABI_VERSION 5
 
 /* Output formats */
 typedef enum {
@@ -57,10 +57,29 @@ typedef struct {
     double      brightness;     /* used by REFERENCE (from XML) / CUSTOM */
     double      contrast;       /* multiplier = 1 + contrast/50          */
     double      gamma;          /* 1.0 = off                             */
+    /* FIX-1: bitmask of transform fields that REFERENCE mode should take
+     * from the sidecar instead of using the values above.
+     *   1 = brightness, 2 = contrast, 4 = gamma; 0 = use the values above.
+     * A user-supplied transform must never be silently discarded, and a
+     * field the user did not supply must still fall back to the vendor
+     * value — hence a per-field mask rather than one on/off switch.
+     * python/src/opngx/extractor.py resolves the transform itself and
+     * always passes 0. */
+    int         use_sidecar_transform;
     int         bit_depth;      /* 8 (default) or 16 (PNG only)          */
     int         channels;       /* 6 = RGBA (default), 0 = grayscale     */
     int         format;         /* OPNGX_FMT_*                            */
     int         jpeg_quality;   /* 1..100, used when format == JPEG       */
+
+    /* region of interest (cycle 22). crop_w == 0 means "whole frame".
+     * Output geometry becomes crop_w x crop_h; output pixel (x,y) is the
+     * LUT-mapped source pixel (crop_x + x, crop_y + y). Must satisfy
+     * 0 <= crop_x < W, 0 <= crop_y < H, crop_w >= 1, crop_h >= 1 and
+     * crop_x + crop_w <= W, crop_y + crop_h <= H. */
+    uint32_t    crop_x;
+    uint32_t    crop_y;
+    uint32_t    crop_w;         /* 0 => full width  */
+    uint32_t    crop_h;         /* 0 => full height */
 
     /* output */
     const char *out_dir;

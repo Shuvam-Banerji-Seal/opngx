@@ -470,6 +470,10 @@ typedef struct {
     size_t map_len;
     int64_t stride, avail;
     uint32_t W, H;
+    /* crop window (cycle 22): W/H are the OUTPUT size, SW/SH the full frame */
+    uint32_t SW, SH;
+    uint32_t CX, CY;
+    int cropped;
     int bits16, color_type;
     uint8_t  lut8[256];
     uint16_t lut16[256];
@@ -489,6 +493,7 @@ typedef struct bmem {
     pslot slot;                  /* decoded output PNG buffers      */
     uint8_t *scratch; size_t scratch_cap;  /* expanded scanlines   */
     uint8_t *qref;    size_t qref_cap;     /* expected pixel rows  */
+    uint8_t *win;     size_t win_cap;      /* crop window (cycle 22) */
 } bmem;
 
 static void fill_luts_for(const opngx_params *p, uint8_t *l8, uint16_t *l16) {
@@ -530,15 +535,25 @@ static int bverify_one(bshared *bs, bmem *m, const char *name) {
 
     m->scratch = grow_to(m->scratch, &m->scratch_cap, raw_len);
     m->qref = grow_to(m->qref, &m->qref_cap, (size_t)W * H * bpp);
+    /* crop support (cycle 22): the verifier must re-derive the SAME window
+     * the extractor encoded, or a correct cropped run false-fails. */
+    const size_t win_len = (size_t)W * (size_t)H;
+    m->win = grow_to(m->win, &m->win_cap, win_len);
     uint8_t *scratch = m->scratch;
     uint8_t *qref = m->qref;
     int rc = -1;
     png_view v;
     char why[256] = "";
-    if (!scratch || !qref) goto out;
+    if (!scratch || !qref || (bs->cropped && !m->win)) goto out;
 
     {
         const uint8_t *frame = bs->map + (size_t)idx * (size_t)bs->stride + 8;
+        if (bs->cropped) {
+            for (uint32_t y = 0; y < H; y++)
+                memcpy(m->win + (size_t)y * W,
+                       frame + (size_t)(bs->CY + y) * bs->SW + bs->CX, W);
+            frame = m->win;
+        }
         if (bs->color_type == 0) {
             if (bs->bits16) opngx_expand_gray16(frame, W, H, bs->lut16, scratch);
             else            opngx_expand_gray8 (frame, W, H, bs->lut8,  scratch);
@@ -622,9 +637,14 @@ int opngx_verify_bin(const opngx_params *pin, verify_report *rep,
             p.height = ft.resolution_y;
         }
         if (ref_mode) {
-            p.brightness = ft.brightness;
-            p.contrast = ft.contrast;
-            p.gamma = ft.gamma > 0 ? ft.gamma : 1.0;
+            /* FIX-1: only take the sidecar curve for the fields the caller
+             * flagged, exactly as opngx_job_create does. Verifying a run
+             * that was extracted with a user transform must re-derive THAT
+             * transform. */
+            if (p.use_sidecar_transform & 1) p.brightness = ft.brightness;
+            if (p.use_sidecar_transform & 2) p.contrast   = ft.contrast;
+            if (p.use_sidecar_transform & 4)
+                p.gamma = ft.gamma > 0 ? ft.gamma : 1.0;
         }
     }
 
@@ -639,8 +659,24 @@ int opngx_verify_bin(const opngx_params *pin, verify_report *rep,
     bs.p = &p;
     bs.map = mf.map;
     bs.map_len = mf.len;
-    bs.W = p.width;
-    bs.H = p.height;
+    /* crop window (cycle 22) is validated against the FULL frame before it
+     * becomes the verifier's output geometry. Identical rules to
+     * opngx_job_create, so a rect the engine accepts the verifier accepts. */
+    bs.SW = p.width; bs.SH = p.height;
+    uint32_t cw = p.crop_w ? p.crop_w : p.width;
+    uint32_t ch = p.crop_h ? p.crop_h : p.height;
+    if (cw == 0 || ch == 0 || p.crop_x >= p.width || p.crop_y >= p.height ||
+        cw > p.width - p.crop_x || ch > p.height - p.crop_y) {
+        port_unmap_file(&mf);
+        snprintf(err, err_cap,
+                 "crop %u,%u %ux%u does not fit inside the %ux%u frame",
+                 p.crop_x, p.crop_y, cw, ch, p.width, p.height);
+        return -1;
+    }
+    bs.CX = p.crop_x; bs.CY = p.crop_y;
+    bs.cropped = (p.crop_x != 0 || p.crop_y != 0 || cw != p.width || ch != p.height);
+    bs.W = cw;
+    bs.H = ch;
     bs.bits16 = p.bit_depth == 16;
     bs.color_type = p.channels == 0 ? 0 : 6;
     bs.out_dir = p.out_dir && p.out_dir[0] ? p.out_dir : ".";
@@ -700,6 +736,7 @@ int opngx_verify_bin(const opngx_params *pin, verify_report *rep,
         pslot_free(&bs.mem[k].slot);
         free(bs.mem[k].scratch);
         free(bs.mem[k].qref);
+        free(bs.mem[k].win);
     }
     free(bs.mem);
     for (int64_t i = 0; i < bs.n_on; i++) free(bs.on[i]);

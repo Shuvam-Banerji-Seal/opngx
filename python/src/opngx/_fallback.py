@@ -90,6 +90,10 @@ def encode_png(pixels: np.ndarray, bit_depth: int = 8, channels: int = 6) -> byt
 
 
 def _render_frame(args):
+    # The last three entries (src_w, crop_x, crop_y) were added in cycle 22
+    # for ROI support. They stay optional so existing direct callers — and
+    # the regression tests that pin the exact tuple layout — keep working:
+    # omitted means "no crop", i.e. the full recorded width starting at 0.
     (
         bin_path,
         frame_index,
@@ -104,17 +108,26 @@ def _render_frame(args):
         channels,
         fmt,
         jpeg_quality,
-    ) = args
+    ) = args[:13]
+    if len(args) >= 16:
+        src_w, crop_x, crop_y = args[13], args[14], args[15]
+    else:
+        src_w, crop_x, crop_y = w, 0, 0
+
     ext = {"png": ".Png", "bmp": ".bmp", "tif": ".tif", "jpg": ".jpg"}[fmt]
     absolute = start + frame_index
     lut = build_lut(brightness, contrast, gamma)
     with open(bin_path, "rb") as f:
+        # read the full source row width, then select the crop window so
+        # the fallback is pixel-identical to the native engine (cycle 22)
         f.seek(absolute * stride + 8)
-        gray = np.frombuffer(f.read(w * h), dtype=np.uint8).reshape(h, w)
+        full = np.frombuffer(f.read(src_w * h), dtype=np.uint8).reshape(h, src_w)
+    gray = full[:, crop_x : crop_x + w]
     mapped = lut[gray]
     if fmt != "png":
         from io import BytesIO
         from PIL import Image as PILImage
+
         im = PILImage.fromarray(mapped, mode="L")
         buf = BytesIO()
         if fmt == "jpg":
@@ -152,6 +165,7 @@ def extract_frames(
     start: int = 0,
     fmt: str = "png",
     jpeg_quality: int = 90,
+    crop=(0, 0, 0, 0),
     progress=None,
     cancelled=None,
 ) -> dict:
@@ -159,6 +173,9 @@ def extract_frames(
     out.mkdir(parents=True, exist_ok=True)
     jobs = jobs or os.cpu_count() or 1
     done = 0
+    crop_x, crop_y, crop_w, crop_h = crop
+    # width/height are the OUTPUT (cropped) size; src_w is the recorded frame
+    src_w = crop_x + crop_w if crop_w else width
     args = [
         (
             str(bin_path),
@@ -174,13 +191,15 @@ def extract_frames(
             channels,
             fmt,
             jpeg_quality,
+            src_w,
+            crop_x,
+            crop_y,
         )
         for i in range(num_frames)
     ]
     if jobs > 1 and num_frames > 32:
         with ProcessPoolExecutor(max_workers=jobs) as ex:
-            for frame_index, (fext, blob) in ex.map(_render_frame, args,
-                                                    chunksize=16):
+            for frame_index, (fext, blob) in ex.map(_render_frame, args, chunksize=16):
                 (out / f"{prefix}{frame_index:05d}{fext}").write_bytes(blob)
                 done += 1
                 if progress:

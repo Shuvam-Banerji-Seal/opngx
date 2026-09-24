@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">opngx — pixel-exact high-speed footage extractor</title>
+  <desc id="desc">Rounded square app icon: pristine-black with 8-blade white shutter and coffee-green center, opngx wordmark below</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d0f0d"/>
+      <stop offset="100%" stop-color="#050505"/>
+    </linearGradient>
+    <!-- subtle outer glow for dark mode depth -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+
+  <!-- Outer rounded square — the app shape -->
+  <rect x="12" y="12" width="1000" height="1000" rx="228" ry="228" fill="url(#bg)" stroke="#1f261f" stroke-width="14" filter="url(#glow)"/>
+
+  <!-- Inner housing circle for shutter -->
+  <circle cx="512" cy="420" r="236" fill="#070807" stroke="#1f261f" stroke-width="3" opacity="0.98"/>
+
+  <!-- Shutter blades -->
+  <g id="shutter">
+    <path d="M 491.34 370.11 L 435.46 235.22 L 588.54 235.22 L 532.66 370.11 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 532.66 370.11 L 588.54 235.22 L 696.78 343.46 L 561.89 399.34 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 561.89 399.34 L 696.78 343.46 L 696.78 496.54 L 561.89 440.66 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 561.89 440.66 L 696.78 496.54 L 588.54 604.78 L 532.66 469.89 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 532.66 469.89 L 588.54 604.78 L 435.46 604.78 L 491.34 469.89 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 491.34 469.89 L 435.46 604.78 L 327.22 496.54 L 462.11 440.66 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 462.11 440.66 L 327.22 496.54 L 327.22 343.46 L 462.11 399.34 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 462.11 399.34 L 327.22 343.46 L 435.46 235.22 L 491.34 370.11 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="512" cy="420" r="54" fill="#4d8248" stroke="white" stroke-width="7"/>
+    <circle cx="512" cy="420" r="20.5" fill="white" opacity="0.92"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="512" y="760" text-anchor="middle" font-family="'Inter','Segoe UI','Ubuntu','DejaVu Sans',sans-serif" font-size="176" font-weight="800" letter-spacing="-7" fill="white">opn<tspan fill="#7fb069">gx</tspan></text>
+
+  <!-- Tagline -->
+  <text x="512" y="822" text-anchor="middle" font-family="'Inter','Segoe UI',sans-serif" font-size="36" font-weight="600" letter-spacing="13" fill="#7d8a7d">PIXEL — EXACT</text>
+
+  <!-- Speed accent — 3 short ticks at top-right of housing -->
+  <g opacity="0.95">
+    <rect x="742" y="248" width="48" height="8" rx="4" fill="#7fb069"/>
+    <rect x="742" y="268" width="32" height="8" rx="4" fill="#7fb069" opacity="0.72"/>
+    <rect x="742" y="288" width="20" height="8" rx="4" fill="#7fb069" opacity="0.45"/>
+  </g>
+</svg>

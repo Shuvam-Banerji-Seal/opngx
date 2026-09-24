@@ -74,3 +74,54 @@ what opngx proves in verification.
 > **Rollover note:** `%05d` zero-pads to 5 digits; frame 100 000 becomes `brow_100000.Png` (6 digits, no truncation, no wrap). The verifier sorts **numerically** by the embedded index, so `100000` correctly follows `99999` (lexicographic would misorder). Current footage is 50 000 frames, so no existing recording hits the boundary; the tool is future-proof for ≥100k runs.
 
 opngx defaults reproduce these exactly (`--prefix brow_ --ext .Png`).
+
+## Region of interest (v1.7.0)
+
+`--crop X,Y,W,H` restricts extraction to a rectangle of the recorded frame.
+It is a **pure pixel selection** — no resampling, no interpolation, no new
+information:
+
+```
+output pixel (x, y)  ==  LUT( source pixel (X + x, Y + y) )
+output geometry      ==  W × H
+```
+
+Consequences worth stating explicitly, because they are what make cropping
+safe to use on measurement data:
+
+* A cropped frame is **bit-identical** to the corresponding sub-rectangle of
+  an uncropped one. T-23 asserts exactly that, against an independently
+  computed expectation.
+* `--crop 0,0,W,H` is byte-identical to no crop at all (also gated), so a
+  crop of the full frame costs nothing and changes nothing.
+* `W` or `H` may be `0`, meaning "to the frame edge" — this is what the UI
+  emits when the selection box is dragged to the border.
+* A rectangle that does not fit inside the frame is rejected with a
+  crop-specific diagnostic, not clamped.
+* `metadata.json` records both the source geometry and the result:
+  `width`/`height` (source) plus `output_width`/`output_height` and `crop`.
+
+`opngx-engine verifybin` and `opngx.verify_against_bin()` take the same
+`--crop` and re-derive the identical window, so verification of a cropped
+extraction is meaningful. Verifying a cropped run *without* `--crop` fails
+by design — the gate proves that too, so a forgotten flag cannot masquerade
+as a pass.
+
+## Batch output identity (v1.7.0)
+
+In the mother-folder architecture the recording **folder** is the identity
+of a recording, not its `.bin` filename:
+
+```
+Footages/
+  camA/recording.bin
+  camB/recording.bin     <- same filename, different recording
+FramesOut/
+  camA/PNG/…             <- v1.7: keyed on the recording folder
+  camB/PNG/…
+```
+
+Keying on the filename collapsed both into `FramesOut/recording/PNG/` and
+each run overwrote the previous one frame for frame. The CLI additionally
+refuses to start a batch that would still collide, naming both paths rather
+than destroying output.
