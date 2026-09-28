@@ -43,6 +43,37 @@ class ExtractStats:
         )
 
 
+def normalize_crop(
+    crop: Optional[tuple[int, int, int, int]], width: int, height: int
+) -> tuple[int, int, int, int]:
+    """Validate an (x, y, w, h) crop against a width x height frame.
+
+    Returns a concrete rect (0, 0, W, H for "whole frame"); w/h of 0 mean
+    "to the frame edge". Raises ValueError for anything that does not fit —
+    never clamps silently. Same rules as opngx_job_create in C, and the one
+    function the studio uses to decide whether a crop fits a recording.
+    """
+    W, H = int(width), int(height)
+    if crop is None:
+        return (0, 0, W, H)
+    if len(crop) != 4:
+        raise ValueError("crop must be (x, y, w, h)")
+    x, y, w, h = (int(v) for v in crop)
+    if x < 0 or y < 0:
+        raise ValueError(f"crop origin must be >= 0, got ({x}, {y})")
+    if x >= W or y >= H:
+        raise ValueError(f"crop origin {x},{y} lies outside the {W}x{H} frame")
+    if w == 0:
+        w = W - x
+    if h == 0:
+        h = H - y
+    if w < 1 or h < 1:
+        raise ValueError(f"crop {x},{y} {w}x{h} is empty")
+    if x + w > W or y + h > H:
+        raise ValueError(f"crop {x},{y} {w}x{h} does not fit inside the {W}x{H} frame")
+    return (x, y, w, h)
+
+
 class Extractor:
     """Extract PNGs from an Optronis .bin.
 
@@ -181,25 +212,7 @@ class Extractor:
         every consumer — engine, fallback, metadata, verify — agrees on one
         representation. Same rules as opngx_job_create in C.
         """
-        W, H = int(self.meta.width), int(self.meta.height)
-        if crop is None:
-            return (0, 0, W, H)
-        if len(crop) != 4:
-            raise ValueError("crop must be (x, y, w, h)")
-        x, y, w, h = (int(v) for v in crop)
-        if x < 0 or y < 0:
-            raise ValueError(f"crop origin must be >= 0, got ({x}, {y})")
-        if w == 0:
-            w = W - x
-        if h == 0:
-            h = H - y
-        if w < 1 or h < 1:
-            raise ValueError(f"crop {x},{y} {w}x{h} is empty")
-        if x + w > W or y + h > H:
-            raise ValueError(
-                f"crop {x},{y} {w}x{h} does not fit inside the {W}x{H} frame"
-            )
-        return (x, y, w, h)
+        return normalize_crop(crop, self.meta.width, self.meta.height)
 
     # ------------------------------------------------------------------ #
     def _run_native(
@@ -252,7 +265,9 @@ class Extractor:
             p.bit_depth = min(p.bit_depth, 8)  # 16-bit container is PNG-only
         p.out_dir = str(out_dir).encode()
         p.prefix = prefix.encode()
-        p.ext = "" if (ext == ".Png" and str(fmt).lower() != "png") else ext.encode()
+        # b"" (not "") — a str here raised TypeError for every non-PNG
+        # extract that kept the default ext (cycle 23)
+        p.ext = b"" if (ext == ".Png" and str(fmt).lower() != "png") else ext.encode()
         p.jobs = jobs or os.cpu_count() or 1
         p.level = level
         p.backend = {
@@ -410,6 +425,12 @@ class Extractor:
             g,
             bit_depth,
             jobs,
+            # v1.7.0 dropped all four of these, so the fallback always
+            # started at frame 0 and always wrote RGBA PNG (cycle 23)
+            channels=channels,
+            start=start,
+            fmt=str(fmt).lower(),
+            jpeg_quality=jpeg_quality,
             crop=crop,
             progress=cb,
             cancelled=should_cancel,

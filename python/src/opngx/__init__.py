@@ -9,12 +9,18 @@ Public API:
 
 from .footage import FootageMetadata, probe, read_timestamps
 from .timing import analyze_timestamps
-from .extractor import ExtractStats, Extractor, extract
+from .extractor import ExtractStats, Extractor, extract, normalize_crop
 from .quality import QualityMode
 from .verify import VerifyReport, verify, verify_against_bin
-from .video import render_video, read_frame_gray, ffmpeg_available
+from .video import (
+    FrameReader,
+    ffmpeg_available,
+    read_frame_gray,
+    render_video,
+    resolve_transform,
+)
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 
 def engine_diagnostics() -> list[str]:
@@ -46,6 +52,9 @@ __all__ = [
     "ExtractStats",
     "Extractor",
     "extract",
+    "normalize_crop",
+    "FrameReader",
+    "resolve_transform",
     "QualityMode",
     "VerifyReport",
     "verify",

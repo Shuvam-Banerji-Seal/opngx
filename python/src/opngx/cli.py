@@ -134,6 +134,12 @@ def main(argv: list[str] | None = None) -> int:
     pv2.add_argument(
         "-m", "--mode", choices=["reference", "raw", "custom"], default="reference"
     )
+    # cycle 23: `video` could not take a curve or a crop at all, and
+    # --footage was parsed and then ignored
+    pv2.add_argument("--brightness", type=float, default=None)
+    pv2.add_argument("--contrast", type=float, default=None)
+    pv2.add_argument("--gamma", type=float, default=None)
+    pv2.add_argument("--crop", default=None, metavar="X,Y,W,H")
 
     pi = sub.add_parser("info", help="show metadata + machine capabilities")
     pi.add_argument("bin", nargs="?")
@@ -285,11 +291,28 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  after frame {g['frame']:,}: {g['delta_ticks']} ticks")
         return 0
 
+    def _parse_crop(spec):
+        if not spec:
+            return None
+        parts = spec.replace(" ", "").split(",")
+        if len(parts) != 4:
+            raise SystemExit(f"opngx: --crop needs X,Y,W,H (got {spec!r})")
+        try:
+            x, y, w, h = (int(v) for v in parts)
+        except ValueError:
+            raise SystemExit(f"opngx: --crop needs integers (got {spec!r})")
+        return (x, y, w, h)
+
     if args.cmd == "video":
         st = opngx.render_video(
             args.bin,
             args.out,
             mode=args.mode,
+            brightness=args.brightness,
+            contrast=args.contrast,
+            gamma=args.gamma,
+            crop=_parse_crop(args.crop),
+            footage=args.footage,
             start=args.start,
             count=args.frames,
             fps=args.fps,
@@ -305,18 +328,6 @@ def main(argv: list[str] | None = None) -> int:
         rep = opngx.verify(args.ref_dir, args.out_dir, prefix=args.prefix, ext=args.ext)
         print(rep)
         return 0 if rep.passed else 1
-
-    def _parse_crop(spec):
-        if not spec:
-            return None
-        parts = spec.replace(" ", "").split(",")
-        if len(parts) != 4:
-            raise SystemExit(f"opngx: --crop needs X,Y,W,H (got {spec!r})")
-        try:
-            x, y, w, h = (int(v) for v in parts)
-        except ValueError:
-            raise SystemExit(f"opngx: --crop needs integers (got {spec!r})")
-        return (x, y, w, h)
 
     def run_one(bin_path: str, out: str):
         ex = opngx.Extractor(bin_path, getattr(args, "footage", None))

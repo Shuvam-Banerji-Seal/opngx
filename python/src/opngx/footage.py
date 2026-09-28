@@ -82,6 +82,21 @@ def _collect_extras(root) -> dict[str, str]:
     return out
 
 
+def _num(text: Optional[str], default: float) -> float:
+    """Parse a vendor number. TimeViewer on a decimal-comma Windows locale
+    writes "1,5" — float() raised on that and the whole probe failed, while
+    the C engine read it as 1 (cycle 23). Both now read 1.5."""
+    if text is None:
+        return default
+    s = text.strip().replace(",", ".")
+    if not s:
+        return default
+    try:
+        return float(s)
+    except ValueError:
+        return default
+
+
 def _sidecar_for(bin_path: Path) -> Optional[Path]:
     cand = bin_path.with_suffix(".footage")
     return cand if cand.exists() else None
@@ -107,12 +122,9 @@ def probe(
         meta.height = int(text(".//ResolutionY") or 0)
         ni = text(".//NumberOfImages")
         meta.num_images = int(ni) if ni else -1
-        fr = text(".//Framerate")
-        meta.framerate = float(fr) if fr else -1.0
-        frr = text(".//FramerateReal")
-        meta.framerate_real = float(frr) if frr else -1.0
-        ex = text(".//Exposure")
-        meta.exposure_us = float(ex) if ex else -1.0
+        meta.framerate = _num(text(".//Framerate"), -1.0)
+        meta.framerate_real = _num(text(".//FramerateReal"), -1.0)
+        meta.exposure_us = _num(text(".//Exposure"), -1.0)
         tmr = text(".//TimeMarkerReference")
         meta.time_marker_reference = int(tmr) if tmr else -1
         name = text(".//Camera/Name") or ""
@@ -121,9 +133,10 @@ def probe(
         proc = root.find("SettingsProcessing")
         if proc is not None:
             meta.has_processing = True
-            meta.brightness = float(proc.findtext("Brightness", default="0"))
-            meta.contrast = float(proc.findtext("Contrast", default="0"))
-            meta.gamma = float(proc.findtext("Gamma", default="1") or "1")
+            meta.brightness = _num(proc.findtext("Brightness"), 0.0)
+            meta.contrast = _num(proc.findtext("Contrast"), 0.0)
+            g = _num(proc.findtext("Gamma"), 1.0)
+            meta.gamma = g if g > 0 else 1.0  # same guard as footage.c
 
         # capture every remaining scalar so nothing the vendor stored is lost
         known = {

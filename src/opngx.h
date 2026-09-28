@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define OPNGX_VERSION "1.7.0"
+#define OPNGX_VERSION "1.8.0"
 #define OPNGX_ABI_VERSION 5
 
 /* Output formats */
@@ -71,15 +71,16 @@ typedef struct {
     int         format;         /* OPNGX_FMT_*                            */
     int         jpeg_quality;   /* 1..100, used when format == JPEG       */
 
-    /* region of interest (cycle 22). crop_w == 0 means "whole frame".
+    /* region of interest (cycle 22). crop_w/crop_h == 0 mean "to the frame
+     * edge" (cycle 23; v1.7.0 wrongly expanded 0 to the full width).
      * Output geometry becomes crop_w x crop_h; output pixel (x,y) is the
      * LUT-mapped source pixel (crop_x + x, crop_y + y). Must satisfy
      * 0 <= crop_x < W, 0 <= crop_y < H, crop_w >= 1, crop_h >= 1 and
      * crop_x + crop_w <= W, crop_y + crop_h <= H. */
     uint32_t    crop_x;
     uint32_t    crop_y;
-    uint32_t    crop_w;         /* 0 => full width  */
-    uint32_t    crop_h;         /* 0 => full height */
+    uint32_t    crop_w;         /* 0 => to the right edge  */
+    uint32_t    crop_h;         /* 0 => to the bottom edge */
 
     /* output */
     const char *out_dir;

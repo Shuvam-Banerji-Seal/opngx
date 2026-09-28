@@ -663,8 +663,12 @@ int opngx_verify_bin(const opngx_params *pin, verify_report *rep,
      * becomes the verifier's output geometry. Identical rules to
      * opngx_job_create, so a rect the engine accepts the verifier accepts. */
     bs.SW = p.width; bs.SH = p.height;
-    uint32_t cw = p.crop_w ? p.crop_w : p.width;
-    uint32_t ch = p.crop_h ? p.crop_h : p.height;
+    /* 0 = "to the frame edge", identical to opngx_job_create (cycle 23) */
+    uint32_t cw = 0, ch = 0;
+    if (p.crop_x < p.width && p.crop_y < p.height) {
+        cw = p.crop_w ? p.crop_w : p.width  - p.crop_x;
+        ch = p.crop_h ? p.crop_h : p.height - p.crop_y;
+    }
     if (cw == 0 || ch == 0 || p.crop_x >= p.width || p.crop_y >= p.height ||
         cw > p.width - p.crop_x || ch > p.height - p.crop_y) {
         port_unmap_file(&mf);

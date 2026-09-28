@@ -94,8 +94,11 @@ safe to use on measurement data:
   computed expectation.
 * `--crop 0,0,W,H` is byte-identical to no crop at all (also gated), so a
   crop of the full frame costs nothing and changes nothing.
-* `W` or `H` may be `0`, meaning "to the frame edge" — this is what the UI
-  emits when the selection box is dragged to the border.
+* `W` or `H` may be `0`, meaning "to the frame edge": `--crop 10,5,0,0` on a
+  64×48 frame encodes 54×43. (The v1.7.0 engine expanded `0` to the *full*
+  width instead and rejected that example; fixed in v1.8.0, gated by T-25.)
+* An MP4 render of an odd-sized crop is padded by one black column/row —
+  H.264 4:2:0 cannot encode odd dimensions. Image outputs are never padded.
 * A rectangle that does not fit inside the frame is rejected with a
   crop-specific diagnostic, not clamped.
 * `metadata.json` records both the source geometry and the result:

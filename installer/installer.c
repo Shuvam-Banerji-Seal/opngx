@@ -21,7 +21,7 @@
 #define RES_ENGINE 101
 #define RES_STUDIO 102
 #define RES_DOCS   103
-#define APP_VERSION "1.7.0"
+#define APP_VERSION "1.8.0"
 #define APP_NAME    "opngx"
 #define PUBLISHER   "opngx contributors"
 
@@ -271,23 +271,30 @@ static int run_uninstall(void) {
         char *next = (char *)calloc(1, strlen(cur) + 2);
         if (next) {
             char *tok = strtok(cur, ";");
-            int first = 1;
+            int first = 1, removed = 0;
             while (tok) {
                 if (!strstr(tok, "\\opngx")) {
-                    if (!first) strncat(next, ";", 1);
-                    strncat(next, tok, strlen(tok));
+                    if (!first) strcat(next, ";");
+                    strcat(next, tok);   /* next holds strlen(cur)+2 bytes */
                     first = 0;
+                } else {
+                    removed = 1;
                 }
                 tok = strtok(NULL, ";");
             }
-            if (!first) set_user_path(next);
+            /* v1.7: rewrote PATH only when some OTHER entry survived, so an
+             * opngx-only PATH kept its opngx entry after uninstall */
+            if (removed) set_user_path(next);
             free(next);
         }
         free(cur);
     }
     /* if the engine exe is still there it was locked by a running app */
     char note[160] = "";
-    if (GetFileAttributesA(g_engine_path) != INVALID_HANDLE_VALUE)
+    /* INVALID_FILE_ATTRIBUTES, not INVALID_HANDLE_VALUE: the old pointer
+     * comparison was never equal on 64-bit, so EVERY uninstall claimed the
+     * engine was still running */
+    if (GetFileAttributesA(g_engine_path) != INVALID_FILE_ATTRIBUTES)
         snprintf(note, sizeof note,
                  "\n\nNOTE: %s could not be deleted because it is running.\n"
                  "Close opngx and delete the folder manually.",

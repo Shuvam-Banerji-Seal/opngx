@@ -1035,18 +1035,23 @@ def test_ar23_crop_in_python_api_and_fallback_parity(fixture_dir, tmp_path):
     got = np.asarray(im.convert("L"))
     assert np.array_equal(got, want), "native crop pixels wrong"
 
-    # force the pure-python path and demand identical pixels
-    import opngx._fallback as _fb
+    # force the pure-python path and demand identical pixels.
+    # cycle 23: patching `_engine.load_library` never reached the fallback —
+    # extractor.py imports the NAME, so the native engine ran both halves
+    # and this assertion compared native with native. Patch the name the
+    # extractor actually calls, and prove the fallback really ran.
+    import opngx.extractor as _ext
 
     fb = tmp_path / "fb"
-    orig = _eng.load_library
-    _eng.load_library = lambda: None
+    orig = _ext.load_library
+    _ext.load_library = lambda: None
     try:
         ex2 = opngx.Extractor(bin_p)
-        ex2.extract(fb, mode="reference", crop=crop, frames=2)
+        st = ex2.extract(fb, mode="reference", crop=crop, frames=2)
     finally:
-        _eng.load_library = orig
-    assert _fb is not None
+        _ext.load_library = orig
+    assert st.backend == "python-fallback", st.backend
+    assert _eng is not None
 
     got_fb = np.asarray(Image.open(fb / "brow_00000.Png").convert("L"))
     assert np.array_equal(got_fb, got), "fallback crop pixels differ from native"
@@ -1180,3 +1185,295 @@ def test_ar24_batch_window_and_crop_editor_construct_and_run(tmp_path):
         len(list((tmp_path / "out" / d / "PNG").glob("*.Png"))) == 200
         for d in ("recA", "recB")
     )
+
+
+# --------------------------------------------------------------------- AR-25
+def test_ar25_fallback_honours_start_format_channels_and_crop(fixture_dir, tmp_path):
+    """cycle 23: the fallback ignored crop_y, start, fmt and channels. Every
+    combination below must be pixel-identical to the native engine."""
+    import numpy as np
+    from PIL import Image
+
+    import opngx.extractor as _ext
+
+    if _ext.load_library() is None:
+        import pytest
+
+        pytest.skip("native engine not built")
+    bin_p = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    cases = [
+        dict(crop=(8, 4, 20, 12), start=5, frames=3, fmt="png", channels=6),
+        dict(crop=(0, 30, 0, 0), start=0, frames=2, fmt="png", channels=0),
+        dict(crop=(33, 7, 17, 9), start=11, frames=2, fmt="bmp", channels=0),
+        dict(crop=None, start=3, frames=2, fmt="tif", channels=0),
+    ]
+    for n, kw in enumerate(cases):
+        nat, fb = tmp_path / f"n{n}", tmp_path / f"f{n}"
+        opngx.Extractor(bin_p).extract(nat, mode="custom", gamma=1.7, **kw)
+        orig = _ext.load_library
+        _ext.load_library = lambda: None
+        try:
+            st = opngx.Extractor(bin_p).extract(fb, mode="custom", gamma=1.7, **kw)
+        finally:
+            _ext.load_library = orig
+        assert st.backend == "python-fallback"
+        a = sorted(p.name for p in nat.iterdir())
+        b = sorted(p.name for p in fb.iterdir())
+        assert a == b, f"case {n}: file sets differ {a} vs {b}"
+        for name in a:
+            pa = np.asarray(Image.open(nat / name).convert("L"))
+            pb = np.asarray(Image.open(fb / name).convert("L"))
+            assert pa.shape == pb.shape and np.array_equal(pa, pb), (
+                f"case {n}: {name} differs"
+            )
+
+
+# --------------------------------------------------------------------- AR-26
+def test_ar26_zero_crop_size_means_to_the_edge_everywhere(fixture_dir, tmp_path):
+    """W/H = 0 is documented as 'to the frame edge'. v1.7.0's engine
+    expanded it to the FULL width and rejected `10,5,0,0` (cycle 23)."""
+    from PIL import Image
+
+    bin_p = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    st = opngx.Extractor(bin_p).extract(tmp_path / "z", crop=(10, 5, 0, 0), frames=1)
+    assert st.frames_written == 1
+    assert Image.open(tmp_path / "z" / "brow_00000.Png").size == (54, 43)
+
+
+# --------------------------------------------------------------------- AR-27
+def test_ar27_footage_decimal_comma_is_parsed(tmp_path):
+    """TimeViewer on a decimal-comma locale writes 'Gamma 1,5'. python
+    probe raised ValueError on it; the C engine silently read 1 (cycle 23)."""
+    import subprocess
+    import sys
+
+    from conftest import REPO
+
+    subprocess.run(
+        [sys.executable, str(REPO / "tests" / "gen_fixture.py"), str(tmp_path)],
+        check=True,
+        capture_output=True,
+    )
+    fp = tmp_path / "cam_9.9" / "cam_9.9.footage"
+    txt = fp.read_text(encoding="utf-8-sig")
+    import re
+
+    txt = re.sub(r"<Gamma>[^<]*</Gamma>", "<Gamma>1,5</Gamma>", txt)
+    txt = re.sub(r"<Contrast>[^<]*</Contrast>", "<Contrast>18,5</Contrast>", txt)
+    fp.write_text(txt, encoding="utf-8")
+    m = opngx.probe(tmp_path / "cam_9.9" / "cam_9.9.bin")
+    assert (m.gamma, m.contrast) == (1.5, 18.5)
+
+
+# --------------------------------------------------------------------- AR-28
+def _studio_fixture(tmp_path, sidecars):
+    """A mother folder with one recording per (name, B, C, G) entry, each
+    with its OWN .footage processing settings."""
+    import re
+    import shutil
+    import subprocess
+    import sys as _sys
+
+    fix = tmp_path / "fix"
+    subprocess.run(
+        [_sys.executable, str(REPO / "tests" / "gen_fixture.py"), str(fix)],
+        check=True,
+        capture_output=True,
+    )
+    src = fix / "cam_9.9"
+    root = tmp_path / "mother"
+    for name, b, c, g in sidecars:
+        (root / name).mkdir(parents=True)
+        shutil.copy(src / "cam_9.9.bin", root / name / "rec.bin")
+        xml = (src / "cam_9.9.footage").read_text(encoding="utf-8-sig")
+        xml = re.sub(r"<Brightness>[^<]*<", f"<Brightness>{b}<", xml)
+        xml = re.sub(r"<Contrast>[^<]*<", f"<Contrast>{c}<", xml)
+        xml = re.sub(r"<Gamma>[^<]*<", f"<Gamma>{g}<", xml)
+        (root / name / "rec.footage").write_text(xml, encoding="utf-8")
+    return root
+
+
+def _qt_or_skip():
+    import pytest
+
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        pytest.skip("PySide6 not installed")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6 import QtWidgets
+
+    return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+
+def _decode(path):
+    import numpy as np
+    from PIL import Image
+
+    return np.asarray(Image.open(path).convert("L"))
+
+
+def _want(bin_p, idx, b, c, g, crop=None):
+    import numpy as np
+
+    from opngx.quality import build_lut
+
+    raw = np.fromfile(bin_p, np.uint8, count=64 * 48, offset=idx * (8 + 64 * 48) + 8)
+    raw = raw.reshape(48, 64)
+    if crop:
+        x, y, w, h = crop
+        raw = raw[y : y + h, x : x + w]
+    return np.asarray(build_lut(b, c, g))[raw]
+
+
+def test_ar28_studio_uses_each_recordings_footage_and_live_batch_settings(tmp_path):
+    """cycle 23 field report: 'gamma and contrast settings not getting
+    applied to batches, and not getting extracted from the project files'.
+
+    * the B/C/G spins were hard-coded 49/18/1 and never read the .footage;
+    * reference mode sent those spins to EVERY recording as explicit
+      values, so each recording's own project settings were ignored;
+    * the batch window froze the settings at open time.
+    """
+    import numpy as np
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    app = _qt_or_skip()
+    from opngx.ui.qt_app import MainWindow
+
+    root = _studio_fixture(tmp_path, [("recA", 30, 10, 1.4), ("recB", 60, 25, 0.8)])
+    w = MainWindow()
+    try:
+        # --- single: probing loads the recording's OWN settings -------------
+        w.bin_edit.setText(str(root / "recA" / "rec.bin"))
+        w._probe()
+        assert w._mode() == "reference"
+        assert (w.b_spin.value(), w.c_spin.value(), w.g_spin.value()) == (30, 10, 1.4)
+        o = w._collect_opts()
+        assert (o["brightness"], o["contrast"], o["gamma"]) == (None, None, None)
+        # the viewer shows the .footage curve
+        arr = w._render_gray(3)
+        assert np.array_equal(arr, _want(root / "recA" / "rec.bin", 3, 30, 10, 1.4))
+
+        # --- editing a value in reference mode means "custom" ---------------
+        w.g_spin.setValue(2.0)
+        assert w._mode() == "custom"
+        assert w._collect_opts()["gamma"] == 2.0
+
+        # --- batch window: settings are LIVE, not frozen at open ------------
+        w.modes["reference"].setChecked(True)
+        assert w.g_spin.value() == 1.4  # back to the sidecar's value
+        w.rb_batch.setChecked(True)
+        w.bin_edit.setText(str(root))
+        w.out_edit.setText(str(tmp_path / "out"))
+        w._open_batch_window()
+        bw = w._batch_win
+        assert len(bw.items) == 2
+        labels = [bw.cards[i.bin_path].xform_lbl.text() for i in bw.items]
+        assert "γ 1.4" in labels[0] and "γ 0.8" in labels[1], labels
+
+        # reference batch: each recording must get ITS OWN .footage curve
+        w.count_spin.setValue(3)
+        loop = QEventLoop()
+        bw.finished.connect(lambda _: loop.quit())
+        bw.start()
+        QTimer.singleShot(60000, loop.quit)
+        loop.exec()
+        assert all(i.status == "done" for i in bw.items), [
+            (i.name, i.status, i.error) for i in bw.items
+        ]
+        for name, b, c, g in (("recA", 30, 10, 1.4), ("recB", 60, 25, 0.8)):
+            got = _decode(tmp_path / "out" / name / "PNG" / "brow_00001.Png")
+            assert np.array_equal(got, _want(root / name / "rec.bin", 1, b, c, g)), name
+
+        # change the curve in the studio AFTER the window opened
+        w.modes["custom"].setChecked(True)
+        w.b_spin.setValue(5)
+        w.c_spin.setValue(40)
+        w.g_spin.setValue(2.5)
+        assert bw.settings["gamma"] == 2.5, "batch window did not see the change"
+        loop = QEventLoop()
+        bw.finished.connect(lambda _: loop.quit())
+        bw.start()
+        QTimer.singleShot(60000, loop.quit)
+        loop.exec()
+        for name in ("recA", "recB"):
+            got = _decode(tmp_path / "out" / name / "PNG" / "brow_00002.Png")
+            assert np.array_equal(got, _want(root / name / "rec.bin", 2, 5, 40, 2.5)), name
+    finally:
+        if w._batch_win is not None:
+            w._batch_win.close()
+        w.close()
+        app.processEvents()
+
+
+# --------------------------------------------------------------------- AR-29
+def test_ar29_crop_editor_maps_the_mouse_and_cancel_changes_nothing(tmp_path):
+    """cycle 23: the v1.7.0 crop canvas mapped the mouse as if the frame
+    were drawn unscaled at the widget origin, w/h spins were locked to the
+    full frame, a fresh editor could not draw at all, and Cancel still
+    applied the selection (to EVERY recording)."""
+    from PySide6 import QtGui, QtWidgets
+    from PySide6.QtCore import QPoint, Qt, QTimer
+    from PySide6.QtTest import QTest
+
+    app = _qt_or_skip()
+    from opngx.ui.batch import BatchWindow, CropEditor
+
+    img = QtGui.QImage(64, 48, QtGui.QImage.Format_Grayscale8)
+    img.fill(90)
+    ed = CropEditor(None, img, None, (64, 48))
+    ed.resize(700, 600)
+    ed.show()
+    app.processEvents()
+    v = ed.view
+    t, s = v._target()
+    assert s >= 2, "a 64x48 frame must be enlarged in a 700x600 editor"
+
+    def at(ix, iy):
+        return QPoint(int(t.x() + (ix + 0.5) * s), int(t.y() + (iy + 0.5) * s))
+
+    # draw on a FRESH editor (default selection = full frame)
+    QTest.mousePress(v, Qt.LeftButton, Qt.NoModifier, at(5, 6))
+    QTest.mouseMove(v, at(24, 17))
+    QTest.mouseRelease(v, Qt.LeftButton, Qt.NoModifier, at(24, 17))
+    assert ed.selection() == (5, 6, 20, 12), ed.selection()
+    # move it
+    QTest.mousePress(v, Qt.LeftButton, Qt.NoModifier, at(10, 10))
+    QTest.mouseMove(v, at(13, 12))
+    QTest.mouseRelease(v, Qt.LeftButton, Qt.NoModifier, at(13, 12))
+    assert ed.selection() == (8, 8, 20, 12), ed.selection()
+    # typed width is accepted (the spins used to be locked to 64)
+    ed.w_spin.setValue(7)
+    assert ed.selection() == (8, 8, 7, 12)
+    ed.w_spin.setValue(999)  # clamped to the frame, never accepted
+    assert ed.selection() == (8, 8, 56, 12)
+    ed.close()
+
+    # --- Cancel in the batch window must change nothing -----------------
+    root = _studio_fixture(tmp_path, [("recA", 49, 18, 1), ("recB", 49, 18, 1)])
+    bw = BatchWindow(None, str(root), str(tmp_path / "out"), dict(
+        fmt="png", mode="reference", bit_depth=8, channels=6, jobs=2, level=6,
+        prefix="brow_", ext=".Png",
+    ))
+    bw.items[0].crop = (1, 1, 10, 10)
+
+    def cancel_dialog():
+        for top in QtWidgets.QApplication.topLevelWidgets():
+            if isinstance(top, CropEditor) and top.isVisible():
+                top.apply_all.setChecked(True)
+                top._set_sel((2, 2, 5, 5))
+                top.reject()
+                return
+        QTimer.singleShot(20, cancel_dialog)
+
+    QTimer.singleShot(20, cancel_dialog)
+    bw.open_crop_editor(bw.items[0])
+    assert bw.items[0].crop == (1, 1, 10, 10) and bw.items[1].crop is None
+
+    # --- apply-to-all skips recordings the crop does not fit ------------
+    bw.items[1].width = 20  # pretend recB is a smaller sensor
+    skipped = bw.apply_crop((30, 0, 20, 20), bw.items)
+    assert [i.name for i in skipped] == [bw.items[1].name]
+    assert bw.items[0].crop == (30, 0, 20, 20) and bw.items[1].crop is None
+    bw.close()

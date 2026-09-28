@@ -11,7 +11,7 @@ dll = os.path.join(root, "build-win", "libopngx.dll")
 
 hidden = collect_submodules("opngx") + [
     "opngx.ui.app", "opngx.ui.theme", "opngx.ui.widgets",
-    "opngx.ui.qt_app", "opngx.video",
+    "opngx.ui.qt_app", "opngx.ui.batch", "opngx.ui.frameview", "opngx.video",
 ]
 
 # bundle an ffmpeg binary so Render-video works out of the box

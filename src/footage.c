@@ -40,12 +40,25 @@ static int parse_i64(const char *xml, const char *tag, int64_t *out) {
     return 0;
 }
 
+/* TimeViewer on a de/fr/ru... Windows locale writes "1,5" for 1.5. A bare
+ * strtod stopped at the comma and silently read gamma 1.5 as 1 (cycle 23),
+ * so the value is copied, a decimal comma normalised, and whitespace
+ * skipped. strtod itself stays in the "C" locale: the engine never calls
+ * setlocale, so '.' is the only radix it accepts. */
 static int parse_dbl(const char *xml, const char *tag, double *out) {
     const char *v = find_tag(xml, tag);
     if (!v) return -1;
+    while (*v && isspace((unsigned char)*v)) v++;
+    char buf[64];
+    size_t n = 0;
+    while (v[n] && v[n] != '<' && n < sizeof buf - 1) {
+        buf[n] = (v[n] == ',') ? '.' : v[n];
+        n++;
+    }
+    buf[n] = '\0';
     char *end = NULL;
-    double r = strtod(v, &end);
-    if (end == v) return -1;
+    double r = strtod(buf, &end);
+    if (end == buf) return -1;
     *out = r;
     return 0;
 }

@@ -90,10 +90,11 @@ def encode_png(pixels: np.ndarray, bit_depth: int = 8, channels: int = 6) -> byt
 
 
 def _render_frame(args):
-    # The last three entries (src_w, crop_x, crop_y) were added in cycle 22
-    # for ROI support. They stay optional so existing direct callers — and
-    # the regression tests that pin the exact tuple layout — keep working:
-    # omitted means "no crop", i.e. the full recorded width starting at 0.
+    # `w`/`h` are the OUTPUT (cropped) size. The last three entries
+    # (src_w, crop_x, crop_y) were added in cycle 22 for ROI support. They
+    # stay optional so existing direct callers — and the regression tests
+    # that pin the exact tuple layout — keep working: omitted means "no
+    # crop", i.e. the full recorded width starting at 0.
     (
         bin_path,
         frame_index,
@@ -118,11 +119,13 @@ def _render_frame(args):
     absolute = start + frame_index
     lut = build_lut(brightness, contrast, gamma)
     with open(bin_path, "rb") as f:
-        # read the full source row width, then select the crop window so
-        # the fallback is pixel-identical to the native engine (cycle 22)
-        f.seek(absolute * stride + 8)
-        full = np.frombuffer(f.read(src_w * h), dtype=np.uint8).reshape(h, src_w)
-    gray = full[:, crop_x : crop_x + w]
+        # read only the crop's rows (full source width), then select its
+        # columns, so the fallback is pixel-identical to the native engine.
+        # v1.7.0 read rows from 0 (crop_y ignored) and was handed the FULL
+        # size as w/h, so every cropped fallback frame was wrong (cycle 23).
+        f.seek(absolute * stride + 8 + crop_y * src_w)
+        rows = np.frombuffer(f.read(src_w * h), dtype=np.uint8).reshape(h, src_w)
+    gray = rows[:, crop_x : crop_x + w]
     mapped = lut[gray]
     if fmt != "png":
         from io import BytesIO
@@ -171,19 +174,39 @@ def extract_frames(
 ) -> dict:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    fmt = {"jpeg": "jpg", "tiff": "tif"}.get(fmt, fmt)
+    if fmt != "png":
+        bit_depth = 8  # 16-bit container is PNG-only, as in the engine
+    # same rule as the native path: the ".Png" default follows the format
+    user_ext = "" if (ext == ".Png" and fmt != "png") else (ext or "")
     jobs = jobs or os.cpu_count() or 1
     done = 0
-    crop_x, crop_y, crop_w, crop_h = crop
-    # width/height are the OUTPUT (cropped) size; src_w is the recorded frame
-    src_w = crop_x + crop_w if crop_w else width
+    # width/height are the RECORDED frame; the crop selects a window of it
+    # (0 = to the frame edge, as everywhere else).
+    crop_x, crop_y, crop_w, crop_h = (int(v) for v in crop)
+    out_w = crop_w or (width - crop_x)
+    out_h = crop_h or (height - crop_y)
+    if (
+        crop_x < 0
+        or crop_y < 0
+        or out_w < 1
+        or out_h < 1
+        or crop_x + out_w > width
+        or crop_y + out_h > height
+    ):
+        raise ValueError(
+            f"crop {crop_x},{crop_y} {out_w}x{out_h} does not fit inside "
+            f"the {width}x{height} frame"
+        )
+    src_w = width
     args = [
         (
             str(bin_path),
             i,
             start,
             stride,
-            width,
-            height,
+            out_w,
+            out_h,
             brightness,
             contrast,
             gamma,
@@ -200,7 +223,7 @@ def extract_frames(
     if jobs > 1 and num_frames > 32:
         with ProcessPoolExecutor(max_workers=jobs) as ex:
             for frame_index, (fext, blob) in ex.map(_render_frame, args, chunksize=16):
-                (out / f"{prefix}{frame_index:05d}{fext}").write_bytes(blob)
+                (out / f"{prefix}{frame_index:05d}{user_ext or fext}").write_bytes(blob)
                 done += 1
                 if progress:
                     progress(done)
@@ -209,7 +232,7 @@ def extract_frames(
     else:
         for a in args:
             frame_index, (fext, blob) = _render_frame(a)
-            (out / f"{prefix}{frame_index:05d}{fext}").write_bytes(blob)
+            (out / f"{prefix}{frame_index:05d}{user_ext or fext}").write_bytes(blob)
             done += 1
             if progress:
                 progress(done)

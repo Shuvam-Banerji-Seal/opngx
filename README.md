@@ -86,14 +86,19 @@ opngx-ui          # black / coffee-green theme, frame viewer,
                    # "Batch window…" gives every recording its own card
                    # with a real decoded frame, geometry, fps and live
                    # progress — the settings above apply to all of them.
-                   # "Crop…" opens a picker: drag a rectangle over the
-                   # frame, then apply it to this recording or all of them.
+                   # "Crop…" opens a picker: drag to draw, drag inside to
+                   # move, drag an edge/corner to resize (or type x/y/w/h),
+                   # then apply it to this recording or every one it fits.
                    # Cropping selects pixels, never resamples, so it is
                    # pixel-exact and verifybin agrees.
+                   # Reference mode: each recording uses the B/C/G from
+                   # its OWN .footage (shown on its batch card). Editing a
+                   # value switches to custom = one curve for all.
 
 # Region of interest — pure pixel selection, no resampling
 opngx extract recording.bin -o frames/ --crop 100,80,512,384
 # output is 512x384; pixel (x,y) == LUT(source[crop_x+x, crop_y+y])
+# W or H of 0 means "to the frame edge": --crop 100,80,0,0
 
 Requires PySide6 for the Qt edition ('pip install "opngx[qt]"');
 falls back to a Tkinter UI when absent.
@@ -101,6 +106,9 @@ falls back to a Tkinter UI when absent.
 # Video — straight from a .bin, no intermediate files
 opngx video recording.bin -o clip.mp4 --fps 30 --crf 18 \
     --start 0 --frames 500 -m reference
+# v1.8: same curve and crop options as extract (odd crop sizes are padded
+# by one black row/column, since H.264 needs even dimensions)
+opngx video recording.bin -o roi.mp4 -m custom --gamma 1.6 --crop 17,23,151,201
 ```
 
 Python API:
@@ -126,7 +134,7 @@ print(st, rep, sep="\n")
 
 | mode | what you get |
 |---|---|
-| `reference` *(default)* | byte-for-byte the vendor display transform — verified pixel-exact against sample exports |
+| `reference` *(default)* | byte-for-byte the vendor display transform — verified pixel-exact against sample exports. Brightness/contrast/gamma come from **each recording's own `.footage`** (decimal commas such as `1,5` are understood) |
 | `raw` | identity LUT — sensor-faithful; preserves highlights the vendor export clips at raw ≥ 139 |
 | `custom` | your brightness/contrast/gamma |
 

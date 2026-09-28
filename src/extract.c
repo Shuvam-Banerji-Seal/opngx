@@ -125,14 +125,19 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     /* --- region of interest (cycle 22) -----------------------------------
      * crop is a pure source-window selection: nothing is resampled, so a
      * cropped frame is byte-identical to the corresponding sub-rectangle
-     * of an uncropped one. crop_w/crop_h == 0 mean "full frame". */
-    if (j->p.crop_w == 0) j->p.crop_w = j->p.width;
-    if (j->p.crop_h == 0) j->p.crop_h = j->p.height;
-    if (j->p.crop_w == 0 || j->p.crop_h == 0) {
-        snprintf(j->err, sizeof j->err, "crop: empty output region");
+     * of an uncropped one. crop_w/crop_h == 0 mean "to the frame edge"
+     * (x..W-1 / y..H-1), exactly as the CLI help, the python API and the
+     * studio define it. v1.7.0 expanded 0 to the FULL width instead, so
+     * `--crop 10,5,0,0` was rejected as "does not fit" (cycle 23). */
+    if (j->p.crop_x >= j->p.width || j->p.crop_y >= j->p.height) {
+        snprintf(j->err, sizeof j->err,
+            "crop origin %u,%u lies outside the %ux%u frame",
+            j->p.crop_x, j->p.crop_y, j->p.width, j->p.height);
         goto fail;
     }
-    if (j->p.crop_x >= j->p.width || j->p.crop_y >= j->p.height ||
+    if (j->p.crop_w == 0) j->p.crop_w = j->p.width  - j->p.crop_x;
+    if (j->p.crop_h == 0) j->p.crop_h = j->p.height - j->p.crop_y;
+    if (
         j->p.crop_w > j->p.width  - j->p.crop_x ||
         j->p.crop_h > j->p.height - j->p.crop_y) {
         snprintf(j->err, sizeof j->err,
@@ -183,7 +188,14 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     j->raw_len = (size_t)j->out_h * ((size_t)j->out_w * bytes_per_px + 1);
 
     j->idat_cap = j->raw_len + j->raw_len / 8 + 256; /* >= any deflate bound */
+    /* BMP/TIFF/JPEG containers are not bounded by the PNG scanline size:
+     * an 8-bit BMP adds a 1078-byte header+palette and 4-byte row padding,
+     * JPEG markers/tables ~600 B. For a small crop (e.g. 17x9) that
+     * overflowed the old idat_cap+128 bound and every frame failed with
+     * mask 0x10 (cycle 23). */
     j->file_cap = j->idat_cap + 128;
+    if (j->p.format != OPNGX_FMT_PNG)
+        j->file_cap += (size_t)(j->out_w + 4) * j->out_h + 4096;
 
     fill_luts(j);
     atomic_store(&j->done, 0);
@@ -249,8 +261,9 @@ static int write_metadata(opngx_job *j, const footage_t *ft) {
     /* timestamp-derived stats */
     if (j->frames_total > 1) {
         uint64_t t0, tN;
-        memcpy(&t0, j->map, 8);
-        memcpy(&tN, j->map + (size_t)(j->frames_total-1)*(size_t)j->stride, 8);
+        memcpy(&t0, j->map + (size_t)j->start_index * (size_t)j->stride, 8);
+        memcpy(&tN, j->map + (size_t)(j->start_index + j->frames_total - 1)
+                             * (size_t)j->stride, 8);
         double span = (double)tN - (double)t0;
         if (span > 0) {
             fprintf(fp, "  \"timestamp_first\": %llu,\n", (unsigned long long)t0);

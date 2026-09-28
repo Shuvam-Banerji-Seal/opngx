@@ -377,24 +377,47 @@ echo "== T-24: crop validation rejects impossible rects =="
 # Each case must fail with a CROP-specific diagnostic. A bare
 # "unknown option: --crop" also exits non-zero, so checking rc alone
 # would let this gate pass against a binary that has no crop at all.
-CROPBAD=0
-"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
-    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropbad" --prefix cam_ \
-    --crop 0,0,999,999 2>"$TMP/t24a.txt"
-[ $? -ne 0 ] && grep -qi "crop" "$TMP/t24a.txt" && ! grep -qi "unknown option" "$TMP/t24a.txt" || CROPBAD=1
-check "crop larger than frame is rejected with a crop-specific error"
-"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
-    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropbad2" --prefix cam_ \
-    --crop 60,0,10,10 2>"$TMP/t24b.txt"
-[ $? -ne 0 ] && grep -qi "crop" "$TMP/t24b.txt" || CROPBAD=1
-check "crop overflowing the right edge is rejected"
-"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
-    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropbad3" --prefix cam_ \
-    --crop 0,0,0,0 2>"$TMP/t24c.txt"
-[ $? -ne 0 ] && grep -qi "crop" "$TMP/t24c.txt" || CROPBAD=1
-check "crop 0,0,0,0 (degenerate) is rejected"
-[ $CROPBAD -eq 0 ]
+# cycle 23: the v1.7.0 version of this block called `check` right after
+# `... || CROPBAD=1`, so `check` saw the exit status of the ASSIGNMENT
+# (always 0) and all three gates passed unconditionally. It also
+# "rejected" 0,0,0,0, which is the documented spelling of "full frame".
+crop_rejected() {  # $1 = crop spec, $2 = label
+    "$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+        --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropbad" \
+        --prefix cam_ --crop "$1" 2>"$TMP/t24.txt"
+    local rc=$?
+    [ $rc -ne 0 ] && grep -qi "crop" "$TMP/t24.txt" && ! grep -qi "unknown option" "$TMP/t24.txt"
+    check "$2"
+}
+crop_rejected 0,0,999,999 "crop larger than frame is rejected with a crop-specific error"
+crop_rejected 60,0,10,10  "crop overflowing the right edge is rejected"
+crop_rejected 0,40,10,10  "crop overflowing the bottom edge is rejected"
+crop_rejected 64,0,0,0    "crop origin outside the frame is rejected"
+crop_rejected 1,2,3       "malformed crop spec is rejected"
 
+echo "== T-25: crop W/H = 0 means 'to the frame edge'; tiny crops in every format (cycle 23) =="
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropedge" --prefix cam_ \
+    --crop 10,5,0,0 --frames 2 2>/dev/null
+check "--crop 10,5,0,0 is accepted (v1.7.0 rejected it)"
+python3 - "$TMP/cropedge/cam_00000.Png" << 'EOF'
+import sys
+from PIL import Image
+assert Image.open(sys.argv[1]).size == (54, 43), Image.open(sys.argv[1]).size
+EOF
+check "--crop 10,5,0,0 encodes the 54x43 window up to the edges"
+"$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+    --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/cropfull0" --prefix cam_ \
+    --crop 0,0,0,0 --frames 2 2>/dev/null
+cmp -s "$TMP/cropfull0/cam_00001.Png" "$TMP/cropfull/cam_00001.Png"
+check "--crop 0,0,0,0 == full frame"
+for F in bmp tif jpg; do
+    "$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
+        --footage "$TMP/fix/cam_9.9/cam_9.9.footage" --out "$TMP/tiny_$F" --prefix cam_ \
+        --crop 33,7,17,9 --format $F --frames 3 2>/dev/null
+    [ "$(ls "$TMP/tiny_$F" | wc -l)" -ge 3 ]
+    check "17x9 crop encodes as $F (v1.7.0: encoder buffer overflow, 0 frames)"
+done
 echo
 echo "RESULTS: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

@@ -42,6 +42,7 @@ QMainWindow, QDialog { background: #050505; }
 QWidget#root        { background: #050505; }
 
 /* ---------- header ---------- */
+QLabel { color: #e8ede8; }
 QLabel#title { color: #ffffff; font-size: 21px; font-weight: 700; }
 QLabel#subtitle { color: #7d8a7d; font-size: 11px; }
 QLabel#chip {
@@ -157,10 +158,16 @@ QSplitter::handle { background: #050505; width: 5px; height: 5px; }
 QSplitter::handle:hover { background: #4d8248; }
 
 /* ---------- image viewer ---------- */
-QLabel#viewer {
+QLabel#viewer, QWidget#viewer {
     background: #000000; color: #4a554a;
     border: 1px solid #1f261f; border-radius: 10px;
 }
+/* scroll areas: the viewport of an unstyled QScrollArea paints the
+   platform's window colour — a white bar under the settings card on most
+   desktops (cycle 23) */
+QScrollArea { background: transparent; border: none; }
+QScrollArea > QWidget#qt_scrollarea_viewport { background: transparent; }
+QWidget#leftcol { background: transparent; }
 
 /* ---------- scrollbars ---------- */
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
@@ -246,9 +253,15 @@ and each card can be cropped on its own.<br>
 anywhere switches to Batch.
 
 <h3 style='color:#93c5fd'>Region of interest (crop)</h3>
-<b>Crop…</b> opens a picker over the current frame. Drag a rectangle (or
-type exact x/y/w/h), then choose whether it applies to this recording or
-to every recording in the batch. Cropping selects pixels, it never
+<b>Crop…</b> opens a picker over the current frame, shown through the
+current quality curve. Drag to draw a rectangle, drag inside it to move
+it, drag an edge or corner to resize it, or type exact x/y/w/h. Then
+choose whether it applies to this recording or to every recording in the
+batch it fits (recordings too small for it are skipped and listed).
+<b>Cancel</b> leaves every crop exactly as it was. The viewer shows the
+cropped output; tick <i>show crop in context</i> to see it outlined on the
+full frame. An odd width/height is fine for images; an MP4 render pads one
+black row/column because H.264 needs even sizes. Cropping selects pixels, it never
 resamples, so a cropped frame is bit-identical to the matching rectangle
 of an uncropped one. The frame viewer, the PNGs, the MP4 and
 <i>Verify vs source bin</i> all use the same window, so what you see is
@@ -263,9 +276,18 @@ pixels at raw ≥ 139; raw mode keeps them. Maximum fidelity.<br>
 <b>custom</b> — your own brightness / contrast / gamma, applied to every
 recording in the batch. Formula: out = clamp(round((v+B)·(1+C/50)), 0..255),
 gamma applied after.
-<br><span style='color:#fbbf24'>In reference mode the B/C/G fields show what
-the sidecar will use; type a value and opngx applies yours to every file in
-the batch, exactly as the preview shows.</span>
+<br><span style='color:#fbbf24'>In reference mode the B/C/G fields show the
+values read from the loaded recording's .footage — and in a batch EVERY
+recording uses its own project file's values (each batch card shows them).
+Editing a field switches to custom mode, which applies your curve to every
+recording in the batch, exactly as the preview shows.</span>
+
+<h3 style='color:#93c5fd'>Frame viewer</h3>
+Frames are drawn pixel-exact: enlarged by whole-pixel steps with no
+smoothing (so every sensor pixel is a crisp square), shrunk smoothly when
+the frame is larger than the pane. The pane is part of the right-hand
+splitter — drag its edge to give it more room. Hover a pixel to read its
+position, raw sensor value and output value.
 
 <h3 style='color:#93c5fd'>Frame range</h3>
 <b>start</b> — first frame index (0-based). <b>count</b> — how many frames;
@@ -464,6 +486,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._t_start = 0.0
         self._crop: Optional[tuple[int, int, int, int]] = None
         self._batch_win = None
+        self._reader = None  # opngx.FrameReader for the loaded recording
+        self._syncing_bcg = False  # True while WE set the B/C/G spins
+        self._pending_frame: Optional[int] = None
         self._sig = WorkerSignals()
         self._sig.progress.connect(self._on_progress)
         self._sig.log.connect(self._log)
@@ -651,6 +676,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ===== left column =====
         left = QtWidgets.QWidget()
+        left.setObjectName("leftcol")
         lv = QtWidgets.QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(10)
@@ -1017,6 +1043,8 @@ class MainWindow(QtWidgets.QMainWindow):
         left_scroll.setWidget(left)
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        left_scroll.viewport().setAutoFillBackground(False)
+        left.setAutoFillBackground(False)
 
         self.left_vsplit = QtWidgets.QSplitter(Qt.Vertical)
         self.left_vsplit.setChildrenCollapsible(False)
@@ -1055,11 +1083,35 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         viewer_card, wv = self._card("frame viewer")
-        self.viewer_img = QtWidgets.QLabel("probe a recording, then scrub")
-        self.viewer_img.setObjectName("viewer")
-        self.viewer_img.setAlignment(Qt.AlignCenter)
+        from opngx.ui.frameview import FrameView
+
+        # cycle 23: a self-painting, pixel-exact view instead of a QLabel
+        # holding a pre-scaled pixmap (stale on resize, blurry, and it
+        # propped the layout open) — see opngx/ui/frameview.py
+        self.viewer_img = FrameView(self, placeholder="probe a recording, then scrub")
         self.viewer_img.setMinimumHeight(210)
+        self.viewer_img.hovered.connect(self._on_viewer_hover)
         wv.addWidget(self.viewer_img, 1)
+        vtools = QtWidgets.QHBoxLayout()
+        self.ctx_check = QtWidgets.QCheckBox("show crop in context")
+        self.ctx_check.setToolTip(
+            "Off: the viewer shows exactly the pixels that will be written.\n"
+            "On: the full frame, with the crop outlined and the rest dimmed."
+        )
+        self.ctx_check.toggled.connect(self._refresh_frame)
+        vtools.addWidget(self.ctx_check)
+        vtools.addStretch(1)
+        self.pix_lbl = QtWidgets.QLabel("")
+        self.pix_lbl.setObjectName("hint")
+        vtools.addWidget(self.pix_lbl)
+        vtools.addSpacing(12)
+        # the frame counter used to sit at the end of the scrubber row with
+        # a fixed 150 px, and "frame 25,000 / 49,999 • crop → …" was
+        # clipped off the card edge (cycle 23)
+        self.frame_lbl = QtWidgets.QLabel("frame —")
+        self.frame_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        vtools.addWidget(self.frame_lbl)
+        wv.addLayout(vtools)
         vrow = QtWidgets.QHBoxLayout()
         self.prev_btn = QtWidgets.QPushButton("◀")
         self.prev_btn.setFixedWidth(44)
@@ -1067,15 +1119,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.next_btn.setFixedWidth(44)
         self.frame_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.frame_slider.setRange(0, 0)
-        self.frame_lbl = QtWidgets.QLabel("frame —")
-        self.frame_lbl.setMinimumWidth(150)
-        self.frame_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         vrow.addWidget(self.prev_btn)
         vrow.addWidget(self.frame_slider, 1)
         vrow.addWidget(self.next_btn)
-        vrow.addWidget(self.frame_lbl)
         wv.addLayout(vrow)
-        rv.addWidget(viewer_card)
+        # the viewer is a splitter pane now (first, and the one that grows):
+        # v1.7.0 stacked it OUTSIDE the splitter at its minimum height, so
+        # the frame got ~300 px while the info table and log took the rest
+        self.vsplit.insertWidget(0, viewer_card)
         self._tip(
             self.viewer_img,
             "Frame preview",
@@ -1089,12 +1140,21 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.prev_btn.clicked.connect(lambda: self._step_frame(-1))
         self.next_btn.clicked.connect(lambda: self._step_frame(+1))
-        self.frame_slider.valueChanged.connect(lambda v_: self._show_frame(int(v_)))
+        # scrubbing is COALESCED: a fast drag queues one render per event
+        # loop turn for the latest position instead of decoding every
+        # intermediate frame synchronously (cycle 23)
+        self._frame_timer = QtCore.QTimer(self)
+        self._frame_timer.setSingleShot(True)
+        self._frame_timer.setInterval(0)
+        self._frame_timer.timeout.connect(self._flush_frame)
+        self.frame_slider.valueChanged.connect(lambda v_: self._request_frame(int(v_)))
         # quality-setting changes re-render the visible frame instantly
         for rb in self.modes.values():
-            rb.toggled.connect(self._refresh_frame)
+            rb.toggled.connect(self._on_mode_toggled)
         for spin in (self.b_spin, self.c_spin, self.g_spin):
-            spin.valueChanged.connect(self._refresh_frame)
+            spin.valueChanged.connect(self._on_bcg_edited)
+        for w_ in (self.depth_combo, self.chan_combo, self.fmt_combo):
+            w_.currentIndexChanged.connect(lambda *_: self._push_batch_settings())
 
         log_card, gv = self._card("log")
         self.log_view = QtWidgets.QPlainTextEdit()
@@ -1103,7 +1163,10 @@ class MainWindow(QtWidgets.QMainWindow):
         gv.addWidget(self.log_view)
         self.vsplit.addWidget(log_card)
 
-        self.vsplit.setSizes([340, 260])
+        self.vsplit.setStretchFactor(0, 3)
+        self.vsplit.setStretchFactor(1, 1)
+        self.vsplit.setStretchFactor(2, 1)
+        self.vsplit.setSizes([480, 220, 160])
         rv.addWidget(self.vsplit)
         self.split.addWidget(right)
         self.split.setSizes([520, 620])
@@ -1260,52 +1323,189 @@ class MainWindow(QtWidgets.QMainWindow):
         self._accept_dropped_path(urls[0].toLocalFile())
 
     # ------------------------------------------------------ frame viewer
+    def _mode(self) -> str:
+        return next((k for k, rb in self.modes.items() if rb.isChecked()), "reference")
+
+    def _bcg_opts(self) -> dict[str, Any]:
+        """B/C/G as the engine should receive them.
+
+        reference -> None for all three: EVERY recording resolves its own
+        .footage values. v1.7.0 always sent the spin values, which were
+        hard-coded to 49/18/1 and never read from the project file, so a
+        recording saved with other settings was extracted with the wrong
+        curve — and in a batch one set of numbers was forced on all.
+        custom    -> the spins, applied to every recording.
+        raw       -> identity (the engine ignores the values).
+        """
+        mode = self._mode()
+        if mode == "custom":
+            return dict(
+                brightness=self.b_spin.value(),
+                contrast=self.c_spin.value(),
+                gamma=self.g_spin.value(),
+            )
+        return dict(brightness=None, contrast=None, gamma=None)
+
     def _current_lut_kwargs(self) -> dict[str, Any]:
-        mode = next((k for k, rb in self.modes.items() if rb.isChecked()), "reference")
-        return dict(
-            mode=mode,
-            brightness=self.b_spin.value(),
-            contrast=self.c_spin.value(),
-            gamma=self.g_spin.value(),
-        )
+        return dict(mode=self._mode(), **self._bcg_opts())
+
+    def _sync_bcg_spins(self) -> None:
+        """Show the values the current mode really uses: the recording's
+        .footage B/C/G in reference mode, identity in raw mode. Custom
+        mode keeps whatever the user typed."""
+        mode = self._mode()
+        if mode == "custom":
+            vals = None
+        elif mode == "raw":
+            vals = (0.0, 0.0, 1.0)
+        elif self.meta is not None and self.meta.has_processing:
+            vals = (self.meta.brightness, self.meta.contrast, self.meta.gamma)
+        else:
+            vals = None
+        if vals is not None:
+            self._syncing_bcg = True
+            try:
+                for spin, v in zip((self.b_spin, self.c_spin, self.g_spin), vals):
+                    spin.setValue(float(v))
+            finally:
+                self._syncing_bcg = False
+        for spin in (self.b_spin, self.c_spin, self.g_spin):
+            spin.setEnabled(mode != "raw")
+
+    def _on_mode_toggled(self, checked: bool) -> None:
+        if not checked:
+            return  # each switch fires twice (old off, new on)
+        self._sync_bcg_spins()
+        self._settings_changed()
+
+    def _on_bcg_edited(self, *_):
+        if self._syncing_bcg:
+            return
+        if self.modes["reference"].isChecked():
+            # editing the curve IS asking for a custom curve; keep the
+            # edited value and say so, instead of silently ignoring it
+            self.modes["custom"].setChecked(True)
+            self._log(
+                "B/C/G edited — switched to custom mode (reference uses each "
+                "recording's own .footage settings)",
+                "warn",
+            )
+        self._settings_changed()
+
+    def _settings_changed(self) -> None:
+        self._refresh_frame()
+        self._push_batch_settings()
+
+    def _push_batch_settings(self) -> None:
+        if self._batch_win is not None:
+            try:
+                self._batch_win.update_settings(self._collect_opts())
+            except RuntimeError:  # window already deleted
+                self._batch_win = None
+
+    def _ensure_reader(self):
+        m = self.meta
+        if m is None or not m.width or not m.height or m.capacity_frames <= 0:
+            self._reader = None
+            return None
+        r = self._reader
+        if (
+            r is None
+            or r.meta is not m
+            or r.width != m.width
+            or r.height != m.height
+            or r.frames != m.capacity_frames
+        ):
+            try:
+                self._reader = opngx.FrameReader(m)
+            except Exception as exc:  # noqa: BLE001
+                self._reader = None
+                self._log(f"cannot map recording for preview: {exc}", "err")
+        return self._reader
+
+    def _request_frame(self, idx: int) -> None:
+        self._pending_frame = idx
+        if not self._frame_timer.isActive():
+            self._frame_timer.start()
+
+    def _flush_frame(self) -> None:
+        if self._pending_frame is not None:
+            idx, self._pending_frame = self._pending_frame, None
+            self._show_frame(idx)
+
+    def _render_gray(self, idx: int):
+        """(h, w) uint8 frame through the current transform, full frame."""
+        r = self._ensure_reader()
+        if r is None:
+            return None
+        return r.gray(idx, **self._current_lut_kwargs())
 
     def _show_frame(self, idx: int) -> None:
         m = self.meta
         if not m or m.capacity_frames == 0:
             return
         idx = max(0, min(idx, m.capacity_frames - 1))
-        from opngx.video import read_frame_gray
+        from opngx.ui.frameview import gray_to_qimage
 
-        buf = opngx.read_frame_gray(m.bin_path, m, idx, **self._current_lut_kwargs())
-        img = QtGui.QImage(
-            buf, m.width, m.height, m.width, QtGui.QImage.Format_Grayscale8
-        ).copy()
+        try:
+            arr = self._render_gray(idx)
+        except Exception as exc:  # noqa: BLE001
+            self.viewer_img.setImage(None)
+            self.viewer_img.setPlaceholder(f"cannot decode frame {idx}: {exc}")
+            return
+        if arr is None:
+            return
+        crop = self._crop
+        if crop and not self._crop_fits(crop):
+            crop = None  # never show a window the extractor would refuse
         # show the region of interest the extractor will actually write, so
-        # the viewer and the files can never disagree (cycle 22)
-        if self._crop:
-            x, y, w, h = self._crop
-            x = max(0, min(int(x), m.width - 1))
-            y = max(0, min(int(y), m.height - 1))
-            w = max(1, min(int(w), m.width - x))
-            h = max(1, min(int(h), m.height - y))
-            img = img.copy(x, y, w, h)
-        pm = QtGui.QPixmap.fromImage(img)
-        scaled = pm.scaled(
-            self.viewer_img.width() - 2,
-            self.viewer_img.height() - 2,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        self.viewer_img.setPixmap(scaled)
+        # the viewer and the files can never disagree (cycle 22); "in
+        # context" shows the whole frame with the crop outlined instead
+        if crop and not self.ctx_check.isChecked():
+            x, y, w, h = crop
+            arr = arr[y : y + h, x : x + w]
+            self.viewer_img.setSelection(None)
+        else:
+            self.viewer_img.setSelection(crop)
+        self._view_origin = (crop[0], crop[1]) if (crop and not self.ctx_check.isChecked()) else (0, 0)
+        self._view_arr = arr
+        self.viewer_img.setImage(gray_to_qimage(arr))
         tail = ""
-        if self._crop:
-            _, _, cw, ch = self._crop
-            tail = f" • crop → {cw} × {ch} px"
+        if crop:
+            tail = f" • crop → {crop[2]} × {crop[3]} px"
         self.frame_lbl.setText(f"frame {idx:,} / {m.capacity_frames - 1:,}{tail}")
 
-    def _refresh_frame(self) -> None:
-        if self.meta and self.frame_slider.maximum() > 0:
-            self._show_frame(int(self.frame_slider.value()))
+    def _on_viewer_hover(self, x: int, y: int) -> None:
+        arr = getattr(self, "_view_arr", None)
+        if x < 0 or arr is None or y >= arr.shape[0] or x >= arr.shape[1]:
+            self.pix_lbl.setText("")
+            return
+        ox, oy = getattr(self, "_view_origin", (0, 0))
+        sx, sy = ox + x, oy + y
+        raw = ""
+        r = self._reader
+        if r is not None:
+            try:
+                raw = f"raw {int(r.raw(int(self.frame_slider.value()))[sy, sx])} → "
+            except Exception:  # noqa: BLE001
+                raw = ""
+        self.pix_lbl.setText(f"pixel ({sx}, {sy})  {raw}out {int(arr[y, x])}")
+
+    def _crop_fits(self, crop, meta=None) -> bool:
+        m = meta or self.meta
+        if crop is None:
+            return True
+        if m is None or not m.width or not m.height:
+            return False
+        try:
+            opngx.normalize_crop(crop, m.width, m.height)
+            return True
+        except ValueError:
+            return False
+
+    def _refresh_frame(self, *_) -> None:
+        if self.meta and self.meta.capacity_frames > 0:
+            self._request_frame(int(self.frame_slider.value()))
 
     def _step_frame(self, delta: int) -> None:
         v = int(self.frame_slider.value()) + delta
@@ -1680,11 +1880,23 @@ class MainWindow(QtWidgets.QMainWindow):
                 self, "opngx", "Choose an output directory first."
             )
             return
-        win = BatchWindow(self, root, out, self._collect_opts())
+        if self._batch_win is not None:
+            try:
+                self._batch_win.close()
+            except RuntimeError:
+                pass
+        win = BatchWindow(
+            self, root, out, self._collect_opts(), settings_fn=self._collect_opts
+        )
         if self._crop:
-            for it in win.items:
-                it.crop = self._crop
-                win.cards[it.bin_path].refresh()
+            skipped = win.apply_crop(self._crop, win.items)
+            if skipped:
+                self._log(
+                    f"crop {self._crop} does not fit {len(skipped)} recording(s) "
+                    "— they stay full frame: "
+                    + ", ".join(i.name for i in skipped[:6]),
+                    "warn",
+                )
         win.show()
         self._batch_win = win
         self._log(f"batch window opened for {root} ({len(win.items)} recording(s))")
@@ -1698,6 +1910,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.meta = item.meta
         self._crop = item.crop
         self._adopt_manual_geometry(self.meta)
+        self._sync_bcg_spins()
         m = self.meta
         self._fill_info(
             [
@@ -1727,7 +1940,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log(f"loaded {os.path.basename(item.bin_path)} from the batch window")
 
     def _open_crop_editor(self) -> None:
-        """Interactive ROI picker over a real decoded frame (cycle 22)."""
+        """Interactive ROI picker over a real decoded frame (cycle 22),
+        shown through the CURRENT quality transform (cycle 23)."""
         if not self.meta:
             QtWidgets.QMessageBox.warning(self, "opngx", "Probe a recording first.")
             return
@@ -1738,23 +1952,37 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         m = self.meta
         idx = int(self.frame_slider.value()) if self.frame_slider.maximum() else 0
+        from opngx.ui.frameview import gray_to_qimage
+
         try:
-            buf = opngx.read_frame_gray(m.bin_path, m, idx, mode="raw")
+            img = gray_to_qimage(self._render_gray(idx))
         except Exception as exc:  # noqa: BLE001
             QtWidgets.QMessageBox.critical(self, "opngx", str(exc))
             return
-        img = QtGui.QImage(
-            buf, m.width, m.height, m.width, QtGui.QImage.Format_Grayscale8
-        ).copy()
         from opngx.ui.batch import CropEditor
 
-        dlg = CropEditor(self, img, self._crop, (m.width, m.height))
-        dlg.exec()
+        batch = self._batch_win is not None and self._batch_win.isVisible()
+        dlg = CropEditor(
+            self,
+            img,
+            self._crop if self._crop_fits(self._crop) else None,
+            (m.width, m.height),
+            apply_all_default=batch,
+            show_apply_all=batch,
+            apply_all_text="Also apply to every recording in the open batch window it fits",
+        )
+        # v1.7.0 ignored the result, so Cancel applied the crop anyway
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
         self._crop = dlg.selection()
-        if self._batch_win is not None:
-            for it in self._batch_win.items:
-                it.crop = self._crop if dlg.apply_all.isChecked() else it.crop
-                self._batch_win.cards[it.bin_path].refresh()
+        if batch and dlg.apply_all.isChecked():
+            skipped = self._batch_win.apply_crop(self._crop, self._batch_win.items)
+            if skipped:
+                self._log(
+                    f"crop does not fit {len(skipped)} batch recording(s); left "
+                    "unchanged: " + ", ".join(i.name for i in skipped[:6]),
+                    "warn",
+                )
         if self._crop:
             x, y, w, h = self._crop
             self._log(f"crop set: {x},{y} {w}×{h} → output {w} × {h} px")
@@ -1789,6 +2017,13 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.meta = m
         self._adopt_manual_geometry(m)
+        if self._crop and not self._crop_fits(self._crop, m):
+            self._log(
+                f"crop {self._crop} does not fit {m.width}×{m.height} — cleared",
+                "warn",
+            )
+            self._crop = None
+        self._sync_bcg_spins()
         rows = [
             ("camera", m.camera_name or "?"),
             ("geometry", f"{m.width} × {m.height} px" if m.width else "? × ? px"),
@@ -1855,10 +2090,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _collect_opts(self) -> dict[str, Any]:
         return dict(
-            mode=next(k for k, rb in self.modes.items() if rb.isChecked()),
-            brightness=self.b_spin.value(),
-            contrast=self.c_spin.value(),
-            gamma=self.g_spin.value(),
+            mode=self._mode(),
+            **self._bcg_opts(),
             bit_depth=int(self.depth_combo.currentText()),
             channels=0 if self.chan_combo.currentText() == "gray" else 6,
             fmt=self.fmt_combo.currentText(),
@@ -1897,6 +2130,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         opts = self._collect_opts()
         geom = self._manual_geom_kwargs()
+        crop = self._crop
+        if not batch and crop and not self._crop_fits(crop):
+            QtWidgets.QMessageBox.warning(
+                self, "opngx", f"The crop {crop} does not fit this recording."
+            )
+            return
         self._running = True
         self._cancel_requested = False
         self._sig.state.emit(True)
@@ -1905,6 +2144,7 @@ class MainWindow(QtWidgets.QMainWindow):
         def worker() -> None:
             try:
                 last = None
+                failed: list[tuple[str, str]] = []
                 for b in bins:
                     if self._cancel_requested:
                         break
@@ -1920,20 +2160,42 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._sig.log.emit(
                         f"extract {os.path.basename(b)} → {od}  "
                         f"[mode={o['mode']} fmt={o['fmt']} depth={o['bit_depth']} "
-                        f"ch={o['channels']} jobs={o['jobs']} level={o['level']}]",
+                        f"ch={o['channels']} jobs={o['jobs']} level={o['level']}"
+                        + (f" crop={crop}" if crop else "")
+                        + "]",
                         "info",
                     )
-                    ex = opngx.Extractor(b, **geom)
-                    last = ex.extract(
-                        od,
-                        progress=lambda d_, t_: self._sig.progress.emit(
-                            d_,
-                            t_,
-                            d_ / max(time.perf_counter() - self._t_start, 1e-9),
-                        ),
-                        should_cancel=lambda: self._cancel_requested,
-                        crop=self._crop,
-                        **opts,
+                    try:
+                        ex = opngx.Extractor(b, **geom)
+                        if o["mode"] == "reference" and o.get("brightness") is None:
+                            m_ = ex.meta
+                            self._sig.log.emit(
+                                f"  {os.path.basename(b)}: .footage B/C/G = "
+                                f"{m_.brightness:g} / {m_.contrast:g} / {m_.gamma:g}",
+                                "info",
+                            )
+                        last = ex.extract(
+                            od,
+                            progress=lambda d_, t_: self._sig.progress.emit(
+                                d_,
+                                t_,
+                                d_ / max(time.perf_counter() - self._t_start, 1e-9),
+                            ),
+                            should_cancel=lambda: self._cancel_requested,
+                            crop=crop,
+                            **opts,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        # one bad recording must not abort the rest of the
+                        # batch (v1.7.0 stopped at the first failure)
+                        if not batch:
+                            raise
+                        failed.append((os.path.basename(os.path.dirname(b)) or b, str(exc)))
+                        self._sig.log.emit(f"  FAILED {b}: {exc}", "err")
+                if failed:
+                    self._sig.error.emit(
+                        f"{len(failed)} of {len(bins)} recording(s) failed:\n"
+                        + "\n".join(f"{n}: {e[:160]}" for n, e in failed[:8])
                     )
                 if last is not None:
                     self._sig.done.emit(last)
@@ -1972,12 +2234,26 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         opts = self._collect_opts()
+        run_dir = self._current_run_dir(opts["fmt"])
+        crop = self._crop
+        # the run's own metadata.json is the truth about how it was cropped
+        # — verifying against the CURRENT crop false-failed a folder that
+        # was extracted with a different one (cycle 23)
+        try:
+            import json
+
+            with open(os.path.join(run_dir, "metadata.json"), encoding="utf-8") as fh:
+                c = json.load(fh).get("crop")
+            if c:
+                crop = (int(c["x"]), int(c["y"]), int(c["w"]), int(c["h"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
 
         def run() -> None:
             try:
                 rep = opngx.verify_against_bin(
                     self.meta.bin_path,
-                    self._current_run_dir(opts["fmt"]),
+                    run_dir,
                     mode=opts["mode"],
                     brightness=opts["brightness"],
                     contrast=opts["contrast"],
@@ -1986,7 +2262,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     channels=opts["channels"],
                     prefix=opts["prefix"],
                     ext=opts["ext"],
-                    crop=self._crop,
+                    crop=crop,
                 )
                 msg = (
                     "<b style='color:#34d399'>PASS</b> — all "
@@ -2093,7 +2369,15 @@ def main() -> int:
             "Falling back to the Tkinter UI is available via: opngx-ui --tk"
         )
     app = QtWidgets.QApplication([])
+    apply_theme(app)
+    win = MainWindow()
+    win.show()
+    return app.exec()
 
+
+def apply_theme(app: "QtWidgets.QApplication") -> None:
+    """Dark palette + QSS. Shared by main() and the packaged selftests so
+    what they render is what users see."""
     # Dark QPalette FIRST: guarantees white-on-dark text in every dialog
     # (QMessageBox, file dialogs, context menus) even where QSS does not
     # reach — the black-on-black report came from unstyled message boxes.
@@ -2101,7 +2385,6 @@ def main() -> int:
     cr = QtGui.QPalette.ColorRole
     cg = QtGui.QPalette.ColorGroup
     dark = QtGui.QColor("#0d0f0d")
-    darker = QtGui.QColor("#050505")
     text = QtGui.QColor("#e8ede8")
     bright = QtGui.QColor("#ffffff")
     for group in (cg.Active, cg.Inactive, cg.Disabled):
@@ -2129,10 +2412,6 @@ def main() -> int:
         pal.setColor(group, cr.PlaceholderText, QtGui.QColor("#8a948a"))
     app.setPalette(pal)
     app.setStyleSheet(QSS)
-
-    win = MainWindow()
-    win.show()
-    return app.exec()
 
 
 if __name__ == "__main__":

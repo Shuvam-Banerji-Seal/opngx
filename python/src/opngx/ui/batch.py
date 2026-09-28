@@ -1,4 +1,4 @@
-"""Batch studio window (cycle 22) + ROI crop editor.
+"""Batch studio window + ROI crop editor.
 
 The user field report was twofold:
   1. batch runs did not honour gamma/contrast (fixed in the engine, v1.7.0)
@@ -6,13 +6,28 @@ The user field report was twofold:
      single frame viewer only ever showed one recording at a time, and the
      info table showed just a count of .bin files.
 
-`BatchWindow` gives every recording its own card: a real decoded thumbnail,
-geometry, frame count, fps, crop state, a per-recording status line and a
-per-recording progress bar, so a 40-recording batch is legible at a glance.
+`BatchWindow` gives every recording its own card: a real decoded frame
+rendered through the transform that recording will actually get, its crop
+drawn in context, geometry, frame count, fps, the B/C/G in force, a
+per-recording status line and a per-recording progress bar.
 
-`CropEditor` is the interactive region-of-interest picker: drag a rectangle
-over a real decoded frame, snap to integers, and apply it to this recording
-only or to every recording in the batch.
+`CropEditor` is the interactive region-of-interest picker: drag, move or
+resize a rectangle over a real decoded frame (or type x/y/w/h), and apply
+it to this recording only or to every recording it fits.
+
+cycle 23 (v1.8.0) fixes, all reproduced first:
+  * the batch window copied the studio's settings once, when it opened, so
+    a gamma/contrast change made afterwards never reached "Extract all";
+    it now asks the studio for the live settings at start;
+  * reference mode now means "each recording's own .footage B/C/G" — one
+    recording's (or the hard-coded 49/18/1) values were forced on all;
+  * Cancel in the crop editor still applied the crop (to EVERY recording,
+    since "apply to all" defaulted on);
+  * the w/h spin boxes were locked to the full frame (`_spin` arguments in
+    the wrong order), the drag rectangle ignored the image's scale and
+    offset, and the "selection" was dimmed like everything else;
+  * apply-to-all pushed a crop onto recordings it did not fit, which then
+    failed at extraction time.
 """
 
 from __future__ import annotations
@@ -23,7 +38,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from opngx.layout import batch_out_dir, run_out_dir
+from opngx.layout import batch_out_dir, run_out_dir  # noqa: F401  (re-export)
 
 try:
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -32,6 +47,33 @@ try:
     _QT = True
 except Exception:  # pragma: no cover
     _QT = False
+
+
+def transform_label(meta, settings: dict[str, Any]) -> str:
+    """Human description of the B/C/G a recording will be extracted with."""
+    from opngx.video import resolve_transform
+
+    mode = settings.get("mode", "reference")
+    if meta is None:
+        return f"{mode}"
+    try:
+        b, c, g = resolve_transform(
+            meta,
+            mode,
+            settings.get("brightness"),
+            settings.get("contrast"),
+            settings.get("gamma"),
+        )
+    except Exception:  # noqa: BLE001
+        return f"{mode}"
+    src = {
+        "reference": "from .footage",
+        "raw": "identity",
+        "custom": "custom",
+    }.get(mode, mode)
+    if mode == "reference" and settings.get("brightness") is not None:
+        src = "reference, overridden"
+    return f"B {b:g} · C {c:g} · γ {g:g}  ({src})"
 
 
 @dataclass
@@ -56,6 +98,7 @@ class BatchItem:
     seconds: float = 0.0
     error: str = ""
     thumb: Optional["QtGui.QImage"] = None
+    thumb_raw: Any = None  # (h, w) uint8 sensor bytes of the preview frame
     meta: Any = None
     extras: dict = field(default_factory=dict)
 
@@ -64,7 +107,7 @@ class BatchItem:
         """Encoded size after the crop is applied (what the files will be)."""
         if self.crop and self.width and self.height:
             x, y, w, h = self.crop
-            return f"{w} × {h} px"
+            return f"{self.width} × {self.height} → {w} × {h} px"
         if self.width and self.height:
             return f"{self.width} × {self.height} px"
         return "? × ? px"
@@ -80,6 +123,17 @@ class BatchItem:
     def done(self) -> bool:
         return self.status in ("done", "cancelled", "failed")
 
+    def crop_fits(self, crop: Optional[tuple[int, int, int, int]]) -> bool:
+        from opngx.extractor import normalize_crop
+
+        if crop is None:
+            return True
+        try:
+            normalize_crop(crop, self.width, self.height)
+            return True
+        except ValueError:
+            return False
+
 
 def scan_batch(root: str) -> list[str]:
     """Every .bin under `root`: one level of nesting plus loose files.
@@ -94,8 +148,29 @@ def scan_batch(root: str) -> list[str]:
     return bins
 
 
-def make_item(bin_path: str) -> BatchItem:
+def render_thumb(item: BatchItem, settings: Optional[dict[str, Any]] = None):
+    """The preview frame through the transform this recording will get."""
+    if item.thumb_raw is None or item.meta is None:
+        return item.thumb
+    import numpy as np
+
+    from opngx.quality import build_lut
+    from opngx.video import resolve_transform
+
+    s = settings or {"mode": "raw"}
+    b, c, g = resolve_transform(
+        item.meta, s.get("mode", "raw"), s.get("brightness"), s.get("contrast"), s.get("gamma")
+    )
+    lut = np.asarray(build_lut(b, c, g), dtype=np.uint8)
+    out = np.ascontiguousarray(np.take(lut, item.thumb_raw))
+    h, w = out.shape
+    return QtGui.QImage(out.data, w, h, w, QtGui.QImage.Format_Grayscale8).copy()
+
+
+def make_item(bin_path: str, settings: Optional[dict[str, Any]] = None) -> BatchItem:
     """Probe one recording into a BatchItem (thumbnail included)."""
+    import numpy as np
+
     import opngx
 
     item = BatchItem(bin_path=bin_path, name=os.path.basename(bin_path))
@@ -121,63 +196,104 @@ def make_item(bin_path: str) -> BatchItem:
         try:
             mid = item.frames // 2
             buf = opngx.read_frame_gray(bin_path, m, mid, mode="raw")
-            img = QtGui.QImage(
-                buf,
-                item.width,
-                item.height,
-                item.width,
-                QtGui.QImage.Format_Grayscale8,
-            ).copy()
-            item.thumb = img
+            item.thumb_raw = np.frombuffer(buf, dtype=np.uint8).reshape(
+                item.height, item.width
+            )
             item.extras["thumb_frame"] = mid
+            if _QT:
+                item.thumb = render_thumb(item, settings)
         except Exception as exc:  # noqa: BLE001
             item.extras["thumb_error"] = str(exc)
     return item
+
+
+def make_items(bins: list[str], settings: Optional[dict[str, Any]] = None) -> list[BatchItem]:
+    """Probe every recording concurrently (probing is I/O-bound: one XML
+    parse plus two seeks per file), keeping discovery order."""
+    if len(bins) <= 1:
+        return [make_item(b, settings) for b in bins]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(8, len(bins))) as ex:
+        return list(ex.map(lambda b: make_item(b, settings), bins))
 
 
 if not _QT:  # pragma: no cover
     BatchWindow = None  # type: ignore[assignment]
     CropEditor = None  # type: ignore[assignment]
 else:
+    from opngx.ui.frameview import FrameView
+
+    def _spin(lo: int, hi: int, val: int) -> "QtWidgets.QSpinBox":
+        s = QtWidgets.QSpinBox()
+        s.setRange(int(lo), max(int(hi), int(lo)))
+        s.setValue(int(val))
+        s.setKeyboardTracking(False)
+        return s
 
     class CropEditor(QtWidgets.QDialog):
-        """Drag a rectangle over a real frame to pick a region of interest.
+        """Drag, move or resize a rectangle over a real frame to pick a
+        region of interest.
 
-        The selection is clamped to the frame, snapped to whole pixels, and
-        previewed live through the *current* quality transform so the user
-        sees the same pixels the encoder will write.
+        The selection is clamped to the frame, always whole pixels, and the
+        preview is drawn from the image the caller passes — the studio
+        passes the frame through the CURRENT quality transform, so the user
+        sees the pixels the encoder will write.
         """
 
         cropChanged = Signal(object)
 
         def __init__(
             self,
-            parent: QtWidgets.QWidget,
+            parent: Optional[QtWidgets.QWidget],
             image: "QtGui.QImage",
             current: Optional[tuple[int, int, int, int]],
             frame_size: tuple[int, int],
             transform: Optional[Callable[["QtGui.QImage"], "QtGui.QImage"]] = None,
+            *,
+            apply_all_default: bool = False,
+            show_apply_all: bool = True,
+            apply_all_text: str = "Apply this crop to every recording in the batch it fits",
         ) -> None:
             super().__init__(parent)
             self.setWindowTitle("Crop — region of interest")
-            self.resize(760, 620)
+            self.resize(820, 680)
+            self._fw, self._fh = int(frame_size[0]), int(frame_size[1])
             self._img = image
-            self._fw, self._fh = frame_size
-            self._transform = transform
-            self._drag_from: Optional[QtCore.QPoint] = None
-            self._sel: Optional[tuple[int, int, int, int]] = current
+            if transform is not None:
+                try:
+                    self._img = transform(image)
+                except Exception:  # noqa: BLE001
+                    self._img = image
+            self._initial = current
 
             root = QtWidgets.QVBoxLayout(self)
-            self.view = _CropCanvas(self)
-            self.view.setImage(image)
+            hint = QtWidgets.QLabel(
+                "Drag to draw a region · drag inside it to move · drag an edge "
+                "or corner to resize. Pixels are selected, never resampled."
+            )
+            hint.setObjectName("hint")
+            hint.setWordWrap(True)
+            root.addWidget(hint)
+
+            split = QtWidgets.QSplitter(Qt.Vertical)
+            self.view = FrameView(self, editable=True)
+            self.view.setImage(self._img)
             self.view.selectionChanged.connect(self._on_canvas_sel)
-            root.addWidget(self.view, 1)
+            self.view.hovered.connect(self._on_hover)
+            split.addWidget(self.view)
+            self.preview = FrameView(self, placeholder="preview")
+            self.preview.setMinimumHeight(110)
+            split.addWidget(self.preview)
+            split.setStretchFactor(0, 4)
+            split.setStretchFactor(1, 1)
+            root.addWidget(split, 1)
 
             row = QtWidgets.QHBoxLayout()
-            self.x_spin = _spin(0, 0, max(self._fw - 1, 0))
-            self.y_spin = _spin(0, 0, max(self._fh - 1, 0))
-            self.w_spin = _spin(self._fw, 1, max(self._fw, 1))
-            self.h_spin = _spin(self._fh, 1, max(self._fh, 1))
+            self.x_spin = _spin(0, max(self._fw - 1, 0), 0)
+            self.y_spin = _spin(0, max(self._fh - 1, 0), 0)
+            self.w_spin = _spin(1, max(self._fw, 1), self._fw)
+            self.h_spin = _spin(1, max(self._fh, 1), self._fh)
             for lbl, w in (
                 ("x", self.x_spin),
                 ("y", self.y_spin),
@@ -196,19 +312,20 @@ else:
             self.ctr_btn = QtWidgets.QPushButton("Centre 50%")
             self.ctr_btn.clicked.connect(self._center)
             row.addWidget(self.ctr_btn)
+            self.reset_btn = QtWidgets.QPushButton("Reset")
+            self.reset_btn.setToolTip("Back to the crop this dialog opened with")
+            self.reset_btn.clicked.connect(self._reset)
+            row.addWidget(self.reset_btn)
             root.addLayout(row)
 
-            self.apply_all = QtWidgets.QCheckBox(
-                "Apply this crop to every recording in the batch"
-            )
-            self.apply_all.setChecked(True)
-            root.addWidget(self.apply_all)
+            self.info = QtWidgets.QLabel()
+            self.info.setObjectName("hint")
+            root.addWidget(self.info)
 
-            self.preview = QtWidgets.QLabel()
-            self.preview.setObjectName("viewer")
-            self.preview.setAlignment(Qt.AlignCenter)
-            self.preview.setMinimumHeight(120)
-            root.addWidget(self.preview)
+            self.apply_all = QtWidgets.QCheckBox(apply_all_text)
+            self.apply_all.setChecked(bool(apply_all_default))
+            self.apply_all.setVisible(show_apply_all)
+            root.addWidget(self.apply_all)
 
             btns = QtWidgets.QHBoxLayout()
             btns.addStretch(1)
@@ -216,20 +333,27 @@ else:
             cancel.clicked.connect(self.reject)
             ok = QtWidgets.QPushButton("Use this crop")
             ok.setObjectName("accent")
+            ok.setDefault(True)
             ok.clicked.connect(self._accept)
             btns.addWidget(cancel)
             btns.addWidget(ok)
             root.addLayout(btns)
 
-            if current:
-                self._set_sel(current)
-            else:
-                self._set_sel((0, 0, self._fw, self._fh))
+            self._sel: tuple[int, int, int, int] = (0, 0, self._fw, self._fh)
+            self._reset()
 
         # ---------------------------------------------------------------
-        def _set_sel(self, sel: tuple[int, int, int, int]) -> None:
-            x, y, w, h = sel
-            self._sel = (x, y, w, h)
+        def _clamp(self, sel) -> tuple[int, int, int, int]:
+            x, y, w, h = (int(v) for v in sel)
+            x = max(0, min(x, self._fw - 1))
+            y = max(0, min(y, self._fh - 1))
+            w = max(1, min(w if w > 0 else self._fw - x, self._fw - x))
+            h = max(1, min(h if h > 0 else self._fh - y, self._fh - y))
+            return (x, y, w, h)
+
+        def _set_sel(self, sel: tuple[int, int, int, int], *, from_canvas=False) -> None:
+            self._sel = self._clamp(sel)
+            x, y, w, h = self._sel
             for spin, val in (
                 (self.x_spin, x),
                 (self.y_spin, y),
@@ -239,19 +363,29 @@ else:
                 spin.blockSignals(True)
                 spin.setValue(int(val))
                 spin.blockSignals(False)
-            self.view.setSelection(*self._sel)
+            if not from_canvas:
+                self.view.setSelection(self._sel)
             self._render_preview()
 
         def _on_canvas_sel(self, sel) -> None:
-            x, y, w, h = (int(v) for v in sel)
-            self._set_sel((x, y, w, h))
+            self._set_sel(tuple(int(v) for v in sel), from_canvas=True)
 
         def _on_spin(self) -> None:
-            x = min(int(self.x_spin.value()), max(self._fw - 1, 0))
-            y = min(int(self.y_spin.value()), max(self._fh - 1, 0))
-            w = max(1, min(int(self.w_spin.value()), self._fw - x))
-            h = max(1, min(int(self.h_spin.value()), self._fh - y))
-            self._set_sel((x, y, w, h))
+            self._set_sel(
+                (
+                    self.x_spin.value(),
+                    self.y_spin.value(),
+                    self.w_spin.value(),
+                    self.h_spin.value(),
+                )
+            )
+
+        def _on_hover(self, x: int, y: int) -> None:
+            if x < 0 or self._img is None:
+                self._render_info()
+                return
+            v = QtGui.qGray(self._img.pixel(x, y))
+            self._render_info(f"   ·   cursor {x},{y} = {v}")
 
         def _full(self) -> None:
             self._set_sel((0, 0, self._fw, self._fh))
@@ -261,24 +395,28 @@ else:
             h = max(1, self._fh // 2)
             self._set_sel(((self._fw - w) // 2, (self._fh - h) // 2, w, h))
 
+        def _reset(self) -> None:
+            self._set_sel(self._initial or (0, 0, self._fw, self._fh))
+
+        def _render_info(self, tail: str = "") -> None:
+            x, y, w, h = self._sel
+            odd = (
+                "   ·   odd size: an MP4 render pads one black row/column"
+                if (w % 2 or h % 2)
+                else ""
+            )
+            self.info.setText(
+                f"output {w} × {h} px  ·  columns {x}–{x + w - 1}, rows {y}–{y + h - 1}"
+                f"{odd}{tail}"
+            )
+
         def _render_preview(self) -> None:
             x, y, w, h = self._sel
-            sub = self._img.copy(x, y, w, h)
-            if self._transform is not None:
-                try:
-                    sub = self._transform(sub)
-                except Exception:  # noqa: BLE001
-                    pass
-            pm = QtGui.QPixmap.fromImage(sub).scaled(
-                self.preview.width() - 8,
-                self.preview.height() - 8,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            self.preview.setPixmap(pm)
+            self.preview.setImage(self._img.copy(x, y, w, h) if self._img else None)
+            self._render_info()
 
         def _accept(self) -> None:
-            self.cropChanged.emit(self._sel)
+            self.cropChanged.emit(self.selection())
             self.accept()
 
         def selection(self) -> Optional[tuple[int, int, int, int]]:
@@ -286,119 +424,9 @@ else:
                 return None
             return self._sel
 
-    class _CropCanvas(QtWidgets.QLabel):
-        """Image view with a draggable integer-aligned selection rect."""
-
-        selectionChanged = Signal(object)
-
-        def __init__(self, parent=None) -> None:
-            super().__init__(parent)
-            self.setObjectName("viewer")
-            self.setAlignment(Qt.AlignCenter)
-            self.setMinimumSize(320, 240)
-            self.setMouseTracking(True)
-            self._img: Optional[QtGui.QImage] = None
-            self._pm: Optional[QtGui.QPixmap] = None
-            self._sel = (0, 0, 0, 0)
-            self._drag_from: Optional[QtCore.QPoint] = None
-
-        def setImage(self, img: "QtGui.QImage") -> None:  # noqa: N802
-            self._img = img
-            self._pm = None
-            self.update()
-
-        def setSelection(self, x: int, y: int, w: int, h: int) -> None:  # noqa: N802
-            self._sel = (x, y, w, h)
-            self.update()
-
-        def _scaled(self):
-            if self._pm is None and self._img is not None:
-                self._pm = QtGui.QPixmap.fromImage(self._img)
-            return self._pm
-
-        def _map_to_image(self, pos: QtCore.QPoint) -> tuple[int, int]:
-            pm = self._scaled()
-            if pm is None or pm.isNull() or self._img is None:
-                return (0, 0)
-            sx = pm.width() / max(self._img.width(), 1)
-            sy = pm.height() / max(self._img.height(), 1)
-            return (
-                max(0, min(int(pos.x() / sx), self._img.width() - 1)),
-                max(0, min(int(pos.y() / sy), self._img.height() - 1)),
-            )
-
-        def paintEvent(self, ev) -> None:  # noqa: N802
-            super().paintEvent(ev)
-            pm = self._scaled()
-            if pm is None or pm.isNull():
-                return
-            target = pm.size()
-            target.scale(self.width() - 8, self.height() - 8, Qt.KeepAspectRatio)
-            scaled = pm.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            ox = (self.width() - scaled.width()) // 2
-            oy = (self.height() - scaled.height()) // 2
-            p = QtGui.QPainter(self)
-            p.drawPixmap(ox, oy, scaled)
-            x, y, w, h = self._sel
-            if w > 0 and h > 0:
-                sx = scaled.width() / max(pm.width(), 1)
-                sy = scaled.height() / max(pm.height(), 1)
-                p.fillRect(
-                    ox,
-                    oy,
-                    scaled.width(),
-                    scaled.height(),
-                    QtGui.QColor(0, 0, 0, 110),
-                )
-                p.fillRect(
-                    ox + int(x * sx),
-                    oy + int(y * sy),
-                    int(w * sx),
-                    int(h * sy),
-                    QtGui.QColor(0, 0, 0, 0),
-                )
-                pen = QtGui.QPen(QtGui.QColor("#7fb069"))
-                pen.setWidth(2)
-                p.setPen(pen)
-                p.drawRect(
-                    ox + int(x * sx),
-                    oy + int(y * sy),
-                    int(w * sx),
-                    int(h * sy),
-                )
-            p.end()
-
-        def mousePressEvent(self, ev) -> None:  # noqa: N802
-            if ev.button() == Qt.LeftButton:
-                self._drag_from = self._map_to_image(ev.position().toPoint())
-
-        def mouseMoveEvent(self, ev) -> None:  # noqa: N802
-            if self._drag_from is None:
-                return
-            cur = self._map_to_image(ev.position().toPoint())
-            x0, y0 = self._drag_from
-            x1, y1 = cur
-            x, y = min(x0, x1), min(y0, y1)
-            w, h = abs(x1 - x0) + 1, abs(y1 - y0) + 1
-            if self._img is not None:
-                w = min(w, self._img.width() - x)
-                h = min(h, self._img.height() - y)
-            self._sel = (x, y, max(w, 1), max(h, 1))
-            self.update()
-
-        def mouseReleaseEvent(self, ev) -> None:  # noqa: N802
-            if self._drag_from is not None:
-                self._drag_from = None
-                self.selectionChanged.emit(self._sel)
-
-    def _spin(lo: int, val: int, hi: int) -> "QtWidgets.QSpinBox":
-        s = QtWidgets.QSpinBox()
-        s.setRange(int(lo), max(int(hi), int(lo)))
-        s.setValue(int(val))
-        return s
-
     class BatchCard(QtWidgets.QFrame):
-        """One recording: thumbnail, facts, crop state, status, progress."""
+        """One recording: frame (crop drawn in context), facts, transform,
+        crop state, status, progress."""
 
         cropRequested = Signal(object)  # BatchItem
         previewRequested = Signal(object)  # BatchItem
@@ -411,21 +439,10 @@ else:
             v.setContentsMargins(10, 8, 10, 10)
             v.setSpacing(6)
 
-            self.thumb = QtWidgets.QLabel()
-            self.thumb.setObjectName("viewer")
-            self.thumb.setAlignment(Qt.AlignCenter)
-            self.thumb.setFixedHeight(120)
-            if item.thumb is not None:
-                self.thumb.setPixmap(
-                    QtGui.QPixmap.fromImage(item.thumb).scaled(
-                        200,
-                        120,
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation,
-                    )
-                )
-            else:
-                self.thumb.setText("no preview")
+            self.thumb = FrameView(self, placeholder="no preview")
+            self.thumb.setFixedHeight(150)
+            self.thumb.setImage(item.thumb)
+            self.thumb.setSelection(item.crop)
             v.addWidget(self.thumb)
 
             title = QtWidgets.QLabel(item.name)
@@ -433,19 +450,21 @@ else:
             title.setToolTip(item.bin_path)
             v.addWidget(title)
 
-            self.facts = QtWidgets.QLabel(
-                f"{item.out_size} · {item.frames:,} frames"
-                + (f" · {item.framerate:,.0f} fps" if item.framerate else "")
-            )
+            self.facts = QtWidgets.QLabel()
             self.facts.setObjectName("hint")
             v.addWidget(self.facts)
 
-            self.crop_lbl = QtWidgets.QLabel(item.crop_label)
+            self.xform_lbl = QtWidgets.QLabel()
+            self.xform_lbl.setObjectName("hint")
+            v.addWidget(self.xform_lbl)
+
+            self.crop_lbl = QtWidgets.QLabel()
             self.crop_lbl.setObjectName("hint")
             v.addWidget(self.crop_lbl)
 
-            self.status_lbl = QtWidgets.QLabel(item.status)
+            self.status_lbl = QtWidgets.QLabel()
             self.status_lbl.setObjectName("hint")
+            self.status_lbl.setWordWrap(True)
             v.addWidget(self.status_lbl)
 
             self.bar = QtWidgets.QProgressBar()
@@ -461,6 +480,12 @@ else:
             row.addWidget(self.crop_btn)
             row.addWidget(self.prev_btn)
             v.addLayout(row)
+            self.refresh()
+
+        def set_transform(self, settings: dict[str, Any]) -> None:
+            self.item.thumb = render_thumb(self.item, settings)
+            self.thumb.setImage(self.item.thumb)
+            self.xform_lbl.setText(transform_label(self.item.meta, settings))
 
         def refresh(self) -> None:
             it = self.item
@@ -469,6 +494,7 @@ else:
                 + (f" · {it.framerate:,.0f} fps" if it.framerate else "")
             )
             self.crop_lbl.setText(it.crop_label)
+            self.thumb.setSelection(it.crop)
             colors = {
                 "queued": "#8a948a",
                 "running": "#60a5fa",
@@ -480,7 +506,9 @@ else:
             if it.status == "done":
                 txt = f"done · {it.frames_done:,} frames in {it.seconds:.2f}s"
             elif it.status == "failed" and it.error:
-                txt = f"failed · {it.error[:80]}"
+                txt = f"failed · {it.error[:120]}"
+            elif it.status == "running" and it.frames_total:
+                txt = f"running · {it.frames_done:,}/{it.frames_total:,}"
             self.status_lbl.setText(txt)
             self.status_lbl.setStyleSheet(f"color: {colors.get(it.status, '#8a948a')}")
             if it.frames_total:
@@ -493,8 +521,9 @@ else:
 
         One card per recording with a real decoded frame, the settings that
         will be used, the crop in force, live per-card progress, and its own
-        Extract/Cancel buttons. Applying settings here applies them to the
-        WHOLE batch — which is the behaviour the field report was missing.
+        Extract/Cancel buttons. Settings come LIVE from the studio
+        (`settings_fn`) so what the main window shows is what the batch
+        applies — the v1.7.0 window froze them at open time.
         """
 
         progress = Signal(object)  # BatchItem
@@ -507,15 +536,17 @@ else:
             root: str,
             out_root: str,
             settings: dict[str, Any],
+            settings_fn: Optional[Callable[[], dict[str, Any]]] = None,
         ) -> None:
             super().__init__(parent)
             self.setWindowTitle(
                 f"opngx batch — {os.path.basename(root.rstrip('/')) or root}"
             )
-            self.resize(1180, 760)
+            self.resize(1180, 780)
             self.root = root
             self.out_root = out_root
             self.settings = dict(settings)
+            self.settings_fn = settings_fn
             self.items: list[BatchItem] = []
             self.cards: dict[str, BatchCard] = {}
             self._running = False
@@ -526,10 +557,10 @@ else:
             top = QtWidgets.QHBoxLayout()
             self.summary = QtWidgets.QLabel()
             self.summary.setObjectName("subtitle")
-            top.addWidget(self.summary)
-            top.addStretch(1)
+            self.summary.setWordWrap(True)
+            top.addWidget(self.summary, 1)
             self.rescan = QtWidgets.QPushButton("Rescan")
-            self.rescan.clicked.connect(lambda: self.load(root))
+            self.rescan.clicked.connect(lambda: self.load(self.root))
             top.addWidget(self.rescan)
             root_lay.addLayout(top)
 
@@ -537,9 +568,15 @@ else:
             self.scroll.setWidgetResizable(True)
             self.scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
             self.grid_host = QtWidgets.QWidget()
+            self.grid_host.setObjectName("gridhost")
             self.grid = QtWidgets.QGridLayout(self.grid_host)
             self.grid.setSpacing(10)
             self.scroll.setWidget(self.grid_host)
+            # QScrollArea.setWidget() forces autoFillBackground on, which
+            # painted the platform window colour (white) behind the cards
+            self.grid_host.setAutoFillBackground(False)
+            self.scroll.viewport().setAutoFillBackground(False)
+            self.grid_host.setStyleSheet("QWidget#gridhost { background: transparent; }")
             root_lay.addWidget(self.scroll, 1)
 
             bar = QtWidgets.QHBoxLayout()
@@ -567,6 +604,35 @@ else:
             self.load(root)
 
         # -----------------------------------------------------------------
+        def current_settings(self) -> dict[str, Any]:
+            if self.settings_fn is not None:
+                try:
+                    self.settings = dict(self.settings_fn())
+                except Exception:  # noqa: BLE001  (studio closed etc.)
+                    pass
+            return self.settings
+
+        def update_settings(self, settings: Optional[dict[str, Any]] = None) -> None:
+            """Re-render every card for new settings (called by the studio
+            whenever a quality control changes)."""
+            if self._running:
+                return  # a running batch keeps the settings it started with
+            self.settings = dict(settings) if settings is not None else self.current_settings()
+            self._update_summary()
+            for it in self.items:
+                card = self.cards.get(it.bin_path)
+                if card is not None:
+                    card.set_transform(self.settings)
+                    it.out_dir = batch_out_dir(
+                        self.out_root, self.root, it.bin_path, self.settings["fmt"]
+                    )
+
+        def _update_summary(self) -> None:
+            self.summary.setText(
+                f"{len(self.items)} recording(s) · output {self.out_root} · "
+                f"settings: {self._settings_line()}"
+            )
+
         def load(self, root: str) -> None:
             """(Re)build the cards for a mother folder."""
             self.root = root
@@ -580,28 +646,30 @@ else:
             if not bins:
                 self.summary.setText(f"no .bin found under {root}")
                 return
-            self.summary.setText(
-                f"{len(bins)} recording(s) · output {self.out_root} · "
-                f"settings: {self._settings_line()}"
-            )
-            for n, b in enumerate(bins):
-                it = make_item(b)
-                it.out_dir = batch_out_dir(self.out_root, root, b, self.settings["fmt"])
-                self.items.append(it)
+            s = self.current_settings()
+            self.items = make_items(bins, s)
+            for n, it in enumerate(self.items):
+                it.out_dir = batch_out_dir(self.out_root, root, it.bin_path, s["fmt"])
                 card = BatchCard(it)
+                card.set_transform(s)
                 card.cropRequested.connect(self.open_crop_editor)
                 card.previewRequested.connect(self.preview_item)
-                self.cards[b] = card
+                self.cards[it.bin_path] = card
                 self.grid.addWidget(card, n // 3, n % 3)
             self.grid.setRowStretch(self.grid.rowCount(), 1)
+            self._update_summary()
 
         def _settings_line(self) -> str:
             s = self.settings
-            bits = [f"mode={s.get('mode')}"]
-            if s.get("mode") == "custom":
+            mode = s.get("mode")
+            bits = [f"mode={mode}"]
+            if mode == "reference" and s.get("brightness") is None:
+                bits.append("B/C/G from each recording's .footage")
+            elif mode in ("custom", "reference"):
+                b, c, g = s.get("brightness"), s.get("contrast"), s.get("gamma")
                 bits.append(
-                    f"B={s.get('brightness'):g} C={s.get('contrast'):g} "
-                    f"γ={s.get('gamma'):g}"
+                    f"B={b if b is not None else 0:g} C={c if c is not None else 0:g} "
+                    f"γ={g if g is not None else 1:g}"
                 )
             bits += [
                 f"fmt={s.get('fmt')}",
@@ -613,7 +681,24 @@ else:
             return " · ".join(bits)
 
         # --------------------------------------------------------- crop ----
+        def apply_crop(
+            self, sel: Optional[tuple[int, int, int, int]], items: list[BatchItem]
+        ) -> list[BatchItem]:
+            """Set `sel` on every item it fits; returns the items skipped."""
+            skipped = []
+            for it in items:
+                if it.crop_fits(sel):
+                    it.crop = sel
+                else:
+                    skipped.append(it)
+                card = self.cards.get(it.bin_path)
+                if card is not None:
+                    card.refresh()
+            return skipped
+
         def open_crop_editor(self, item: BatchItem) -> None:
+            if self._running:
+                return
             if item.thumb is None or not item.width or not item.height:
                 QtWidgets.QMessageBox.warning(
                     self, "opngx", f"No frame could be decoded from {item.name}."
@@ -624,24 +709,31 @@ else:
                 item.thumb,
                 item.crop,
                 (item.width, item.height),
+                apply_all_default=False,
+                show_apply_all=len(self.items) > 1,
             )
-            dlg.exec()
+            if dlg.exec() != QtWidgets.QDialog.Accepted:
+                self.status.setText("crop unchanged")
+                return
             sel = dlg.selection()
             if dlg.apply_all.isChecked():
-                for it in self.items:
-                    it.crop = sel
-                    self.cards[it.bin_path].refresh()
-                self.status.setText(
+                skipped = self.apply_crop(sel, self.items)
+                msg = (
                     "crop applied to every recording"
                     if sel
                     else "crop cleared for every recording"
                 )
-            elif sel != item.crop:
-                item.crop = sel
-                self.cards[item.bin_path].refresh()
-                self.status.setText(f"crop applied to {item.name}")
+                if skipped:
+                    msg += (
+                        f" — skipped {len(skipped)} it does not fit: "
+                        + ", ".join(i.name for i in skipped[:4])
+                    )
+                self.status.setText(msg)
             else:
-                self.status.setText("crop unchanged")
+                self.apply_crop(sel, [item])
+                self.status.setText(
+                    f"crop applied to {item.name}" if sel else f"crop cleared for {item.name}"
+                )
 
         def clear_crops(self) -> None:
             for it in self.items:
@@ -666,17 +758,26 @@ else:
                 )
 
         # ------------------------------------------------------- extract ----
+        def _set_running(self, running: bool) -> None:
+            self._running = running
+            self.go.setEnabled(not running)
+            self.stop.setEnabled(running)
+            self.close_all.setEnabled(not running)
+            self.rescan.setEnabled(not running)
+            for card in self.cards.values():
+                card.crop_btn.setEnabled(not running)
+
         def start(self) -> None:
             if self._running:
                 return
             if not self.out_root:
                 QtWidgets.QMessageBox.warning(self, "opngx", "Choose an output folder.")
                 return
-            self._running = True
+            # the LIVE studio settings, not the ones from when we opened
+            self.update_settings(self.current_settings())
             self._cancel = False
             self._t0 = time.perf_counter()
-            self.go.setEnabled(False)
-            self.stop.setEnabled(True)
+            self._set_running(True)
             for it in self.items:
                 it.status = "queued"
                 it.error = ""
@@ -693,22 +794,32 @@ else:
         def _work(self) -> None:
             import opngx
 
-            s = self.settings
+            s = dict(self.settings)
             for it in self.items:
                 if self._cancel:
                     it.status = "cancelled"
                     self.progress.emit(it)
                     continue
+                if it.meta is None:
+                    it.status = "failed"
+                    it.error = it.error or "could not be probed"
+                    self.progress.emit(it)
+                    continue
                 it.status = "running"
                 self.progress.emit(it)
+                last_emit = [0.0]
 
                 def cb(done: int, total: int, _it=it) -> None:
                     _it.frames_done = int(done)
                     _it.frames_total = int(total or _it.frames)
-                    self.progress.emit(_it)
+                    now = time.perf_counter()
+                    # throttle cross-thread repaints to ~20/s per card
+                    if now - last_emit[0] >= 0.05 or done >= total:
+                        last_emit[0] = now
+                        self.progress.emit(_it)
 
                 try:
-                    st = opngx.Extractor(it.bin_path).extract(
+                    st = opngx.Extractor(it.bin_path, it.footage_path).extract(
                         it.out_dir,
                         mode=s["mode"],
                         brightness=s.get("brightness"),
@@ -732,7 +843,11 @@ else:
                     )
                     it.seconds = float(st.seconds)
                     it.frames_done = int(st.frames_written)
-                    it.status = "cancelled" if st.cancelled else "done"
+                    it.status = (
+                        "cancelled"
+                        if st.cancelled or st.frames_written < st.frames_total
+                        else "done"
+                    )
                     self.progress.emit(it)
                 except Exception as exc:  # noqa: BLE001
                     it.status = "failed"
@@ -752,16 +867,14 @@ else:
             )
 
         def _on_done(self, items: list[BatchItem]) -> None:
-            self._running = False
-            self.go.setEnabled(True)
-            self.stop.setEnabled(False)
+            self._set_running(False)
             failed = [i for i in items if i.status == "failed"]
             ok = sum(1 for i in items if i.status == "done")
             self.status.setText(
                 f"finished: {ok} done, {len(failed)} failed, "
                 f"{len(items)} total • {time.perf_counter() - self._t0:,.1f}s"
             )
-            if failed:
+            if failed and self.isVisible():
                 QtWidgets.QMessageBox.warning(
                     self,
                     "batch finished with errors",
@@ -769,7 +882,5 @@ else:
                 )
 
         def _on_failed(self, msg: str) -> None:
-            self._running = False
-            self.go.setEnabled(True)
-            self.stop.setEnabled(False)
+            self._set_running(False)
             self.status.setText(f"error: {msg}")
