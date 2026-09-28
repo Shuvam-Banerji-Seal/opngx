@@ -149,9 +149,14 @@ settings logic (AR-28 fails at the API level).
 
 | File | What |
 |---|---|
-| `opngx-setup-1.8.0.exe` | Windows installer: engine + Qt studio + docs, Start-menu shortcuts, uninstaller |
-| `opngx-studio-portable-1.8.0.exe` | Windows studio, single file, no install |
-| `opngx-engine-1.8.0.exe` | Windows CLI engine only |
+| `opngx-setup-v1.8.0.exe` | Windows installer: engine + Qt studio + ffmpeg + docs, Start-menu shortcuts, uninstaller |
+| `opngx-studio-portable-v1.8.0.exe` | Windows studio, single file, no install |
+| `opngx-engine-v1.8.0.exe` | Windows CLI engine only |
 | `opngx-1.8.0-linux-x86_64.tar.gz` | static Linux engine + docs |
 | `opngx_1.8.0_amd64.deb` | Debian/Ubuntu package of the engine |
 | `SHA256SUMS` | checksums for all of the above |
+
+The assets were built by the Release workflow on GitHub's Windows and
+Linux runners from the tagged commit. They were then re-downloaded and
+checked: every checksum matches, and the four packaged selftests
+(ui / engine / batch / video) pass inside the portable `.exe`.

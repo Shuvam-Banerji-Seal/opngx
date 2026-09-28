@@ -83,9 +83,17 @@ opngx-ui          # black / coffee-green theme, frame viewer,
                    # FOLDER picker (select the mother folder above).
                    # Output mirrors it: <out>/<recording>/PNG|JPG|BMP|TIF|MP4/
                    # Also: drag & drop a folder → Batch, a .bin → Single.
-                   # "Batch window…" gives every recording its own card
-                   # with a real decoded frame, geometry, fps and live
-                   # progress — the settings above apply to all of them.
+                   # "Batch window…" is a multi-pane window: a card per
+                   # recording, a large Preview of the selected one (own
+                   # scrubber, crop overlay, pixel readout), Compare (every
+                   # recording side by side at the same point in time) and
+                   # Progress & log. Each pane collapses (▾), pops out into
+                   # its own window (⧉), goes full screen (⛶, Esc to return)
+                   # or hides (✕, back via View). F11 = whole window full
+                   # screen, F10 = Preview full screen. Layout is remembered.
+                   # The settings above apply to every recording.
+                   # The UI scales itself to the monitor (720p .. 4K);
+                   # override in View → Interface scale.
                    # "Crop…" opens a picker: drag to draw, drag inside to
                    # move, drag an edge/corner to resize (or type x/y/w/h),
                    # then apply it to this recording or every one it fits.

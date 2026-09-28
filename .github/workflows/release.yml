@@ -179,6 +179,9 @@ jobs:
     needs: [windows, linux]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docs
       - uses: actions/download-artifact@v4
         with:
           path: art
@@ -205,9 +208,17 @@ jobs:
           # checksum manifest for every asset (users verify downloads)
           (cd rel && sha256sum $(ls | grep -v '^SHA256SUMS$') > SHA256SUMS)
           ls -la rel
+          # hand-written notes win: docs/RELEASE-NOTES-<ver>.md when it
+          # exists, the generic blurb otherwise. An EXISTING release keeps
+          # its notes — v1.8.0's were overwritten by this step.
+          V="${TAG#v}"
+          NF=""
+          [ -f "docs/RELEASE-NOTES-$V.md" ] && NF="docs/RELEASE-NOTES-$V.md"
           if gh release view "$TAG" --repo $GITHUB_REPOSITORY >/dev/null 2>&1; then
             gh release upload "$TAG" --repo $GITHUB_REPOSITORY --clobber rel/*
-            gh release edit "$TAG" --repo $GITHUB_REPOSITORY --notes "$NOTES"
+          elif [ -n "$NF" ]; then
+            gh release create "$TAG" --repo $GITHUB_REPOSITORY \
+              --title "opngx ${TAG}" --notes-file "$NF" rel/*
           else
             gh release create "$TAG" --repo $GITHUB_REPOSITORY \
               --title "opngx ${TAG}" --notes "$NOTES" rel/*

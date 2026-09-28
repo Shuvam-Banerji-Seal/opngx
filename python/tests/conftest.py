@@ -10,6 +10,14 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 
+# Qt windows save their layout (QSettings) when closed. Point the whole test
+# session at a throwaway config dir so running the suite never rewrites the
+# developer's real studio layout (cycle 24).
+import os as _os
+import tempfile as _tempfile
+
+_os.environ["XDG_CONFIG_HOME"] = _tempfile.mkdtemp(prefix="opngx-test-cfg-")
+
 
 @pytest.fixture(scope="session")
 def native_available():

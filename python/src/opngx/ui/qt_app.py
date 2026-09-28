@@ -245,10 +245,18 @@ your output mother folder:<br>
 The Verify buttons automatically target the current recording's folder.
 <b>Scan folders</b> (the Read info button in Batch scope) lists how many
 recordings were found before you commit.<br>
-<b>Batch window…</b> opens a card per recording: each card shows a real
-decoded frame, its geometry, frame count, fps, crop and live progress.
+<b>Batch window…</b> opens a multi-pane window. <i>Recordings</i>: a card per
+recording (real decoded frame through the curve it will get, crop drawn in
+context, geometry, fps, B/C/G, live progress); click a card to preview it.
+<i>Preview</i>: the selected recording, large and pixel-exact, with its own
+scrubber, crop overlay, output-only toggle and pixel readout.
+<i>Compare</i>: every recording side by side at the same position of its
+timeline. <i>Progress &amp; log</i>: a per-recording status table and log.
+Every pane has ▾ collapse, ⧉ pop out into its own window, ⛶ full screen
+(Esc returns) and ✕ hide (bring it back from View). F11 makes the whole
+window full screen, F10 the Preview pane. The arrangement is remembered.
 Every setting you change in the main window applies to the WHOLE batch,
-and each card can be cropped on its own.<br>
+and each recording can be cropped on its own.<br>
 <b>Drag &amp; drop</b> — a .bin anywhere switches to Single; a FOLDER
 anywhere switches to Batch.
 
@@ -281,6 +289,13 @@ values read from the loaded recording's .footage — and in a batch EVERY
 recording uses its own project file's values (each batch card shows them).
 Editing a field switches to custom mode, which applies your curve to every
 recording in the batch, exactly as the preview shows.</span>
+
+<h3 style='color:#93c5fd'>Screens from 720p to 4K</h3>
+The interface scales itself to the monitor it is on: compact on 720p/768p
+laptops, 1:1 on 1080p (and on 4K at 200 % OS scaling), up to 2× on a 4K
+panel at 100 %. Moving the window to another monitor re-scales it. Pin a
+size in <b>View → Interface scale</b>; <b>View → Fit window to this
+screen</b> recovers a window saved on a bigger display. F11 = full screen.
 
 <h3 style='color:#93c5fd'>Frame viewer</h3>
 Frames are drawn pixel-exact: enlarged by whole-pixel steps with no
@@ -476,8 +491,11 @@ class MainWindow(QtWidgets.QMainWindow):
         icon = _app_icon()
         if not icon.isNull():
             self.setWindowIcon(icon)
-        self.resize(1180, 800)
-        self.setMinimumSize(760, 520)
+        # sized to the screen in _restore_layout (720p..4K, cycle 24)
+        from opngx.ui import scaling
+
+        self._scaling = scaling
+        scaling.fix(self, "setMinimumSize", 700, 480)
         self.setAcceptDrops(True)
 
         self.meta: Optional[opngx.FootageMetadata] = None
@@ -507,8 +525,8 @@ class MainWindow(QtWidgets.QMainWindow):
         card = QtWidgets.QFrame()
         card.setObjectName("card")
         v = QtWidgets.QVBoxLayout(card)
-        v.setContentsMargins(16, 12, 16, 14)
-        v.setSpacing(8)
+        self._scaling.fix(v, "setContentsMargins", 16, 12, 16, 14)
+        self._scaling.fix(v, "setSpacing", 8)
         t = QtWidgets.QLabel(title.upper())
         t.setObjectName("cardtitle")
         v.addWidget(t)
@@ -529,6 +547,30 @@ class MainWindow(QtWidgets.QMainWindow):
             f"<b style='color:#60a5fa'>{title}</b><br>{body}</div>"
         )
 
+    def _toggle_fullscreen(self, on: bool) -> None:
+        if on:
+            self.showFullScreen()
+        else:
+            self.showNormal()
+
+    def _set_scale(self, v: float) -> None:
+        sc = self._scaling.get()
+        if sc is not None:
+            sc.set_choice(v, self.screen())
+            self._log(
+                f"interface scale: {'auto' if v == 0 else f'{v * 100:.0f} %'} "
+                f"(now {sc.factor * 100:.0f} %)"
+            )
+
+    def showEvent(self, ev) -> None:  # noqa: N802
+        super().showEvent(ev)
+        if not getattr(self, "_tracked_screen", False):
+            self._tracked_screen = True
+            sc = self._scaling.get()
+            if sc is not None:
+                sc.track(self)
+                sc.apply(self.screen())
+
     # ---------------------------------------------------------------- menu
     def _menu(self) -> None:
         mb = self.menuBar()
@@ -541,6 +583,29 @@ class MainWindow(QtWidgets.QMainWindow):
         act_quit.setShortcut("Ctrl+Q")
         act_quit.triggered.connect(self.close)
         m_file.addAction(act_quit)
+
+        m_view = mb.addMenu("&View")
+        self.act_full = QtGui.QAction("Full screen", self)
+        self.act_full.setShortcut("F11")
+        self.act_full.setCheckable(True)
+        self.act_full.toggled.connect(self._toggle_fullscreen)
+        m_view.addAction(self.act_full)
+        m_scale = m_view.addMenu("Interface scale")
+        self._scale_group = QtGui.QActionGroup(self)
+        from opngx.ui import scaling as _sc
+
+        cur = _sc.get().choice if _sc.get() else 0.0
+        for val in _sc.CHOICES:
+            a = QtGui.QAction("Auto (fit this monitor)" if val == 0 else f"{val * 100:.0f} %", self)
+            a.setCheckable(True)
+            a.setChecked(abs(val - cur) < 1e-6)
+            a.triggered.connect(lambda _=False, v=val: self._set_scale(v))
+            self._scale_group.addAction(a)
+            m_scale.addAction(a)
+        m_view.addSeparator()
+        fit = QtGui.QAction("Fit window to this screen", self)
+        fit.triggered.connect(lambda: self._scaling.fit_to_screen(self, 1180, 800))
+        m_view.addAction(fit)
 
         m_help = mb.addMenu("&Help")
         g1 = QtGui.QAction("Field guide — what every control means", self)
@@ -570,7 +635,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _guide(self, title: str, html: str) -> None:
         d = QtWidgets.QDialog(self)
         d.setWindowTitle(title)
-        d.resize(720, 560)
+        self._scaling.fit_to_screen(d, 720, 560)
         v = QtWidgets.QVBoxLayout(d)
         tb = QtWidgets.QTextBrowser()
         # document text color must be set on the DOCUMENT, not the widget:
@@ -821,7 +886,7 @@ class MainWindow(QtWidgets.QMainWindow):
         def mini_label(text: str) -> QtWidgets.QLabel:
             lab = QtWidgets.QLabel(text)
             lab.setObjectName("fieldlabel")
-            lab.setMinimumWidth(78)  # never clip, even when squeezed
+            self._scaling.fix(lab, "setMinimumWidth", 78)  # never clip, even when squeezed
             return lab
 
         for lbl, w, tip_t, tip_b in (
@@ -872,7 +937,7 @@ class MainWindow(QtWidgets.QMainWindow):
             h = QtWidgets.QHBoxLayout()
             lab = QtWidgets.QLabel(lbl)
             lab.setObjectName("fieldlabel")
-            lab.setFixedWidth(78)
+            self._scaling.fix(lab, "setFixedWidth", 78)
             h.addWidget(lab)
             h.addWidget(w, 1)
             tv.addLayout(h)
@@ -888,7 +953,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.jpg_slider.setRange(40, 100)
         self.jpg_slider.setValue(90)
         self.jpg_label = QtWidgets.QLabel("90")
-        self.jpg_label.setFixedWidth(30)
+        self._scaling.fix(self.jpg_label, "setFixedWidth", 30)
         field_row(
             "bit depth",
             self.depth_combo,
@@ -913,7 +978,7 @@ class MainWindow(QtWidgets.QMainWindow):
         jrow = QtWidgets.QHBoxLayout()
         jlab = QtWidgets.QLabel("jpeg q")
         jlab.setObjectName("fieldlabel")
-        jlab.setFixedWidth(78)
+        self._scaling.fix(jlab, "setFixedWidth", 78)
         jrow.addWidget(jlab)
         jrow.addWidget(self.jpg_slider, 1)
         jrow.addWidget(self.jpg_label)
@@ -933,12 +998,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.jobs_slider.setRange(1, maxcores)
         self.jobs_slider.setValue(os.cpu_count() or 4)
         self.jobs_label = QtWidgets.QLabel(str(self.jobs_slider.value()))
-        self.jobs_label.setFixedWidth(30)
+        self._scaling.fix(self.jobs_label, "setFixedWidth", 30)
         self.level_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.level_slider.setRange(1, 12)
         self.level_slider.setValue(6)
         self.level_label = QtWidgets.QLabel("6")
-        self.level_label.setFixedWidth(30)
+        self._scaling.fix(self.level_label, "setFixedWidth", 30)
         field_row(
             "jobs",
             self.jobs_slider,
@@ -1009,12 +1074,12 @@ class MainWindow(QtWidgets.QMainWindow):
         nrow = QtWidgets.QHBoxLayout()
         nrow.addWidget(mini_label("prefix"))
         self.prefix_edit = QtWidgets.QLineEdit("brow_")
-        self.prefix_edit.setMaximumWidth(90)
+        self._scaling.fix(self.prefix_edit, "setMaximumWidth", 90)
         nrow.addWidget(self.prefix_edit)
         nrow.addSpacing(10)
         nrow.addWidget(mini_label("ext"))
         self.ext_edit = QtWidgets.QLineEdit(".Png")
-        self.ext_edit.setMaximumWidth(70)
+        self._scaling.fix(self.ext_edit, "setMaximumWidth", 70)
         nrow.addWidget(self.ext_edit)
         nrow.addStretch(1)
         ov.addLayout(nrow)
@@ -1045,6 +1110,21 @@ class MainWindow(QtWidgets.QMainWindow):
         left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         left_scroll.viewport().setAutoFillBackground(False)
         left.setAutoFillBackground(False)
+        # never let the splitter squeeze the settings column below what its
+        # rows need: at 720p v1.8.0 clipped "Read info" and the gamma box
+        # behind a horizontal scrollbar. Scroll vertically only.
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._left_scroll, self._left_col = left_scroll, left
+
+        def _fit_left(_s=None):
+            need = self._left_col.minimumSizeHint().width()
+            sb = self._left_scroll.verticalScrollBar().sizeHint().width()
+            self._left_scroll.setMinimumWidth(need + sb + 4)
+
+        self._fit_left = _fit_left
+        QtCore.QTimer.singleShot(0, _fit_left)
+        if self._scaling.get() is not None:
+            self._scaling.get().on_change(lambda s: QtCore.QTimer.singleShot(0, _fit_left))
 
         self.left_vsplit = QtWidgets.QSplitter(Qt.Vertical)
         self.left_vsplit.setChildrenCollapsible(False)
@@ -1089,7 +1169,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # holding a pre-scaled pixmap (stale on resize, blurry, and it
         # propped the layout open) — see opngx/ui/frameview.py
         self.viewer_img = FrameView(self, placeholder="probe a recording, then scrub")
-        self.viewer_img.setMinimumHeight(210)
+        self._scaling.fix(self.viewer_img, "setMinimumHeight", 160)
         self.viewer_img.hovered.connect(self._on_viewer_hover)
         wv.addWidget(self.viewer_img, 1)
         vtools = QtWidgets.QHBoxLayout()
@@ -1114,9 +1194,9 @@ class MainWindow(QtWidgets.QMainWindow):
         wv.addLayout(vtools)
         vrow = QtWidgets.QHBoxLayout()
         self.prev_btn = QtWidgets.QPushButton("◀")
-        self.prev_btn.setFixedWidth(44)
+        self._scaling.fix(self.prev_btn, "setFixedWidth", 44)
         self.next_btn = QtWidgets.QPushButton("▶")
-        self.next_btn.setFixedWidth(44)
+        self._scaling.fix(self.next_btn, "setFixedWidth", 44)
         self.frame_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.frame_slider.setRange(0, 0)
         vrow.addWidget(self.prev_btn)
@@ -1170,6 +1250,8 @@ class MainWindow(QtWidgets.QMainWindow):
         rv.addWidget(self.vsplit)
         self.split.addWidget(right)
         self.split.setSizes([520, 620])
+        self.split.setStretchFactor(0, 0)
+        self.split.setStretchFactor(1, 1)
 
         # ---------------- action bar ----------------
         bar = QtWidgets.QHBoxLayout()
@@ -1232,7 +1314,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.crop_btn.clicked.connect(self._open_crop_editor)
         bar.addWidget(self.crop_btn)
         self.progress = QtWidgets.QProgressBar()
-        self.progress.setFixedHeight(16)
+        self._scaling.fix(self.progress, "setFixedHeight", 16)
         bar.addWidget(self.progress, 1)
         self.status_lbl = QtWidgets.QLabel("idle")
         self.status_lbl.setObjectName("hint")
@@ -1263,11 +1345,17 @@ class MainWindow(QtWidgets.QMainWindow):
         remembers how YOU arranged it)."""
         self._settings = QtCore.QSettings("opngx", "opngx-studio")
         geo = self._settings.value("win/geometry")
+        restored = False
         if geo is not None:
             try:
-                self.restoreGeometry(geo)
+                restored = bool(self.restoreGeometry(geo))
             except Exception:
-                pass
+                restored = False
+        if restored:
+            # saved on a bigger / now-disconnected monitor -> pull it back
+            self._scaling.ensure_on_screen(self)
+        else:
+            self._scaling.fit_to_screen(self, 1180, 800)
         for key, sp in (
             ("split/main", self.split),
             ("split/left", self.left_vsplit),
@@ -2411,7 +2499,10 @@ def apply_theme(app: "QtWidgets.QApplication") -> None:
         pal.setColor(group, cr.ToolTipText, QtGui.QColor("#eaf2ea"))
         pal.setColor(group, cr.PlaceholderText, QtGui.QColor("#8a948a"))
     app.setPalette(pal)
-    app.setStyleSheet(QSS)
+    # QSS + font + fixed sizes scaled to the monitor (720p..4K, cycle 24)
+    from opngx.ui import scaling
+
+    scaling.install(app, QSS)
 
 
 if __name__ == "__main__":

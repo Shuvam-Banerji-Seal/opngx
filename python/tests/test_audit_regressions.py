@@ -428,6 +428,9 @@ def test_ar9_push_progress_callback_fires_and_completes(fixture_dir):
 # Qt-inherited names MainWindow may call without being defined in qt_app.py.
 _QT_SELF_WHITELIST = {
     "setWindowTitle",
+    "screen",
+    "showFullScreen",
+    "showNormal",
     "setWindowIcon",
     "windowIcon",
     "resize",
@@ -1477,3 +1480,131 @@ def test_ar29_crop_editor_maps_the_mouse_and_cancel_changes_nothing(tmp_path):
     assert [i.name for i in skipped] == [bw.items[1].name]
     assert bw.items[0].crop == (30, 0, 20, 20) and bw.items[1].crop is None
     bw.close()
+
+
+# --------------------------------------------------------------------- AR-30
+def test_ar30_qt_studio_imports_without_tkinter():
+    """cycle 24: opngx/ui/__init__.py imported the Tk edition eagerly, so
+    the Qt studio could not even be imported on a Python without tkinter
+    (uv standalone builds — every CI run since v1.6.x failed on this)."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; sys.modules['tkinter'] = None; sys.modules['tkinter.ttk'] = None\n"
+        "import opngx.ui, opngx.ui.batch, opngx.ui.frameview, opngx.ui.qt_app\n"
+        "print('ok')"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0 and "ok" in r.stdout, r.stderr[-800:]
+
+
+# --------------------------------------------------------------------- AR-31
+def test_ar31_batch_panes_collapse_float_fullscreen_and_compare(tmp_path):
+    """cycle 24: the batch window is a multi-pane window — Preview, Compare
+    and Progress panes can be collapsed, popped out, made full screen and
+    hidden/restored; Compare shows every recording at the same position."""
+    from PySide6.QtCore import QThread
+
+    app = _qt_or_skip()
+    os.environ["XDG_CONFIG_HOME"] = str(tmp_path / "cfg")  # never touch the user's layout
+    from opngx.ui.batch import BatchWindow
+
+    root = _studio_fixture(tmp_path, [("recA", 30, 10, 1.4), ("recB", 60, 25, 0.8)])
+    bw = BatchWindow(None, str(root), str(tmp_path / "out"), dict(
+        fmt="png", mode="reference", bit_depth=8, channels=6, jobs=2, level=6,
+        prefix="brow_", ext=".Png",
+    ))
+    bw.resize(1400, 900)
+    bw.show()
+    for _ in range(10):
+        app.processEvents()
+        QThread.msleep(5)
+    try:
+        # preview follows the selection and uses THAT recording's .footage
+        import numpy as np
+
+        bw.select(bw.items[1])
+        assert bw.pv_title.text() == bw.items[1].name
+        assert bw.pv_view.image() is not None
+        want = _want(root / "recB" / "rec.bin", bw.pv_slider.value(), 60, 25, 0.8)
+        assert np.array_equal(bw._pv_arr, want)
+
+        # compare: one live view per recording
+        bw._render_compare()
+        assert all(v.image() is not None for v in bw._compare_views.values())
+
+        p = bw.pane_compare
+        p.set_collapsed(True)
+        assert p.is_collapsed() and not p.widget().isVisible()
+        p.set_collapsed(False)
+        assert not p.is_collapsed() and p.widget().isVisible()
+
+        p.toggle_floating()
+        assert p.isFloating()
+        p.toggle_floating()
+        assert not p.isFloating()
+
+        pv = bw.pane_preview
+        pv.toggle_fullscreen()
+        app.processEvents()
+        assert pv.isFloating() and pv.isFullScreen()
+        pv.leave_fullscreen()
+        app.processEvents()
+        assert not pv.isFullScreen() and not pv.isFloating(), "Esc must re-dock"
+
+        p.close()
+        assert not p.isVisible()
+        p.toggleViewAction().trigger()
+        assert p.isVisible()
+
+        # the cards reflow into as many columns as fit
+        bw.resize(700, 900)
+        app.processEvents()
+        narrow = bw.grid_host._cols
+        bw.resize(2400, 900)
+        app.processEvents()
+        assert bw.grid_host._cols >= narrow
+    finally:
+        bw.close()
+        app.processEvents()
+
+
+# --------------------------------------------------------------------- AR-32
+def test_ar32_ui_scale_follows_the_monitor():
+    """cycle 24: the studio must be usable from 720p to 4K. 1080p (or 4K
+    at 200 % OS scaling, which is 1080p logical) is 1.0; 720p shrinks a
+    little; 4K at 100 % doubles. Every QSS px literal follows the factor."""
+    _qt_or_skip()
+    from PySide6.QtCore import QRect
+
+    from opngx.ui import scaling
+
+    class Scr:
+        def __init__(self, w, h):
+            self._g = QRect(0, 0, w, h)
+
+        def geometry(self):
+            return self._g
+
+        availableGeometry = geometry
+
+    got = {h: scaling.auto_scale(Scr(w, h)) for w, h in
+           ((1280, 720), (1366, 768), (1920, 1080), (2560, 1440), (3840, 2160))}
+    assert got[1080] == 1.0 and got[720] == 0.9 and got[768] == 0.9
+    assert got[1440] == 1.35 and got[2160] == 2.0
+    assert scaling.scale_qss("a { padding: 7px 10px; border: 1px; }", 2.0) == (
+        "a { padding: 14px 20px; border: 2px; }"
+    )
+
+    # a window never opens bigger than the screen it is on
+    from PySide6 import QtWidgets
+
+    w = QtWidgets.QWidget()
+    scaling.fit_to_screen(w, 99999, 99999)
+    ag = w.screen().availableGeometry()
+    assert w.width() <= ag.width() and w.height() <= ag.height()
+    w.setGeometry(ag.right() + 500, ag.bottom() + 500, ag.width() * 2, 300)
+    scaling.ensure_on_screen(w)
+    assert ag.contains(w.geometry()), "a window restored off-screen is pulled back"
+    w.close()

@@ -222,7 +222,8 @@ if not _QT:  # pragma: no cover
     BatchWindow = None  # type: ignore[assignment]
     CropEditor = None  # type: ignore[assignment]
 else:
-    from opngx.ui.frameview import FrameView
+    from opngx.ui import scaling
+    from opngx.ui.frameview import FrameView, gray_to_qimage
 
     def _spin(lo: int, hi: int, val: int) -> "QtWidgets.QSpinBox":
         s = QtWidgets.QSpinBox()
@@ -257,7 +258,7 @@ else:
         ) -> None:
             super().__init__(parent)
             self.setWindowTitle("Crop — region of interest")
-            self.resize(820, 680)
+            scaling.fit_to_screen(self, 820, 680)
             self._fw, self._fh = int(frame_size[0]), int(frame_size[1])
             self._img = image
             if transform is not None:
@@ -283,7 +284,7 @@ else:
             self.view.hovered.connect(self._on_hover)
             split.addWidget(self.view)
             self.preview = FrameView(self, placeholder="preview")
-            self.preview.setMinimumHeight(110)
+            scaling.fix(self.preview, "setMinimumHeight", 110)
             split.addWidget(self.preview)
             split.setStretchFactor(0, 4)
             split.setStretchFactor(1, 1)
@@ -429,18 +430,21 @@ else:
         crop state, status, progress."""
 
         cropRequested = Signal(object)  # BatchItem
-        previewRequested = Signal(object)  # BatchItem
+        previewRequested = Signal(object)  # BatchItem -> open in the studio
+        selected = Signal(object)  # BatchItem -> show in the Preview pane
 
         def __init__(self, item: BatchItem) -> None:
             super().__init__()
             self.setObjectName("card")
             self.item = item
             v = QtWidgets.QVBoxLayout(self)
-            v.setContentsMargins(10, 8, 10, 10)
-            v.setSpacing(6)
+            scaling.fix(v, "setContentsMargins", 10, 8, 10, 10)
+            scaling.fix(v, "setSpacing", 6)
 
             self.thumb = FrameView(self, placeholder="no preview")
-            self.thumb.setFixedHeight(150)
+            scaling.fix(self.thumb, "setFixedHeight", 150)
+            scaling.fix(self, "setMinimumWidth", 260)
+            self.thumb.setCursor(Qt.PointingHandCursor)
             self.thumb.setImage(item.thumb)
             self.thumb.setSelection(item.crop)
             v.addWidget(self.thumb)
@@ -452,6 +456,7 @@ else:
 
             self.facts = QtWidgets.QLabel()
             self.facts.setObjectName("hint")
+            self.facts.setWordWrap(True)  # "256 × 300 → … · fps" was clipped
             v.addWidget(self.facts)
 
             self.xform_lbl = QtWidgets.QLabel()
@@ -468,19 +473,31 @@ else:
             v.addWidget(self.status_lbl)
 
             self.bar = QtWidgets.QProgressBar()
-            self.bar.setFixedHeight(12)
+            scaling.fix(self.bar, "setFixedHeight", 12)
             self.bar.setRange(0, 100)
             v.addWidget(self.bar)
 
             row = QtWidgets.QHBoxLayout()
             self.crop_btn = QtWidgets.QPushButton("Crop…")
             self.crop_btn.clicked.connect(lambda: self.cropRequested.emit(self.item))
-            self.prev_btn = QtWidgets.QPushButton("Preview")
+            self.prev_btn = QtWidgets.QPushButton("Open in studio")
+            self.prev_btn.setToolTip("Load this recording into the main window's viewer")
             self.prev_btn.clicked.connect(lambda: self.previewRequested.emit(self.item))
             row.addWidget(self.crop_btn)
             row.addWidget(self.prev_btn)
             v.addLayout(row)
             self.refresh()
+
+        def mousePressEvent(self, ev) -> None:  # noqa: N802
+            if ev.button() == Qt.LeftButton:
+                self.selected.emit(self.item)
+            super().mousePressEvent(ev)
+
+        def set_selected(self, on: bool) -> None:
+            self.setProperty("selected", bool(on))
+            self.setStyleSheet(
+                "QFrame#card { border: 2px solid #7fb069; }" if on else ""
+            )
 
         def set_transform(self, settings: dict[str, Any]) -> None:
             self.item.thumb = render_thumb(self.item, settings)
@@ -516,19 +533,152 @@ else:
             else:
                 self.bar.setValue(0)
 
-    class BatchWindow(QtWidgets.QDialog):
-        """The dedicated batch surface the user asked for.
+    class Pane(QtWidgets.QDockWidget):
+        """A dock pane with its own title bar: collapse, pop out into a
+        separate window, full screen, hide (cycle 24)."""
 
-        One card per recording with a real decoded frame, the settings that
-        will be used, the crop in force, live per-card progress, and its own
-        Extract/Cancel buttons. Settings come LIVE from the studio
-        (`settings_fn`) so what the main window shows is what the batch
-        applies — the v1.7.0 window froze them at open time.
+        def __init__(self, title: str, name: str, parent=None) -> None:
+            super().__init__(title, parent)
+            self.setObjectName(name)
+            self.setFeatures(
+                QtWidgets.QDockWidget.DockWidgetClosable
+                | QtWidgets.QDockWidget.DockWidgetMovable
+                | QtWidgets.QDockWidget.DockWidgetFloatable
+            )
+            self._collapsed = False
+            self._fs_prev_floating: Optional[bool] = None
+            bar = QtWidgets.QFrame()
+            bar.setObjectName("panebar")
+            h = QtWidgets.QHBoxLayout(bar)
+            h.setContentsMargins(8, 2, 4, 2)
+            h.setSpacing(2)
+            self.title_lbl = QtWidgets.QLabel(title.upper())
+            self.title_lbl.setObjectName("cardtitle")
+            h.addWidget(self.title_lbl, 1)
+
+            def tool(txt, tip, fn):
+                b = QtWidgets.QToolButton()
+                b.setText(txt)
+                b.setToolTip(tip)
+                b.setAutoRaise(True)
+                b.clicked.connect(fn)
+                h.addWidget(b)
+                return b
+
+            self.btn_collapse = tool("▾", "Collapse / expand this pane", self.toggle_collapsed)
+            self.btn_float = tool("⧉", "Pop out into its own window / dock back", self.toggle_floating)
+            self.btn_full = tool("⛶", "Full screen (Esc to return)", self.toggle_fullscreen)
+            tool("✕", "Hide (bring back from the View menu)", self.close)
+            self.setTitleBarWidget(bar)
+            esc = QtGui.QShortcut(QtGui.QKeySequence(Qt.Key_Escape), self)
+            esc.setContext(Qt.WidgetWithChildrenShortcut)
+            esc.activated.connect(self.leave_fullscreen)
+
+        # ---------------------------------------------------------------
+        def is_collapsed(self) -> bool:
+            return self._collapsed
+
+        def toggle_collapsed(self) -> None:
+            self.set_collapsed(not self._collapsed)
+
+        def set_collapsed(self, on: bool) -> None:
+            w = self.widget()
+            if w is None or on == self._collapsed:
+                return
+            self._collapsed = on
+            w.setVisible(not on)
+            self.btn_collapse.setText("▸" if on else "▾")
+            if not on:
+                self.visibilityChanged.emit(True)
+            if on:
+                self.setMaximumHeight(self.titleBarWidget().sizeHint().height() + 6)
+            else:
+                self.setMaximumHeight(16777215)
+
+        def toggle_floating(self) -> None:
+            self.leave_fullscreen()
+            self.setFloating(not self.isFloating())
+            if self.isFloating():
+                self.set_collapsed(False)
+                scaling.fit_to_screen(self, 900, 640)
+
+        def toggle_fullscreen(self) -> None:
+            if self.isFullScreen():
+                self.leave_fullscreen()
+                return
+            self.set_collapsed(False)
+            self._fs_prev_floating = self.isFloating()
+            self.setFloating(True)
+            self.showFullScreen()
+            self.btn_full.setText("🗗")
+
+        def leave_fullscreen(self) -> None:
+            if not self.isFullScreen():
+                return
+            self.showNormal()
+            self.btn_full.setText("⛶")
+            if self._fs_prev_floating is False:
+                self.setFloating(False)
+            self._fs_prev_floating = None
+
+    class _FlowGrid(QtWidgets.QWidget):
+        """Cards in as many columns as fit (v1.8.0 hard-coded 3, which was
+        cramped at 720p and left most of a 4K screen empty)."""
+
+        def __init__(self, parent=None, min_col: int = 280) -> None:
+            super().__init__(parent)
+            self.setObjectName("gridhost")
+            self.setStyleSheet("QWidget#gridhost { background: transparent; }")
+            self.grid = QtWidgets.QGridLayout(self)
+            self.grid.setSpacing(10)
+            self._items: list[QtWidgets.QWidget] = []
+            self._min_col = min_col
+            self._cols = 0
+
+        def set_widgets(self, widgets) -> None:
+            while self.grid.count():
+                self.grid.takeAt(0)
+            self._items = list(widgets)
+            self._cols = 0
+            self._reflow()
+
+        def resizeEvent(self, ev) -> None:  # noqa: N802
+            super().resizeEvent(ev)
+            self._reflow()
+
+        def _reflow(self) -> None:
+            cols = max(1, self.width() // max(1, scaling.px(self._min_col)))
+            if self._items:
+                cols = min(cols, len(self._items))
+            if cols == self._cols:
+                return
+            self._cols = cols
+            while self.grid.count():
+                self.grid.takeAt(0)
+            for n, w in enumerate(self._items):
+                self.grid.addWidget(w, n // cols, n % cols, Qt.AlignTop)
+            for c in range(cols):
+                self.grid.setColumnStretch(c, 1)
+            self.grid.setRowStretch(len(self._items) // cols + 1, 1)
+
+    class BatchWindow(QtWidgets.QMainWindow):
+        """The dedicated batch surface.
+
+        cycle 24: a multi-pane window instead of a single scrolling grid.
+        Recordings (centre) · Preview (the selected recording, large, with
+        its own scrubber) · Compare (every recording side by side at the
+        same point of its timeline) · Progress & log. Every pane can be
+        collapsed, popped out into its own window, made full screen, hidden
+        and brought back from the View menu; the arrangement is remembered.
+
+        Settings come LIVE from the studio (`settings_fn`) so what the main
+        window shows is what the batch applies.
         """
 
         progress = Signal(object)  # BatchItem
         finished = Signal(object)  # list[BatchItem]
         failed = Signal(str)
+        log = Signal(str)
 
         def __init__(
             self,
@@ -539,47 +689,56 @@ else:
             settings_fn: Optional[Callable[[], dict[str, Any]]] = None,
         ) -> None:
             super().__init__(parent)
+            self.setWindowFlag(Qt.Window, True)
             self.setWindowTitle(
                 f"opngx batch — {os.path.basename(root.rstrip('/')) or root}"
             )
-            self.resize(1180, 780)
+            self.setDockOptions(
+                QtWidgets.QMainWindow.AnimatedDocks
+                | QtWidgets.QMainWindow.AllowNestedDocks
+                | QtWidgets.QMainWindow.AllowTabbedDocks
+            )
             self.root = root
             self.out_root = out_root
             self.settings = dict(settings)
             self.settings_fn = settings_fn
             self.items: list[BatchItem] = []
             self.cards: dict[str, BatchCard] = {}
+            self.current: Optional[BatchItem] = None
+            self._readers: dict[str, Any] = {}
+            self._compare_views: dict[str, FrameView] = {}
             self._running = False
             self._cancel = False
             self._t0 = 0.0
 
-            root_lay = QtWidgets.QVBoxLayout(self)
+            # ---------------- centre: recordings ----------------
+            central = QtWidgets.QWidget()
+            root_lay = QtWidgets.QVBoxLayout(central)
+            root_lay.setContentsMargins(8, 8, 8, 4)
             top = QtWidgets.QHBoxLayout()
             self.summary = QtWidgets.QLabel()
             self.summary.setObjectName("subtitle")
             self.summary.setWordWrap(True)
             top.addWidget(self.summary, 1)
-            self.rescan = QtWidgets.QPushButton("Rescan")
-            self.rescan.clicked.connect(lambda: self.load(self.root))
-            top.addWidget(self.rescan)
             root_lay.addLayout(top)
-
             self.scroll = QtWidgets.QScrollArea()
             self.scroll.setWidgetResizable(True)
             self.scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-            self.grid_host = QtWidgets.QWidget()
-            self.grid_host.setObjectName("gridhost")
-            self.grid = QtWidgets.QGridLayout(self.grid_host)
-            self.grid.setSpacing(10)
+            self.grid_host = _FlowGrid()
+            self.grid = self.grid_host.grid
             self.scroll.setWidget(self.grid_host)
             # QScrollArea.setWidget() forces autoFillBackground on, which
             # painted the platform window colour (white) behind the cards
             self.grid_host.setAutoFillBackground(False)
             self.scroll.viewport().setAutoFillBackground(False)
-            self.grid_host.setStyleSheet("QWidget#gridhost { background: transparent; }")
             root_lay.addWidget(self.scroll, 1)
+            self.setCentralWidget(central)
 
-            bar = QtWidgets.QHBoxLayout()
+            # ---------------- toolbar ----------------
+            tb = QtWidgets.QToolBar("Batch")
+            tb.setObjectName("batchtoolbar")
+            tb.setMovable(False)
+            self.addToolBar(Qt.TopToolBarArea, tb)
             self.go = QtWidgets.QPushButton("▶  Extract all")
             self.go.setObjectName("accent")
             self.go.clicked.connect(self.start)
@@ -589,21 +748,255 @@ else:
             self.stop.clicked.connect(self.cancel)
             self.close_all = QtWidgets.QPushButton("Clear crops")
             self.close_all.clicked.connect(self.clear_crops)
-            bar.addWidget(self.go)
-            bar.addWidget(self.stop)
-            bar.addWidget(self.close_all)
-            bar.addStretch(1)
+            self.rescan = QtWidgets.QPushButton("Rescan")
+            self.rescan.clicked.connect(lambda: self.load(self.root))
+            for w in (self.go, self.stop, self.close_all, self.rescan):
+                tb.addWidget(w)
+            spacer = QtWidgets.QWidget()
+            spacer.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
+            )
+            tb.addWidget(spacer)
             self.status = QtWidgets.QLabel("idle")
             self.status.setObjectName("hint")
-            bar.addWidget(self.status)
-            root_lay.addLayout(bar)
+            tb.addWidget(self.status)
+
+            # ---------------- panes ----------------
+            self._build_preview_pane()
+            self._build_compare_pane()
+            self._build_progress_pane()
+            self.addDockWidget(Qt.RightDockWidgetArea, self.pane_preview)
+            self.addDockWidget(Qt.BottomDockWidgetArea, self.pane_compare)
+            self.addDockWidget(Qt.BottomDockWidgetArea, self.pane_progress)
+            self.tabifyDockWidget(self.pane_compare, self.pane_progress)
+            self.pane_compare.raise_()
+            self._default_state = self.saveState()
+            self._build_menu()
 
             self.progress.connect(self._on_item)
             self.finished.connect(self._on_done)
             self.failed.connect(self._on_failed)
-            self.load(root)
+            self.log.connect(self._append_log)
+            self._render_timer = QtCore.QTimer(self)
+            self._render_timer.setSingleShot(True)
+            self._render_timer.setInterval(0)
+            self._render_timer.timeout.connect(self._render_now)
+            self._compare_timer = QtCore.QTimer(self)
+            self._compare_timer.setSingleShot(True)
+            self._compare_timer.setInterval(15)
+            self._compare_timer.timeout.connect(self._render_compare)
 
-        # -----------------------------------------------------------------
+            # a pane that becomes visible (shown, un-tabbed, expanded) renders
+            # itself — the first render happens before the window is shown
+            self.pane_compare.visibilityChanged.connect(
+                lambda vis: vis and self._compare_timer.start()
+            )
+            self.pane_preview.visibilityChanged.connect(
+                lambda vis: vis and self._render_timer.start()
+            )
+            self._sized = False
+            self._qs = QtCore.QSettings("opngx", "opngx-studio")
+            self.load(root)
+            scaling.fit_to_screen(self, 1440, 900)
+            self._had_state = self._restore_state()
+
+        # ------------------------------------------------------ panes ----
+        def _build_preview_pane(self) -> None:
+            self.pane_preview = Pane("Preview", "pane_preview", self)
+            host = QtWidgets.QWidget()
+            v = QtWidgets.QVBoxLayout(host)
+            v.setContentsMargins(8, 4, 8, 8)
+            nav = QtWidgets.QHBoxLayout()
+            self.pv_prev_rec = QtWidgets.QToolButton()
+            self.pv_prev_rec.setText("◀")
+            self.pv_prev_rec.setToolTip("Previous recording")
+            self.pv_prev_rec.clicked.connect(lambda: self._step_recording(-1))
+            self.pv_next_rec = QtWidgets.QToolButton()
+            self.pv_next_rec.setText("▶")
+            self.pv_next_rec.setToolTip("Next recording")
+            self.pv_next_rec.clicked.connect(lambda: self._step_recording(+1))
+            self.pv_title = QtWidgets.QLabel("select a recording")
+            self.pv_title.setObjectName("cardtitle")
+            nav.addWidget(self.pv_prev_rec)
+            nav.addWidget(self.pv_title, 1)
+            nav.addWidget(self.pv_next_rec)
+            v.addLayout(nav)
+            self.pv_view = FrameView(host, placeholder="click a recording card")
+            self.pv_view.hovered.connect(self._on_preview_hover)
+            v.addWidget(self.pv_view, 1)
+            row = QtWidgets.QHBoxLayout()
+            self.pv_slider = QtWidgets.QSlider(Qt.Horizontal)
+            self.pv_slider.setRange(0, 0)
+            self.pv_slider.valueChanged.connect(lambda _: self._render_timer.start())
+            self.pv_frame = QtWidgets.QLabel("frame —")
+            self.pv_frame.setObjectName("hint")
+            row.addWidget(self.pv_slider, 1)
+            row.addWidget(self.pv_frame)
+            v.addLayout(row)
+            row2 = QtWidgets.QHBoxLayout()
+            self.pv_output_only = QtWidgets.QCheckBox("output only")
+            self.pv_output_only.setToolTip(
+                "On: exactly the cropped pixels that will be written.\n"
+                "Off: the full frame with the crop outlined."
+            )
+            self.pv_output_only.toggled.connect(lambda _: self._render_timer.start())
+            row2.addWidget(self.pv_output_only)
+            self.pv_crop = QtWidgets.QPushButton("Crop…")
+            self.pv_crop.clicked.connect(
+                lambda: self.current is not None and self.open_crop_editor(self.current)
+            )
+            row2.addWidget(self.pv_crop)
+            row2.addStretch(1)
+            self.pv_info = QtWidgets.QLabel("")
+            self.pv_info.setObjectName("hint")
+            row2.addWidget(self.pv_info)
+            v.addLayout(row2)
+            self.pv_xform = QtWidgets.QLabel("")
+            self.pv_xform.setObjectName("hint")
+            self.pv_xform.setWordWrap(True)
+            v.addWidget(self.pv_xform)
+            self.pane_preview.setWidget(host)
+
+        def _build_compare_pane(self) -> None:
+            self.pane_compare = Pane("Compare", "pane_compare", self)
+            host = QtWidgets.QWidget()
+            v = QtWidgets.QVBoxLayout(host)
+            v.setContentsMargins(8, 4, 8, 8)
+            row = QtWidgets.QHBoxLayout()
+            lab = QtWidgets.QLabel("position in each recording")
+            lab.setObjectName("fieldlabel")
+            row.addWidget(lab)
+            self.cmp_slider = QtWidgets.QSlider(Qt.Horizontal)
+            self.cmp_slider.setRange(0, 1000)
+            self.cmp_slider.setValue(500)
+            self.cmp_slider.valueChanged.connect(lambda _: self._compare_timer.start())
+            row.addWidget(self.cmp_slider, 1)
+            self.cmp_lbl = QtWidgets.QLabel("50.0 %")
+            self.cmp_lbl.setObjectName("hint")
+            row.addWidget(self.cmp_lbl)
+            v.addLayout(row)
+            sc = QtWidgets.QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setFrameShape(QtWidgets.QFrame.NoFrame)
+            self.cmp_grid = _FlowGrid(min_col=220)
+            sc.setWidget(self.cmp_grid)
+            self.cmp_grid.setAutoFillBackground(False)
+            sc.viewport().setAutoFillBackground(False)
+            v.addWidget(sc, 1)
+            self.pane_compare.setWidget(host)
+
+        def _build_progress_pane(self) -> None:
+            self.pane_progress = Pane("Progress & log", "pane_progress", self)
+            host = QtWidgets.QWidget()
+            v = QtWidgets.QVBoxLayout(host)
+            v.setContentsMargins(8, 4, 8, 8)
+            self.total_bar = QtWidgets.QProgressBar()
+            self.total_bar.setRange(0, 1000)
+            scaling.fix(self.total_bar, "setFixedHeight", 14)
+            v.addWidget(self.total_bar)
+            split = QtWidgets.QSplitter(Qt.Horizontal)
+            self.table = QtWidgets.QTableWidget(0, 6)
+            self.table.setHorizontalHeaderLabels(
+                ["recording", "status", "frames", "fps", "time", "output"]
+            )
+            self.table.verticalHeader().setVisible(False)
+            self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+            self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+            self.table.horizontalHeader().setStretchLastSection(True)
+            self.table.cellClicked.connect(
+                lambda r, _c: 0 <= r < len(self.items) and self.select(self.items[r])
+            )
+            split.addWidget(self.table)
+            self.log_view = QtWidgets.QPlainTextEdit()
+            self.log_view.setReadOnly(True)
+            self.log_view.setMaximumBlockCount(3000)
+            split.addWidget(self.log_view)
+            split.setStretchFactor(0, 3)
+            split.setStretchFactor(1, 2)
+            v.addWidget(split, 1)
+            self.pane_progress.setWidget(host)
+
+        def _build_menu(self) -> None:
+            m = self.menuBar().addMenu("&View")
+            for pane in (self.pane_preview, self.pane_compare, self.pane_progress):
+                m.addAction(pane.toggleViewAction())
+            m.addSeparator()
+            collapse = QtGui.QAction("Collapse all panes", self)
+            collapse.triggered.connect(lambda: [p.set_collapsed(True) for p in self.panes()])
+            expand = QtGui.QAction("Expand all panes", self)
+            expand.triggered.connect(lambda: [p.set_collapsed(False) for p in self.panes()])
+            m.addAction(collapse)
+            m.addAction(expand)
+            m.addSeparator()
+            self.act_full = QtGui.QAction("Full screen", self)
+            self.act_full.setShortcut("F11")
+            self.act_full.setCheckable(True)
+            self.act_full.toggled.connect(
+                lambda on: self.showFullScreen() if on else self.showNormal()
+            )
+            m.addAction(self.act_full)
+            prev_full = QtGui.QAction("Preview pane full screen", self)
+            prev_full.setShortcut("F10")
+            prev_full.triggered.connect(self.pane_preview.toggle_fullscreen)
+            m.addAction(prev_full)
+            reset = QtGui.QAction("Reset layout", self)
+            reset.triggered.connect(self.reset_layout)
+            m.addAction(reset)
+
+        def panes(self) -> list["Pane"]:
+            return [self.pane_preview, self.pane_compare, self.pane_progress]
+
+        def reset_layout(self) -> None:
+            for p_ in self.panes():
+                p_.leave_fullscreen()
+                p_.set_collapsed(False)
+            self.restoreState(self._default_state)
+            for p_ in self.panes():
+                p_.show()
+            self._default_sizes()
+
+        def _restore_state(self) -> bool:
+            try:
+                geo = self._qs.value("batch/geometry")
+                st = self._qs.value("batch/state")
+                if geo is not None and self.restoreGeometry(geo):
+                    scaling.ensure_on_screen(self)
+                if st is not None:
+                    return bool(self.restoreState(st))
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+
+        def _default_sizes(self) -> None:
+            """Proportional pane sizes — docks otherwise open at their
+            minimum size hint, which on a 4K screen is a sliver."""
+            self.resizeDocks([self.pane_preview], [int(self.width() * 0.38)], Qt.Horizontal)
+            self.resizeDocks(
+                [self.pane_compare, self.pane_progress],
+                [int(self.height() * 0.32)] * 2,
+                Qt.Vertical,
+            )
+
+        def showEvent(self, ev) -> None:  # noqa: N802
+            super().showEvent(ev)
+            if not self._sized:
+                self._sized = True
+                if not self._had_state:
+                    self._default_sizes()
+                self._render_timer.start()
+                self._compare_timer.start()
+
+        def closeEvent(self, ev) -> None:  # noqa: N802
+            for p_ in self.panes():
+                p_.leave_fullscreen()
+            try:
+                self._qs.setValue("batch/geometry", self.saveGeometry())
+                self._qs.setValue("batch/state", self.saveState())
+            except Exception:  # noqa: BLE001
+                pass
+            super().closeEvent(ev)
+
+        # ------------------------------------------------------ settings --
         def current_settings(self) -> dict[str, Any]:
             if self.settings_fn is not None:
                 try:
@@ -613,8 +1006,8 @@ else:
             return self.settings
 
         def update_settings(self, settings: Optional[dict[str, Any]] = None) -> None:
-            """Re-render every card for new settings (called by the studio
-            whenever a quality control changes)."""
+            """Re-render every card and pane for new settings (called by the
+            studio whenever a quality control changes)."""
             if self._running:
                 return  # a running batch keeps the settings it started with
             self.settings = dict(settings) if settings is not None else self.current_settings()
@@ -626,38 +1019,14 @@ else:
                     it.out_dir = batch_out_dir(
                         self.out_root, self.root, it.bin_path, self.settings["fmt"]
                     )
+            self._render_timer.start()
+            self._compare_timer.start()
 
         def _update_summary(self) -> None:
             self.summary.setText(
                 f"{len(self.items)} recording(s) · output {self.out_root} · "
                 f"settings: {self._settings_line()}"
             )
-
-        def load(self, root: str) -> None:
-            """(Re)build the cards for a mother folder."""
-            self.root = root
-            while self.grid.count():
-                it = self.grid.takeAt(0)
-                if it.widget():
-                    it.widget().deleteLater()
-            self.cards.clear()
-            self.items = []
-            bins = scan_batch(root)
-            if not bins:
-                self.summary.setText(f"no .bin found under {root}")
-                return
-            s = self.current_settings()
-            self.items = make_items(bins, s)
-            for n, it in enumerate(self.items):
-                it.out_dir = batch_out_dir(self.out_root, root, it.bin_path, s["fmt"])
-                card = BatchCard(it)
-                card.set_transform(s)
-                card.cropRequested.connect(self.open_crop_editor)
-                card.previewRequested.connect(self.preview_item)
-                self.cards[it.bin_path] = card
-                self.grid.addWidget(card, n // 3, n % 3)
-            self.grid.setRowStretch(self.grid.rowCount(), 1)
-            self._update_summary()
 
         def _settings_line(self) -> str:
             s = self.settings
@@ -680,6 +1049,200 @@ else:
             ]
             return " · ".join(bits)
 
+        # ---------------------------------------------------------- load --
+        def load(self, root: str) -> None:
+            """(Re)build the cards and panes for a mother folder."""
+            self.root = root
+            for card in self.cards.values():
+                card.deleteLater()
+            for v_ in self._compare_views.values():
+                v_.parentWidget().deleteLater()
+            self.cards.clear()
+            self._compare_views.clear()
+            self._readers.clear()
+            self.items = []
+            self.current = None
+            bins = scan_batch(root)
+            if not bins:
+                self.summary.setText(f"no .bin found under {root}")
+                self.grid_host.set_widgets([])
+                self.cmp_grid.set_widgets([])
+                self.table.setRowCount(0)
+                return
+            s = self.current_settings()
+            self.items = make_items(bins, s)
+            cards, cmp_cells = [], []
+            for it in self.items:
+                it.out_dir = batch_out_dir(self.out_root, root, it.bin_path, s["fmt"])
+                card = BatchCard(it)
+                card.set_transform(s)
+                card.cropRequested.connect(self.open_crop_editor)
+                card.previewRequested.connect(self.preview_item)
+                card.selected.connect(self.select)
+                self.cards[it.bin_path] = card
+                cards.append(card)
+                cell = QtWidgets.QFrame()
+                cell.setObjectName("card")
+                cv = QtWidgets.QVBoxLayout(cell)
+                cv.setContentsMargins(6, 4, 6, 6)
+                name = QtWidgets.QLabel(it.name)
+                name.setObjectName("cardtitle")
+                name.setToolTip(it.bin_path)
+                cv.addWidget(name)
+                view = FrameView(cell, placeholder="no frames")
+                scaling.fix(view, "setMinimumHeight", 150)
+                cv.addWidget(view, 1)
+                self._compare_views[it.bin_path] = view
+                cmp_cells.append(cell)
+            self.grid_host.set_widgets(cards)
+            self.cmp_grid.set_widgets(cmp_cells)
+            self._fill_table()
+            self._update_summary()
+            self.select(self.items[0])
+            self._compare_timer.start()
+
+        def _fill_table(self) -> None:
+            self.table.setRowCount(len(self.items))
+            for r, it in enumerate(self.items):
+                self._table_row(r, it)
+            self.table.resizeColumnsToContents()
+
+        def _table_row(self, r: int, it: BatchItem) -> None:
+            fps = (
+                f"{it.frames_done / it.seconds:,.0f}"
+                if it.seconds > 0 and it.frames_done
+                else ""
+            )
+            vals = [
+                it.name,
+                it.status if it.status != "failed" else f"failed: {it.error[:60]}",
+                f"{it.frames_done:,}/{it.frames_total or it.frames:,}",
+                fps,
+                f"{it.seconds:.2f}s" if it.seconds else "",
+                it.out_dir,
+            ]
+            for c, v_ in enumerate(vals):
+                cell = self.table.item(r, c)
+                if cell is None:
+                    cell = QtWidgets.QTableWidgetItem()
+                    self.table.setItem(r, c, cell)
+                cell.setText(str(v_))
+
+        # ------------------------------------------------------- preview --
+        def _reader(self, it: BatchItem):
+            r = self._readers.get(it.bin_path)
+            if r is None and it.meta is not None and it.frames > 0:
+                import opngx
+
+                try:
+                    r = opngx.FrameReader(it.meta)
+                except Exception as exc:  # noqa: BLE001
+                    self.log.emit(f"{it.name}: cannot map for preview: {exc}")
+                    return None
+                self._readers[it.bin_path] = r
+            return r
+
+        def _xform(self) -> dict[str, Any]:
+            s = self.settings
+            return dict(
+                mode=s.get("mode", "reference"),
+                brightness=s.get("brightness"),
+                contrast=s.get("contrast"),
+                gamma=s.get("gamma"),
+            )
+
+        def select(self, item: BatchItem) -> None:
+            """Show one recording in the Preview pane."""
+            if item not in self.items:
+                return
+            self.current = item
+            for it in self.items:
+                self.cards[it.bin_path].set_selected(it is item)
+            self.pv_title.setText(item.name)
+            self.pv_title.setToolTip(item.bin_path)
+            self.pv_slider.blockSignals(True)
+            self.pv_slider.setRange(0, max(0, item.frames - 1))
+            self.pv_slider.setValue(int(item.extras.get("thumb_frame", item.frames // 2)))
+            self.pv_slider.blockSignals(False)
+            self.pv_crop.setEnabled(not self._running and item.meta is not None)
+            row = self.items.index(item)
+            self.table.selectRow(row)
+            self._render_now()
+
+        def _step_recording(self, d: int) -> None:
+            if not self.items:
+                return
+            i = self.items.index(self.current) if self.current in self.items else 0
+            self.select(self.items[(i + d) % len(self.items)])
+
+        def _render_now(self) -> None:
+            it = self.current
+            if it is None:
+                return
+            r = self._reader(it)
+            if r is None:
+                self.pv_view.setImage(None)
+                self.pv_view.setPlaceholder(it.error or "no decodable frames")
+                return
+            idx = int(self.pv_slider.value())
+            try:
+                arr = r.gray(idx, **self._xform())
+            except Exception as exc:  # noqa: BLE001
+                self.pv_view.setImage(None)
+                self.pv_view.setPlaceholder(str(exc))
+                return
+            crop = it.crop
+            if crop and self.pv_output_only.isChecked():
+                x, y, w, h = crop
+                arr = arr[y : y + h, x : x + w]
+                self.pv_view.setSelection(None)
+                self._pv_origin = (x, y)
+            else:
+                self.pv_view.setSelection(crop)
+                self._pv_origin = (0, 0)
+            self._pv_arr = arr
+            self.pv_view.setImage(gray_to_qimage(arr))
+            self.pv_frame.setText(f"frame {idx:,} / {max(it.frames - 1, 0):,}")
+            self.pv_xform.setText(
+                f"{transform_label(it.meta, self.settings)} · {it.out_size} · {it.crop_label}"
+            )
+
+        def _on_preview_hover(self, x: int, y: int) -> None:
+            arr = getattr(self, "_pv_arr", None)
+            it = self.current
+            if x < 0 or arr is None or it is None or y >= arr.shape[0] or x >= arr.shape[1]:
+                self.pv_info.setText("")
+                return
+            ox, oy = getattr(self, "_pv_origin", (0, 0))
+            raw = ""
+            r = self._readers.get(it.bin_path)
+            if r is not None:
+                try:
+                    raw = f"raw {int(r.raw(int(self.pv_slider.value()))[oy + y, ox + x])} → "
+                except Exception:  # noqa: BLE001
+                    raw = ""
+            self.pv_info.setText(f"({ox + x}, {oy + y})  {raw}out {int(arr[y, x])}")
+
+        def _render_compare(self) -> None:
+            if not self.pane_compare.isVisible() or self.pane_compare.is_collapsed():
+                return
+            pos = self.cmp_slider.value() / 1000.0
+            self.cmp_lbl.setText(f"{pos * 100:.1f} %")
+            xf = self._xform()
+            for it in self.items:
+                view = self._compare_views.get(it.bin_path)
+                r = self._reader(it)
+                if view is None or r is None:
+                    continue
+                idx = int(round(pos * max(it.frames - 1, 0)))
+                try:
+                    view.setImage(gray_to_qimage(r.gray(idx, **xf)))
+                    view.setSelection(it.crop)
+                    view.setToolTip(f"{it.name} · frame {idx:,}")
+                except Exception as exc:  # noqa: BLE001
+                    view.setImage(None)
+                    view.setPlaceholder(str(exc))
+
         # --------------------------------------------------------- crop ----
         def apply_crop(
             self, sel: Optional[tuple[int, int, int, int]], items: list[BatchItem]
@@ -694,6 +1257,8 @@ else:
                 card = self.cards.get(it.bin_path)
                 if card is not None:
                     card.refresh()
+            self._render_timer.start()
+            self._compare_timer.start()
             return skipped
 
         def open_crop_editor(self, item: BatchItem) -> None:
@@ -704,9 +1269,16 @@ else:
                     self, "opngx", f"No frame could be decoded from {item.name}."
                 )
                 return
+            img = item.thumb
+            r = self._reader(item)
+            if r is not None and item is self.current:
+                try:  # crop over the frame the preview is showing
+                    img = gray_to_qimage(r.gray(int(self.pv_slider.value()), **self._xform()))
+                except Exception:  # noqa: BLE001
+                    img = item.thumb
             dlg = CropEditor(
                 self,
-                item.thumb,
+                img,
                 item.crop,
                 (item.width, item.height),
                 apply_all_default=False,
@@ -734,12 +1306,15 @@ else:
                 self.status.setText(
                     f"crop applied to {item.name}" if sel else f"crop cleared for {item.name}"
                 )
+            self.log.emit(self.status.text())
 
         def clear_crops(self) -> None:
             for it in self.items:
                 it.crop = None
                 self.cards[it.bin_path].refresh()
             self.status.setText("all crops cleared")
+            self._render_timer.start()
+            self._compare_timer.start()
 
         def preview_item(self, item: BatchItem) -> None:
             """Hand one recording to the main window's single viewer."""
@@ -753,9 +1328,7 @@ else:
                 parent.load_batch_item(item)
                 self.status.setText(f"{item.name} loaded in the main viewer")
             else:
-                self.status.setText(
-                    f"{item.name}: {item.out_size}, {item.frames:,} frames"
-                )
+                self.select(item)
 
         # ------------------------------------------------------- extract ----
         def _set_running(self, running: bool) -> None:
@@ -764,6 +1337,7 @@ else:
             self.stop.setEnabled(running)
             self.close_all.setEnabled(not running)
             self.rescan.setEnabled(not running)
+            self.pv_crop.setEnabled(not running)
             for card in self.cards.values():
                 card.crop_btn.setEnabled(not running)
 
@@ -785,11 +1359,15 @@ else:
                 it.frames_total = it.frames
                 it.seconds = 0.0
                 self.cards[it.bin_path].refresh()
+            self._fill_table()
+            self.total_bar.setValue(0)
+            self.log.emit(f"batch start: {len(self.items)} recording(s) · {self._settings_line()}")
             threading.Thread(target=self._work, name="opngx-batch", daemon=True).start()
 
         def cancel(self) -> None:
             self._cancel = True
             self.status.setText("cancel requested…")
+            self.log.emit("cancel requested")
 
         def _work(self) -> None:
             import opngx
@@ -849,18 +1427,34 @@ else:
                         else "done"
                     )
                     self.progress.emit(it)
+                    self.log.emit(
+                        f"{it.name}: {it.status} · {st.frames_written:,} frames in "
+                        f"{st.seconds:.2f}s → {it.out_dir}"
+                    )
                 except Exception as exc:  # noqa: BLE001
                     it.status = "failed"
                     it.error = str(exc)
                     self.progress.emit(it)
+                    self.log.emit(f"{it.name}: FAILED — {exc}")
             self.finished.emit(self.items)
 
         # ---------------------------------------------------------- slots ----
+        def _append_log(self, msg: str) -> None:
+            self.log_view.appendPlainText(time.strftime("[%H:%M:%S] ") + msg)
+
         def _on_item(self, item: BatchItem) -> None:
             card = self.cards.get(item.bin_path)
             if card is not None:
                 card.refresh()
+            if item in self.items:
+                self._table_row(self.items.index(item), item)
             done = sum(1 for i in self.items if i.done)
+            tot = sum(max(i.frames_total or i.frames, 1) for i in self.items)
+            got = sum(
+                (i.frames_total or i.frames) if i.done else i.frames_done
+                for i in self.items
+            )
+            self.total_bar.setValue(int(1000 * got / max(tot, 1)))
             self.status.setText(
                 f"{done}/{len(self.items)} recordings • "
                 f"{time.perf_counter() - self._t0:,.1f}s elapsed"
@@ -874,6 +1468,7 @@ else:
                 f"finished: {ok} done, {len(failed)} failed, "
                 f"{len(items)} total • {time.perf_counter() - self._t0:,.1f}s"
             )
+            self.log.emit(self.status.text())
             if failed and self.isVisible():
                 QtWidgets.QMessageBox.warning(
                     self,
@@ -884,3 +1479,4 @@ else:
         def _on_failed(self, msg: str) -> None:
             self._set_running(False)
             self.status.setText(f"error: {msg}")
+            self.log.emit(f"error: {msg}")
