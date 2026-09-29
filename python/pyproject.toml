@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opngx"
-version = "1.9.0"
+version = "2.0.0"
 description = "Ultra-fast Optronis TimeViewer .bin footage extractor - multi-core PNG conversion with metadata & timestamp export"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "opngx contributors" }]
-keywords = ["optronis", "high-speed-camera", "png", "extraction", "footage"]
+keywords = ["optronis", "high-speed-camera", "png", "extraction", "footage", "motion-tracking", "optical-tweezers", "brownian-motion"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
@@ -38,4 +38,4 @@ Homepage = "https://github.com/shuvam07/opngx"
 where = ["src"]
 
 [tool.setuptools.package-data]
-opngx = ["py.typed"]
+opngx = ["py.typed", "docs/*.md"]

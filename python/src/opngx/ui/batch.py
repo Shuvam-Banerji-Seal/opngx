@@ -222,7 +222,7 @@ if not _QT:  # pragma: no cover
     BatchWindow = None  # type: ignore[assignment]
     CropEditor = None  # type: ignore[assignment]
 else:
-    from opngx.ui import scaling
+    from opngx.ui import scaling, themes
     from opngx.ui.frameview import FrameView, gray_to_qimage
 
     def _spin(lo: int, hi: int, val: int) -> "QtWidgets.QSpinBox":
@@ -232,14 +232,17 @@ else:
         s.setKeyboardTracking(False)
         return s
 
-    class CropEditor(QtWidgets.QDialog):
-        """Drag, move or resize a rectangle over a real frame to pick a
-        region of interest.
+    ASPECTS = {"free": None, "1:1": 1.0, "4:3": 4 / 3, "3:4": 3 / 4, "16:9": 16 / 9, "3:2": 3 / 2}
 
-        The selection is clamped to the frame, always whole pixels, and the
-        preview is drawn from the image the caller passes — the studio
-        passes the frame through the CURRENT quality transform, so the user
-        sees the pixels the encoder will write.
+    class CropEditor(QtWidgets.QDialog):
+        """The region-of-interest editor (v2.0).
+
+        Drag to draw · drag inside to move · drag an edge/corner to resize ·
+        wheel to zoom · right/middle-drag to pan · arrows nudge 1 px (Shift
+        10 px, Alt resizes) · Ctrl+Z / Ctrl+Y undo/redo. Optional: scrub
+        through the recording (`frame_fn`), auto-crop around the bright
+        spot or the tracked path (`track_fn`), aspect locks, size snapping,
+        auto levels, named presets. Pixels are selected, never resampled.
         """
 
         cropChanged = Signal(object)
@@ -255,79 +258,176 @@ else:
             apply_all_default: bool = False,
             show_apply_all: bool = True,
             apply_all_text: str = "Apply this crop to every recording in the batch it fits",
+            frame_fn: Optional[Callable[[int], "QtGui.QImage"]] = None,
+            n_frames: int = 0,
+            frame_index: int = 0,
+            track_fn: Optional[Callable[[], Optional[tuple]]] = None,
         ) -> None:
             super().__init__(parent)
-            self.setWindowTitle("Crop — region of interest")
-            scaling.fit_to_screen(self, 820, 680)
+            self.setWindowTitle("Crop editor — region of interest")
+            scaling.fit_to_screen(self, 1040, 760)
             self._fw, self._fh = int(frame_size[0]), int(frame_size[1])
-            self._img = image
-            if transform is not None:
-                try:
-                    self._img = transform(image)
-                except Exception:  # noqa: BLE001
-                    self._img = image
+            self._transform = transform
+            self._frame_fn = frame_fn
+            self._track_fn = track_fn
             self._initial = current
+            self._undo: list = []
+            self._redo: list = []
+            self._raw_img = image
+            self._img = self._display(image)
+            self._qs = QtCore.QSettings("opngx", "opngx-studio")
 
             root = QtWidgets.QVBoxLayout(self)
-            hint = QtWidgets.QLabel(
-                "Drag to draw a region · drag inside it to move · drag an edge "
-                "or corner to resize. Pixels are selected, never resampled."
-            )
-            hint.setObjectName("hint")
-            hint.setWordWrap(True)
-            root.addWidget(hint)
+            # ---- toolbar row 1: view
+            tb = QtWidgets.QHBoxLayout()
+            def tool(text, tip, fn, name="compact"):
+                b = QtWidgets.QPushButton(text)
+                b.setObjectName(name)
+                b.setToolTip(tip)
+                b.clicked.connect(fn)
+                tb.addWidget(b)
+                return b
+            tool("Fit", "zoom to fit (middle/right double-click)", lambda: self.view.reset_view())
+            tool("1:1", "one screen pixel per sensor pixel", self._zoom_1)
+            tool("4×", "4× zoom on the selection", lambda: self._zoom_sel(4))
+            self.zoom_lbl = QtWidgets.QLabel("")
+            self.zoom_lbl.setObjectName("hint")
+            tb.addWidget(self.zoom_lbl)
+            tb.addSpacing(12)
+            self.cb_levels = QtWidgets.QCheckBox("auto levels")
+            self.cb_levels.setToolTip("stretch the display contrast (display only — never changes the crop)")
+            self.cb_levels.toggled.connect(self._refresh_image)
+            tb.addWidget(self.cb_levels)
+            tb.addStretch(1)
+            self.b_undo = tool("↶", "undo (Ctrl+Z)", self.undo, "icon")
+            self.b_redo = tool("↷", "redo (Ctrl+Y)", self.redo, "icon")
+            root.addLayout(tb)
 
-            split = QtWidgets.QSplitter(Qt.Vertical)
+            split = QtWidgets.QSplitter(Qt.Horizontal)
+            left = QtWidgets.QWidget()
+            lv = QtWidgets.QVBoxLayout(left)
+            lv.setContentsMargins(0, 0, 0, 0)
             self.view = FrameView(self, editable=True)
             self.view.setImage(self._img)
             self.view.selectionChanged.connect(self._on_canvas_sel)
+            self.view.selectionFinished.connect(lambda s_: self._push_undo())
             self.view.hovered.connect(self._on_hover)
-            split.addWidget(self.view)
-            self.preview = FrameView(self, placeholder="preview")
-            scaling.fix(self.preview, "setMinimumHeight", 110)
-            split.addWidget(self.preview)
-            split.setStretchFactor(0, 4)
-            split.setStretchFactor(1, 1)
-            root.addWidget(split, 1)
+            self.view.zoomChanged.connect(lambda z: self.zoom_lbl.setText(f"{z:.2g} px/px"))
+            lv.addWidget(self.view, 1)
+            self.frame_row = QtWidgets.QHBoxLayout()
+            self.frame_slider = QtWidgets.QSlider(Qt.Horizontal)
+            self.frame_slider.setRange(0, max(0, int(n_frames) - 1))
+            self.frame_slider.setValue(int(frame_index))
+            self.frame_slider.valueChanged.connect(self._on_frame)
+            self.frame_lbl = QtWidgets.QLabel(f"frame {frame_index:,}")
+            self.frame_lbl.setObjectName("hint")
+            self.frame_row.addWidget(QtWidgets.QLabel("frame"))
+            self.frame_row.addWidget(self.frame_slider, 1)
+            self.frame_row.addWidget(self.frame_lbl)
+            lv.addLayout(self.frame_row)
+            for i in range(self.frame_row.count()):
+                w_ = self.frame_row.itemAt(i).widget()
+                if w_ is not None:
+                    w_.setVisible(frame_fn is not None and n_frames > 1)
+            split.addWidget(left)
 
-            row = QtWidgets.QHBoxLayout()
+            # ---- side panel
+            side = QtWidgets.QWidget()
+            sv = QtWidgets.QVBoxLayout(side)
+            sv.setContentsMargins(6, 0, 0, 0)
+            form = QtWidgets.QGridLayout()
             self.x_spin = _spin(0, max(self._fw - 1, 0), 0)
             self.y_spin = _spin(0, max(self._fh - 1, 0), 0)
             self.w_spin = _spin(1, max(self._fw, 1), self._fw)
             self.h_spin = _spin(1, max(self._fh, 1), self._fh)
-            for lbl, w in (
-                ("x", self.x_spin),
-                ("y", self.y_spin),
-                ("w", self.w_spin),
-                ("h", self.h_spin),
-            ):
+            for r_, (lbl, w_) in enumerate((("x", self.x_spin), ("y", self.y_spin), ("w", self.w_spin), ("h", self.h_spin))):
                 lab = QtWidgets.QLabel(lbl)
                 lab.setObjectName("fieldlabel")
-                row.addWidget(lab)
-                row.addWidget(w)
-                w.valueChanged.connect(self._on_spin)
-            row.addStretch(1)
-            self.full_btn = QtWidgets.QPushButton("Full frame")
-            self.full_btn.clicked.connect(self._full)
-            row.addWidget(self.full_btn)
-            self.ctr_btn = QtWidgets.QPushButton("Centre 50%")
-            self.ctr_btn.clicked.connect(self._center)
-            row.addWidget(self.ctr_btn)
-            self.reset_btn = QtWidgets.QPushButton("Reset")
-            self.reset_btn.setToolTip("Back to the crop this dialog opened with")
-            self.reset_btn.clicked.connect(self._reset)
-            row.addWidget(self.reset_btn)
-            root.addLayout(row)
-
+                form.addWidget(lab, r_, 0)
+                form.addWidget(w_, r_, 1)
+                w_.valueChanged.connect(self._on_spin)
+            sv.addLayout(form)
+            g2 = QtWidgets.QGridLayout()
+            lab = QtWidgets.QLabel("aspect")
+            lab.setObjectName("fieldlabel")
+            self.cmb_aspect = QtWidgets.QComboBox()
+            self.cmb_aspect.addItems(list(ASPECTS))
+            self.cmb_aspect.setToolTip("lock the width:height ratio while drawing and typing")
+            self.cmb_aspect.currentIndexChanged.connect(lambda *_: self._set_sel(self._sel, push=True))
+            g2.addWidget(lab, 0, 0)
+            g2.addWidget(self.cmb_aspect, 0, 1)
+            lab = QtWidgets.QLabel("snap")
+            lab.setObjectName("fieldlabel")
+            self.cmb_snap = QtWidgets.QComboBox()
+            self.cmb_snap.addItems(["1 px", "2 px (even: MP4-friendly)", "4 px", "8 px", "16 px", "32 px"])
+            self.cmb_snap.setToolTip("round the size (and origin) to a multiple of N pixels")
+            self.cmb_snap.currentIndexChanged.connect(lambda *_: self._set_sel(self._sel, push=True))
+            g2.addWidget(lab, 1, 0)
+            g2.addWidget(self.cmb_snap, 1, 1)
+            lab = QtWidgets.QLabel("margin")
+            lab.setObjectName("fieldlabel")
+            self.sp_margin = _spin(0, 2048, 16)
+            self.sp_margin.setToolTip("padding around the spot / path for the auto-crop buttons")
+            g2.addWidget(lab, 2, 0)
+            g2.addWidget(self.sp_margin, 2, 1)
+            sv.addLayout(g2)
+            for text, tip, fn in (
+                ("Full frame", "no crop", self._full),
+                ("Centre 50%", "the middle half of the frame", self._center),
+                ("Around bright spot", "centre on the brightest feature of this frame", self._around_spot),
+                ("Around tracked path", "bounding box of the tracked trajectory + margin", self._around_path),
+                ("Reset", "back to the crop this editor opened with", self._reset),
+            ):
+                b = QtWidgets.QPushButton(text)
+                b.setObjectName("compact")
+                b.setToolTip(tip)
+                b.clicked.connect(fn)
+                sv.addWidget(b)
+                if text == "Around tracked path":
+                    self.btn_path = b
+                    b.setEnabled(track_fn is not None)
+            pres = QtWidgets.QHBoxLayout()
+            self.cmb_preset = QtWidgets.QComboBox()
+            self.cmb_preset.setToolTip("saved crops")
+            self.cmb_preset.activated.connect(self._apply_preset)
+            bsave = QtWidgets.QPushButton("Save…")
+            bsave.setObjectName("compact")
+            bsave.clicked.connect(self._save_preset)
+            bdel = QtWidgets.QPushButton("✕")
+            bdel.setObjectName("icon")
+            bdel.setToolTip("delete this preset")
+            bdel.clicked.connect(self._del_preset)
+            pres.addWidget(self.cmb_preset, 1)
+            pres.addWidget(bsave)
+            pres.addWidget(bdel)
+            lab = QtWidgets.QLabel("presets")
+            lab.setObjectName("fieldlabel")
+            sv.addWidget(lab)
+            sv.addLayout(pres)
             self.info = QtWidgets.QLabel()
             self.info.setObjectName("hint")
-            root.addWidget(self.info)
+            self.info.setWordWrap(True)
+            sv.addWidget(self.info)
+            self.preview = FrameView(self, placeholder="preview")
+            scaling.fix(self.preview, "setMinimumHeight", 110)
+            sv.addWidget(self.preview, 1)
+            scaling.fix(side, "setMinimumWidth", 250)
+            split.addWidget(side)
+            split.setStretchFactor(0, 3)
+            split.setStretchFactor(1, 1)
+            root.addWidget(split, 1)
 
+            hint = QtWidgets.QLabel(
+                "Drag to draw · drag inside to move · drag an edge or corner to resize · wheel zooms · "
+                "right-drag pans · arrows nudge (Shift ×10, Alt resizes). Pixels are selected, never resampled."
+            )
+            hint.setObjectName("hint")
+            hint.setWordWrap(True)
+            root.addWidget(hint)
             self.apply_all = QtWidgets.QCheckBox(apply_all_text)
             self.apply_all.setChecked(bool(apply_all_default))
             self.apply_all.setVisible(show_apply_all)
             root.addWidget(self.apply_all)
-
             btns = QtWidgets.QHBoxLayout()
             btns.addStretch(1)
             cancel = QtWidgets.QPushButton("Cancel")
@@ -340,45 +440,140 @@ else:
             btns.addWidget(ok)
             root.addLayout(btns)
 
+            for seq, fn in (("Ctrl+Z", self.undo), ("Ctrl+Y", self.redo), ("Ctrl+Shift+Z", self.redo)):
+                sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
+                sc.activated.connect(fn)
             self._sel: tuple[int, int, int, int] = (0, 0, self._fw, self._fh)
+            self._load_presets()
             self._reset()
+            self._undo.clear()
+            self._update_undo()
 
-        # ---------------------------------------------------------------
-        def _clamp(self, sel) -> tuple[int, int, int, int]:
-            x, y, w, h = (int(v) for v in sel)
-            x = max(0, min(x, self._fw - 1))
-            y = max(0, min(y, self._fh - 1))
-            w = max(1, min(w if w > 0 else self._fw - x, self._fw - x))
-            h = max(1, min(h if h > 0 else self._fh - y, self._fh - y))
-            return (x, y, w, h)
+        # ---------------------------------------------------------- image --
+        def _display(self, img):
+            if img is None:
+                return None
+            if self._transform is not None:
+                try:
+                    img = self._transform(img)
+                except Exception:  # noqa: BLE001
+                    pass
+            return img
 
-        def _set_sel(self, sel: tuple[int, int, int, int], *, from_canvas=False) -> None:
-            self._sel = self._clamp(sel)
+        def _refresh_image(self) -> None:
+            img = self._display(self._raw_img)
+            if img is not None and self.cb_levels.isChecked():
+                import numpy as np
+
+                w, h = img.width(), img.height()
+                g = img.convertToFormat(QtGui.QImage.Format_Grayscale8)
+                a = np.frombuffer(g.constBits(), np.uint8, count=g.bytesPerLine() * h).reshape(h, g.bytesPerLine())[:, :w]
+                lo, hi = np.percentile(a, (1, 99.5))
+                if hi > lo:
+                    s_ = np.clip((a.astype(np.float32) - lo) * (255.0 / (hi - lo)), 0, 255).astype(np.uint8)
+                    img = gray_to_qimage(s_)
+            self._img = img
+            self.view.setImage(img)
+            self._render_preview()
+
+        def _on_frame(self, i: int) -> None:
+            if self._frame_fn is None:
+                return
+            try:
+                self._raw_img = self._frame_fn(int(i))
+            except Exception as exc:  # noqa: BLE001
+                self.info.setText(f"cannot decode frame {i}: {exc}")
+                return
+            self.frame_lbl.setText(f"frame {i:,}")
+            self._refresh_image()
+
+        def _zoom_1(self) -> None:
+            t_, s_ = self.view._target()
+            if s_ > 0:
+                self.view.set_zoom(self.view._zoom / s_)
+
+        def _zoom_sel(self, z: float) -> None:
             x, y, w, h = self._sel
-            for spin, val in (
-                (self.x_spin, x),
-                (self.y_spin, y),
-                (self.w_spin, w),
-                (self.h_spin, h),
-            ):
+            self.view.reset_view()
+            t_, s_ = self.view._target()
+            if s_ > 0:
+                self.view.set_zoom(z / s_)
+            self.view.center_on(x + w / 2, y + h / 2)
+
+        # ---------------------------------------------------- constraints --
+        def _snap(self) -> int:
+            return (1, 2, 4, 8, 16, 32)[max(0, self.cmb_snap.currentIndex())]
+
+        def _constrain(self, sel, anchor: str = "tl") -> tuple[int, int, int, int]:
+            x, y, w, h = (int(v) for v in sel)
+            fw, fh = self._fw, self._fh
+            x = max(0, min(x, fw - 1))
+            y = max(0, min(y, fh - 1))
+            w = max(1, min(w if w > 0 else fw - x, fw - x))
+            h = max(1, min(h if h > 0 else fh - y, fh - y))
+            ar = ASPECTS.get(self.cmb_aspect.currentText())
+            if ar:
+                # keep the larger dimension the user gave, shrink the other
+                if w / h > ar:
+                    w = max(1, round(h * ar))
+                else:
+                    h = max(1, round(w / ar))
+            n = self._snap()
+            if n > 1:
+                w = max(n, w // n * n) if fw >= n else w
+                h = max(n, h // n * n) if fh >= n else h
+                w = min(w, (fw - x) // n * n or w)
+                h = min(h, (fh - y) // n * n or h)
+            if x + w > fw:
+                x = max(0, fw - w)
+            if y + h > fh:
+                y = max(0, fh - h)
+            return (x, y, max(1, min(w, fw)), max(1, min(h, fh)))
+
+        # ------------------------------------------------------ selection --
+        def _set_sel(self, sel, *, from_canvas=False, push=False) -> None:
+            if push:
+                self._push_undo()
+            self._sel = self._constrain(sel)
+            x, y, w, h = self._sel
+            for spin, val in ((self.x_spin, x), (self.y_spin, y), (self.w_spin, w), (self.h_spin, h)):
                 spin.blockSignals(True)
                 spin.setValue(int(val))
                 spin.blockSignals(False)
-            if not from_canvas:
+            if not from_canvas or self._sel != tuple(int(v) for v in sel):
                 self.view.setSelection(self._sel)
             self._render_preview()
+
+        def _push_undo(self) -> None:
+            if not self._undo or self._undo[-1] != self._sel:
+                self._undo.append(self._sel)
+                self._redo.clear()
+                del self._undo[:-200]
+            self._update_undo()
+
+        def _update_undo(self) -> None:
+            self.b_undo.setEnabled(bool(self._undo))
+            self.b_redo.setEnabled(bool(self._redo))
+
+        def undo(self) -> None:
+            if self._undo:
+                self._redo.append(self._sel)
+                self._set_sel(self._undo.pop())
+            self._update_undo()
+
+        def redo(self) -> None:
+            if self._redo:
+                self._undo.append(self._sel)
+                self._set_sel(self._redo.pop())
+            self._update_undo()
 
         def _on_canvas_sel(self, sel) -> None:
             self._set_sel(tuple(int(v) for v in sel), from_canvas=True)
 
         def _on_spin(self) -> None:
             self._set_sel(
-                (
-                    self.x_spin.value(),
-                    self.y_spin.value(),
-                    self.w_spin.value(),
-                    self.h_spin.value(),
-                )
+                (self.x_spin.value(), self.y_spin.value(), self.w_spin.value(), self.h_spin.value()),
+                push=True,
             )
 
         def _on_hover(self, x: int, y: int) -> None:
@@ -386,29 +581,136 @@ else:
                 self._render_info()
                 return
             v = QtGui.qGray(self._img.pixel(x, y))
-            self._render_info(f"   ·   cursor {x},{y} = {v}")
+            self._render_info(f"\ncursor ({x}, {y}) = {v}")
 
         def _full(self) -> None:
-            self._set_sel((0, 0, self._fw, self._fh))
+            self._set_sel((0, 0, self._fw, self._fh), push=True)
 
         def _center(self) -> None:
             w = max(1, self._fw // 2)
             h = max(1, self._fh // 2)
-            self._set_sel(((self._fw - w) // 2, (self._fh - h) // 2, w, h))
+            self._set_sel(((self._fw - w) // 2, (self._fh - h) // 2, w, h), push=True)
 
         def _reset(self) -> None:
-            self._set_sel(self._initial or (0, 0, self._fw, self._fh))
+            self._set_sel(self._initial or (0, 0, self._fw, self._fh), push=bool(self._undo))
+
+        def _around_spot(self) -> None:
+            import numpy as np
+
+            from opngx.analysis.builtin.motion_tracking import MotionTracking
+
+            img = self._raw_img
+            if img is None:
+                return
+            g = img.convertToFormat(QtGui.QImage.Format_Grayscale8)
+            w, h = g.width(), g.height()
+            a = np.ascontiguousarray(
+                np.frombuffer(g.constBits(), np.uint8, count=g.bytesPerLine() * h).reshape(h, g.bytesPerLine())[:, :w]
+            )[None]
+            # the real tracker, not just the brightest block: for a ring the
+            # brightest block sits on the rim, not at the centre
+            mt = MotionTracking()
+            p = MotionTracking.resolve_params({})
+            method = "circle" if mt._looks_like_ring(a, p) else "centroid"
+            cx, cy, r, _n, good = mt._measure(a, p, method)[:5]
+            if not good[0]:
+                self.info.setText("no bright feature found in this frame")
+                return
+            m = self.sp_margin.value()
+            rad = float(r[0]) if method == "circle" and np.isfinite(r[0]) else 8.0
+            x, y, sw, sh = self._sel
+            if (sw, sh) == (self._fw, self._fh):
+                sw = sh = int(2 * (rad + m)) + 1
+            self._set_sel((int(round(cx[0] - sw / 2)), int(round(cy[0] - sh / 2)), sw, sh), push=True)
+
+        def _around_path(self) -> None:
+            if self._track_fn is None:
+                return
+            bb = self._track_fn()
+            if not bb:
+                self.info.setText("no tracked path yet — run motion tracking in the Analyze tab")
+                return
+            x0, y0, x1, y1 = bb
+            m = self.sp_margin.value()
+            import math as _m
+
+            self._set_sel((_m.floor(x0) - m, _m.floor(y0) - m, _m.ceil(x1 - x0) + 2 * m + 1, _m.ceil(y1 - y0) + 2 * m + 1), push=True)
+
+        # --------------------------------------------------------- presets --
+        def _presets(self) -> dict:
+            import json
+
+            try:
+                return json.loads(self._qs.value("crop/presets", "{}") or "{}")
+            except (TypeError, ValueError):
+                return {}
+
+        def _load_presets(self) -> None:
+            self.cmb_preset.clear()
+            pr = self._presets()
+            self.cmb_preset.addItem("— choose —")
+            for name, v in sorted(pr.items()):
+                self.cmb_preset.addItem(f"{name}  ({v[0]},{v[1]} {v[2]}×{v[3]})", name)
+
+        def _apply_preset(self, i: int) -> None:
+            name = self.cmb_preset.itemData(i)
+            v = self._presets().get(name)
+            if v:
+                self._set_sel(tuple(v), push=True)
+
+        def _save_preset(self) -> None:
+            import json
+
+            name, ok = QtWidgets.QInputDialog.getText(self, "Save crop", "preset name:", text="roi")
+            if not ok or not name.strip():
+                return
+            pr = self._presets()
+            pr[name.strip()] = list(self._sel)
+            self._qs.setValue("crop/presets", json.dumps(pr))
+            self._load_presets()
+
+        def _del_preset(self) -> None:
+            import json
+
+            name = self.cmb_preset.currentData()
+            if not name:
+                return
+            pr = self._presets()
+            pr.pop(name, None)
+            self._qs.setValue("crop/presets", json.dumps(pr))
+            self._load_presets()
+
+        # ------------------------------------------------------------ misc --
+        def keyPressEvent(self, ev) -> None:  # noqa: N802
+            k = ev.key()
+            d = {Qt.Key_Left: (-1, 0), Qt.Key_Right: (1, 0), Qt.Key_Up: (0, -1), Qt.Key_Down: (0, 1)}.get(k)
+            if d and not isinstance(self.focusWidget(), (QtWidgets.QAbstractSpinBox, QtWidgets.QComboBox)):
+                step = 10 if ev.modifiers() & Qt.ShiftModifier else 1
+                x, y, w, h = self._sel
+                if ev.modifiers() & Qt.AltModifier:
+                    w, h = w + d[0] * step, h + d[1] * step
+                else:
+                    x, y = x + d[0] * step, y + d[1] * step
+                self._set_sel((x, y, w, h), push=True)
+                return
+            super().keyPressEvent(ev)
 
         def _render_info(self, tail: str = "") -> None:
             x, y, w, h = self._sel
-            odd = (
-                "   ·   odd size: an MP4 render pads one black row/column"
-                if (w % 2 or h % 2)
-                else ""
-            )
+            stats = ""
+            if self._raw_img is not None:
+                try:
+                    sub = self._raw_img.copy(x, y, w, h).convertToFormat(QtGui.QImage.Format_Grayscale8)
+                    import numpy as np
+
+                    a = np.frombuffer(sub.constBits(), np.uint8, count=sub.bytesPerLine() * h).reshape(h, sub.bytesPerLine())[:, :w]
+                    stats = f"\nregion: mean {a.mean():.1f} · min {a.min()} · max {a.max()}"
+                except Exception:  # noqa: BLE001
+                    stats = ""
+            odd = "\nodd size: an MP4 render pads one black row/column" if (w % 2 or h % 2) else ""
             self.info.setText(
-                f"output {w} × {h} px  ·  columns {x}–{x + w - 1}, rows {y}–{y + h - 1}"
-                f"{odd}{tail}"
+                f"output {w} × {h} px ({w * h:,} px, {100.0 * w * h / max(1, self._fw * self._fh):.1f}% of the frame)"
+                f"\ncolumns {x}–{x + w - 1}, rows {y}–{y + h - 1}{stats}{odd}{tail}"
             )
 
         def _render_preview(self) -> None:
@@ -496,7 +798,7 @@ else:
         def set_selected(self, on: bool) -> None:
             self.setProperty("selected", bool(on))
             self.setStyleSheet(
-                "QFrame#card { border: 2px solid #7fb069; }" if on else ""
+                f"QFrame#card {{ border: 2px solid {themes.hexc('accent_fg')}; }}" if on else ""
             )
 
         def set_transform(self, settings: dict[str, Any]) -> None:
@@ -513,11 +815,11 @@ else:
             self.crop_lbl.setText(it.crop_label)
             self.thumb.setSelection(it.crop)
             colors = {
-                "queued": "#8a948a",
-                "running": "#60a5fa",
-                "done": "#34d399",
-                "failed": "#f87171",
-                "cancelled": "#fbbf24",
+                "queued": themes.hexc("text_dim"),
+                "running": themes.hexc("heading"),
+                "done": themes.hexc("ok"),
+                "failed": themes.hexc("err"),
+                "cancelled": themes.hexc("warn"),
             }
             txt = it.status
             if it.status == "done":
@@ -527,7 +829,7 @@ else:
             elif it.status == "running" and it.frames_total:
                 txt = f"running · {it.frames_done:,}/{it.frames_total:,}"
             self.status_lbl.setText(txt)
-            self.status_lbl.setStyleSheet(f"color: {colors.get(it.status, '#8a948a')}")
+            self.status_lbl.setStyleSheet(f"color: {colors.get(it.status, themes.hexc('text_dim'))}")
             if it.frames_total:
                 self.bar.setValue(int(100 * it.frames_done / it.frames_total))
             else:
@@ -1276,6 +1578,10 @@ else:
                     img = gray_to_qimage(r.gray(int(self.pv_slider.value()), **self._xform()))
                 except Exception:  # noqa: BLE001
                     img = item.thumb
+            def frame_fn(i: int, _item=item):
+                rd = self._reader(_item)
+                return gray_to_qimage(rd.gray(int(i), **self._xform())) if rd is not None else _item.thumb
+
             dlg = CropEditor(
                 self,
                 img,
@@ -1283,6 +1589,9 @@ else:
                 (item.width, item.height),
                 apply_all_default=False,
                 show_apply_all=len(self.items) > 1,
+                frame_fn=frame_fn,
+                n_frames=item.frames,
+                frame_index=int(self.pv_slider.value()) if item is self.current else int(item.extras.get("thumb_frame", 0)),
             )
             if dlg.exec() != QtWidgets.QDialog.Accepted:
                 self.status.setText("crop unchanged")

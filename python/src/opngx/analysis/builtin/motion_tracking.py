@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from opngx.analysis import native
 from opngx.analysis.base import Column, Module, Param
 
 
@@ -160,7 +161,8 @@ def _ridge_refine(sub, cx, cy, r, M=48, span=4.0, step=0.5, iters=2):
         prof = np.concatenate(
             [prof[..., :1], (prof[..., :-2] + 2 * prof[..., 1:-1] + prof[..., 2:]) / 4, prof[..., -1:]], -1
         )
-        j = prof.argmax(2)
+        # first sample within 1e-9 of the maximum (tie-proof; same in C)
+        j = (prof >= prof.max(2, keepdims=True) - 1e-9).argmax(2)
         R = prof.shape[2]
         jc = np.clip(j, 1, R - 2)
         lft, c0, rgt = prof[K, Mi, jc - 1], prof[K, Mi, jc], prof[K, Mi, jc + 1]
@@ -231,6 +233,8 @@ class MotionTracking(Module):
             method = "circle" if self._looks_like_ring(sample, p) else "centroid"
         ctx.state["method"] = method
         ctx.summary["method_used"] = method
+        ctx.state["native"] = native.available()
+        ctx.summary["backend"] = "native C" if ctx.state["native"] else "numpy"
         ctx.log(f"motion_tracking: using the '{method}' estimator")
 
     def _looks_like_ring(self, frames: np.ndarray, p) -> bool:
@@ -260,9 +264,11 @@ class MotionTracking(Module):
         xx = x0[:, None] + np.arange(ww)
         sub = frames[np.arange(k)[:, None, None], yy[:, :, None], xx[:, None, :]].astype(np.float32)
         flat = sub.reshape(k, -1)
-        peak = flat.max(1)
-        base = np.median(flat, axis=1)
-        thr = base + p["threshold"] * (peak - base)
+        # float64 threshold: identical in the numpy and C paths, so a pixel
+        # sitting exactly on the threshold compares the same way in both
+        peak = flat.max(1).astype(np.float64)
+        base = np.median(flat, axis=1).astype(np.float64)
+        thr = base + float(p["threshold"]) * (peak - base)
         # float64 moments: cubic coordinate sums reach ~1e7, where float32
         # keeps too few digits for a sub-pixel circle centre
         lx = np.arange(ww, dtype=np.float64)
@@ -278,7 +284,7 @@ class MotionTracking(Module):
             d = np.sqrt((lx[None, None, :] - cx[:, None, None]) ** 2 + (ly[None, :, None] - cy[:, None, None]) ** 2)
             res = (d - r[:, None, None]) ** 2 * m
             rms = np.sqrt(res.sum((1, 2)) / np.maximum(n, 1))
-            if p.get("refine", True) and good.any():
+            if p.get("refine", True) and good.any() and wh >= 2 and ww >= 2:
                 g = good & (r >= 2.0)
                 if g.any():
                     rcx, rcy, rr, rrms = _ridge_refine(sub[g], cx[g], cy[g], r[g])
@@ -304,8 +310,9 @@ class MotionTracking(Module):
             u_, d_ = at(py - 1, px), at(py + 1, px)
             denx = l_ - 2 * c0 + r_
             deny = u_ - 2 * c0 + d_
-            ox = np.where((np.abs(denx) > 1e-9) & (px > 0) & (px < ww - 1), 0.5 * (l_ - r_) / denx, 0.0)
-            oy = np.where((np.abs(deny) > 1e-9) & (py > 0) & (py < wh - 1), 0.5 * (u_ - d_) / deny, 0.0)
+            with np.errstate(divide="ignore", invalid="ignore"):  # masked by where()
+                ox = np.where((np.abs(denx) > 1e-9) & (px > 0) & (px < ww - 1), 0.5 * (l_ - r_) / denx, 0.0)
+                oy = np.where((np.abs(deny) > 1e-9) & (py > 0) & (py < wh - 1), 0.5 * (u_ - d_) / deny, 0.0)
             cx = px + np.clip(ox, -0.5, 0.5)
             cy = py + np.clip(oy, -0.5, 0.5)
             good = np.ones(k, bool)
@@ -319,13 +326,21 @@ class MotionTracking(Module):
         if p["target"] == "dark":
             frames = 255 - frames
         method = ctx.state.get("method", "centroid")
-        out = self._measure(frames, p, method, ctx.origin)
-        cx, cy, r, n, good, rms = out[:6]
-        if method == "circle":
-            sub = out[6]
-            peak = sub.reshape(len(sub), -1).max(1)
+        # native C kernel (src/analysis.c) when the engine provides it; the
+        # numpy implementation below is the reference and the fallback
+        nat = native.track(frames, method, p, ctx.origin) if ctx.state.get("native", True) else None
+        if nat is not None:
+            cx, cy, r, n, good, rms, peak = (
+                nat["x"], nat["y"], nat["r"], nat["area"], nat["found"], nat["rms"], nat["peak"]
+            )
         else:
-            peak = out[6]
+            out = self._measure(frames, p, method, ctx.origin)
+            cx, cy, r, n, good, rms = out[:6]
+            if method == "circle":
+                sub = out[6]
+                peak = sub.reshape(len(sub), -1).max(1)
+            else:
+                peak = out[6]
         ox, oy = ctx.origin
         if p["target"] == "dark":
             peak = 255 - peak

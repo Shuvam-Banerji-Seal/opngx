@@ -16,6 +16,7 @@ Write your own: see `opngx.analysis.base` (the API) and
 `oa.template()` (a starter file), or use the studio's Editor tab.
 """
 
+from . import native, stats
 from .base import Column, Context, Module, Param
 from .registry import (
     ModuleInfo,
@@ -52,4 +53,6 @@ __all__ = [
     "synthetic_frames",
     "user_modules_dir",
     "load_result",
+    "native",
+    "stats",
 ]

@@ -32,6 +32,8 @@ from typing import Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 
+from opngx.ui import themes
+
 Rect = tuple[int, int, int, int]
 
 
@@ -48,6 +50,7 @@ class FrameView(QtWidgets.QWidget):
     """Fitted, pixel-exact image view with an optional crop overlay."""
 
     hovered = Signal(int, int)  # image pixel under the cursor, (-1,-1) outside
+    zoomChanged = Signal(float)  # effective pixels per image pixel
     selectionChanged = Signal(object)  # live while dragging: (x, y, w, h)
     selectionFinished = Signal(object)  # on release
 
@@ -79,6 +82,11 @@ class FrameView(QtWidgets.QWidget):
         self._path = None
         self._point = None
         self._circle = None
+        # v2.0 zoom/pan: zoom 1 = fit; the pan offset is in widget pixels
+        self._zoom = 1.0
+        self._pan = QPointF(0, 0)
+        self._panning: Optional[QPointF] = None
+        self.grid_enabled = True  # pixel grid when zoomed in far enough
         if editable:
             self.setCursor(Qt.CrossCursor)
 
@@ -90,7 +98,10 @@ class FrameView(QtWidgets.QWidget):
         return QtCore.QSize(120, 90)
 
     def setImage(self, img: Optional["QtGui.QImage"]) -> None:  # noqa: N802
-        self._img = img if (img is not None and not img.isNull()) else None
+        img = img if (img is not None and not img.isNull()) else None
+        if img is None or self._img is None or img.size() != self._img.size():
+            self._zoom, self._pan = 1.0, QPointF(0, 0)  # new geometry: fit
+        self._img = img
         self.update()
 
     def image(self) -> Optional["QtGui.QImage"]:
@@ -129,12 +140,58 @@ class FrameView(QtWidgets.QWidget):
         iw, ih = self._img.width(), self._img.height()
         aw = max(1.0, self.width() - 8.0)
         ah = max(1.0, self.height() - 8.0)
-        s = min(aw / iw, ah / ih)
+        s = min(aw / iw, ah / ih) * self._zoom
         dpr = max(1.0, float(self.devicePixelRatioF()))
         if s * dpr >= 1.0:
             s = math.floor(s * dpr) / dpr
         w, h = iw * s, ih * s
-        return QRectF((self.width() - w) / 2.0, (self.height() - h) / 2.0, w, h), s
+        return QRectF((self.width() - w) / 2.0 + self._pan.x(), (self.height() - h) / 2.0 + self._pan.y(), w, h), s
+
+    # ------------------------------------------------------------ zoom ----
+    def zoom_factor(self) -> float:
+        return self._target()[1] if self._img is not None else 1.0
+
+    def set_zoom(self, zoom: float, anchor: Optional[QPointF] = None) -> None:
+        """Zoom (1 = fit) keeping the image point under `anchor` fixed."""
+        if self._img is None:
+            return
+        zoom = max(1.0, min(64.0, float(zoom)))
+        anchor = anchor if anchor is not None else QPointF(self.width() / 2, self.height() / 2)
+        t0, s0 = self._target()
+        ix = (anchor.x() - t0.x()) / s0
+        iy = (anchor.y() - t0.y()) / s0
+        self._zoom = zoom
+        if zoom == 1.0:
+            self._pan = QPointF(0, 0)
+        else:
+            t1, s1 = self._target()
+            self._pan += QPointF(anchor.x() - (t1.x() + ix * s1), anchor.y() - (t1.y() + iy * s1))
+        self.update()
+        self.zoomChanged.emit(self.zoom_factor())
+
+    def reset_view(self) -> None:
+        self._zoom = 1.0
+        self._pan = QPointF(0, 0)
+        self.update()
+        self.zoomChanged.emit(self.zoom_factor())
+
+    def center_on(self, x: float, y: float) -> None:
+        """Pan so image pixel (x, y) is at the widget centre."""
+        if self._img is None:
+            return
+        t, s = self._target()
+        cx, cy = t.x() + (x + 0.5) * s, t.y() + (y + 0.5) * s
+        self._pan += QPointF(self.width() / 2 - cx, self.height() / 2 - cy)
+        self.update()
+
+    def wheelEvent(self, ev) -> None:  # noqa: N802
+        if self._img is None:
+            return super().wheelEvent(ev)
+        steps = ev.angleDelta().y() / 120.0
+        if not steps:
+            return
+        self.set_zoom(self._zoom * (1.25 ** steps), ev.position())
+        ev.accept()
 
     def _to_image(self, pos: QPointF, clamp: bool = True) -> tuple[int, int]:
         t, s = self._target()
@@ -203,7 +260,25 @@ class FrameView(QtWidgets.QWidget):
             return
         t, s = self._target()
         p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, s < 1.0 and self._smooth_down)
+        p.save()
+        p.setClipRect(self.rect().adjusted(1, 1, -1, -1))
         p.drawImage(t, self._img)
+        if self.grid_enabled and s >= 6:
+            # pixel grid when a sensor pixel is >= 6 screen pixels
+            pen = QtGui.QPen(QtGui.QColor(128, 128, 128, 70))
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            vis = t.intersected(QRectF(self.rect()))
+            x0 = max(0, int((vis.left() - t.left()) / s))
+            x1 = min(self._img.width(), int((vis.right() - t.left()) / s) + 1)
+            y0 = max(0, int((vis.top() - t.top()) / s))
+            y1 = min(self._img.height(), int((vis.bottom() - t.top()) / s) + 1)
+            for gx in range(x0, x1 + 1):
+                X = t.left() + gx * s
+                p.drawLine(QPointF(X, t.top() + y0 * s), QPointF(X, t.top() + y1 * s))
+            for gy in range(y0, y1 + 1):
+                Y = t.top() + gy * s
+                p.drawLine(QPointF(t.left() + x0 * s, Y), QPointF(t.left() + x1 * s, Y))
         self._paint_markers(p, t, s)
         r = self._sel_rect()
         if r is not None:
@@ -214,15 +289,15 @@ class FrameView(QtWidgets.QWidget):
             shade.addRect(t)
             hole = QtGui.QPainterPath()
             hole.addRect(r)
-            p.fillPath(shade.subtracted(hole), QtGui.QColor(0, 0, 0, 140))
-            pen = QtGui.QPen(QtGui.QColor("#7fb069"))
+            p.fillPath(shade.subtracted(hole), QtGui.QColor(0, 0, 0, 140 if themes.is_dark() else 90))
+            pen = QtGui.QPen(themes.qcolor("accent_fg"))
             pen.setWidthF(1.5)
             pen.setCosmetic(True)
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
             p.drawRect(r)
             if self._editable:
-                p.setBrush(QtGui.QColor("#7fb069"))
+                p.setBrush(themes.qcolor("accent_fg"))
                 for cx, cy in (
                     (r.left(), r.top()),
                     (r.right(), r.top()),
@@ -230,6 +305,7 @@ class FrameView(QtWidgets.QWidget):
                     (r.right(), r.bottom()),
                 ):
                     p.drawRect(QRectF(cx - 3, cy - 3, 6, 6))
+        p.restore()  # the clip set before drawImage
         p.end()
 
     def _paint_markers(self, p, t, s) -> None:
@@ -245,7 +321,7 @@ class FrameView(QtWidgets.QWidget):
             import numpy as np
 
             pts = np.asarray(self._path, dtype=float)
-            pen = QtGui.QPen(QtGui.QColor(255, 196, 64, 200))
+            pen = QtGui.QPen(themes.qcolor("trace", 200))
             pen.setWidthF(1.2)
             pen.setCosmetic(True)
             p.setPen(pen)
@@ -262,7 +338,7 @@ class FrameView(QtWidgets.QWidget):
         if self._circle is not None:
             x, y, r = self._circle
             if r == r and r > 0 and x == x:
-                pen = QtGui.QPen(QtGui.QColor("#ff5d8f"))
+                pen = QtGui.QPen(themes.qcolor("marker"))
                 pen.setWidthF(1.5)
                 pen.setCosmetic(True)
                 p.setPen(pen)
@@ -272,7 +348,7 @@ class FrameView(QtWidgets.QWidget):
             x, y = self._point
             if x == x and y == y:
                 c = m(x, y)
-                pen = QtGui.QPen(QtGui.QColor("#ff5d8f"))
+                pen = QtGui.QPen(themes.qcolor("marker"))
                 pen.setWidthF(1.5)
                 pen.setCosmetic(True)
                 p.setPen(pen)
@@ -283,6 +359,10 @@ class FrameView(QtWidgets.QWidget):
 
     # ------------------------------------------------------------ mouse ----
     def mousePressEvent(self, ev) -> None:  # noqa: N802
+        if self._img is not None and ev.button() in (Qt.MiddleButton, Qt.RightButton):
+            self._panning = ev.position()
+            self.setCursor(Qt.ClosedHandCursor)
+            return
         if not self._editable or self._img is None or ev.button() != Qt.LeftButton:
             return super().mousePressEvent(ev)
         pos = ev.position()
@@ -294,8 +374,19 @@ class FrameView(QtWidgets.QWidget):
             self.selectionChanged.emit(self._sel)
             self.update()
 
+    def mouseDoubleClickEvent(self, ev) -> None:  # noqa: N802
+        if ev.button() in (Qt.MiddleButton, Qt.RightButton):
+            self.reset_view()
+            return
+        super().mouseDoubleClickEvent(ev)
+
     def mouseMoveEvent(self, ev) -> None:  # noqa: N802
         pos = ev.position()
+        if self._panning is not None:
+            self._pan += pos - self._panning
+            self._panning = pos
+            self.update()
+            return
         hx, hy = self._to_image(pos, clamp=False)
         if self._img is not None and 0 <= hx < self._img.width() and 0 <= hy < self._img.height():
             self.hovered.emit(hx, hy)
@@ -350,6 +441,10 @@ class FrameView(QtWidgets.QWidget):
             self.update()
 
     def mouseReleaseEvent(self, ev) -> None:  # noqa: N802
+        if self._panning is not None and ev.button() in (Qt.MiddleButton, Qt.RightButton):
+            self._panning = None
+            self.setCursor(Qt.CrossCursor if self._editable else Qt.ArrowCursor)
+            return
         if self._drag is not None:
             self._drag = None
             if self._sel is not None:

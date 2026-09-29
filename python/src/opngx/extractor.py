@@ -442,7 +442,7 @@ class Extractor:
             ts = read_timestamps(self.meta.bin_path, self.meta, start, written)
             import csv
 
-            with open(Path(out_dir) / f"{prefix}timestamps.csv", "w", newline="") as f:
+            with open(Path(out_dir) / f"{prefix}timestamps.csv", "w", newline="", encoding="utf-8") as f:
                 wcsv = csv.writer(f)
                 wcsv.writerow(["frame_index", "timestamp_raw", "timestamp_hex"])
                 for i, t in enumerate(ts):
@@ -456,7 +456,7 @@ class Extractor:
                 output_height=crop[3],
                 crop={"x": crop[0], "y": crop[1], "w": crop[2], "h": crop[3]},
             )
-            with open(Path(out_dir) / "metadata.json", "w") as f:
+            with open(Path(out_dir) / "metadata.json", "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
 
         return ExtractStats(

@@ -205,13 +205,25 @@ def validate_file(path: str, dry_run: bool = True) -> Validation:
     return Validation(all_ok, msgs, names)
 
 
-def dry_run_module(cls: type) -> tuple[bool, list[str]]:
-    from .runner import _coerce_output
+def dry_run_module(cls: type, _depth: int = 0) -> tuple[bool, list[str]]:
     from .result import RESERVED
+    from .runner import _check_tables, _coerce_output
 
     msgs = []
     frames = synthetic_frames()
     k, h, w = frames.shape
+    inputs = {}
+    for req in getattr(cls, "requires", ()) or ():
+        if _depth > 8:
+            return False, [f"✗ {cls.name}: requirement chain too deep (circular?)"]
+        try:
+            rcls = get_module(req)
+        except (KeyError, ValueError) as exc:
+            return False, [f"✗ {cls.name}: requires '{req}': {exc}"]
+        ok, table = _dry_table(rcls, frames, _depth + 1)
+        if not ok:
+            return False, [f"✗ {cls.name}: required module '{req}' failed its dry run"]
+        inputs[req] = table
 
     class _Meta:
         bin_path, footage_path, camera_name = "<synthetic>", None, "synthetic"
@@ -238,15 +250,20 @@ def dry_run_module(cls: type) -> tuple[bool, list[str]]:
         table = {"frame": np.arange(k), "timestamp_raw": (1_000_000 + 2000 * np.arange(k)).astype(np.uint64),
                  "time_s": 0.002 * np.arange(k)}
         table.update({key: np.concatenate([p[key] for p in parts]) for key in keys})
+        ctx.inputs = inputs
         new = m.finish(table, ctx)
         if new is not None:
             table = dict(new)
+        _check_tables(cls.name, ctx.tables)
         for key in table:
             a = np.asarray(table[key])
             if a.shape != (k,):
                 raise RuntimeError(f"finish(): column '{key}' has shape {a.shape}, expected ({k},)")
         cols = [c for c in table if c not in RESERVED]
-        msgs.append(f"✓ {cls.name}: dry run on {k} synthetic frames → columns {cols}")
+        msgs.append(f"✓ {cls.name}: dry run on {k} synthetic frames → columns {cols}"
+                    + (f", tables {sorted(ctx.tables)}" if ctx.tables else ""))
+        if _depth:
+            msgs.append(("__table__", table))  # type: ignore[arg-type]
         if ctx.summary:
             msgs.append(f"  summary keys: {sorted(ctx.summary)}")
         return True, msgs
@@ -256,14 +273,15 @@ def dry_run_module(cls: type) -> tuple[bool, list[str]]:
         return False, msgs
 
 
-TEMPLATE = '''"""{title} — an opngx analysis module.
+# ASCII only: a user's file must survive any editor / code page (v2.0)
+TEMPLATE = '''"""{title} - an opngx analysis module.
 
 Save this file in the modules folder (the Editor tab does that for you);
 it then appears in the Modules tab next to the built-in ones.
 
-`process()` receives a BATCH of frames as a (k, h, w) uint8 numpy array —
+`process()` receives a BATCH of frames as a (k, h, w) uint8 numpy array -
 already cropped to the region you chose, raw sensor values unless the run
-uses the display curve — and returns one value per frame for every column.
+uses the display curve - and returns one value per frame for every column.
 The runner adds `frame`, `timestamp_raw` and `time_s` for you.
 """
 
@@ -308,3 +326,12 @@ class {cls}(Module):
 def template(name: str = "my_module", title: str = "My module") -> str:
     cls = "".join(part.capitalize() for part in name.split("_")) or "MyModule"
     return TEMPLATE.format(name=name, title=title, cls=cls)
+
+
+def _dry_table(cls: type, frames, depth: int):
+    """Dry-run a required module and return its finished table."""
+    ok, msgs = dry_run_module(cls, depth)
+    for m in msgs:
+        if isinstance(m, tuple) and m[0] == "__table__":
+            return ok, m[1]
+    return False, None

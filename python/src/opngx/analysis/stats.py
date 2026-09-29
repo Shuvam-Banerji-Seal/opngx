@@ -19,6 +19,11 @@ def histograms(frames: np.ndarray) -> np.ndarray:
     flat = frames.reshape(k, -1)
     if flat.dtype != np.uint8:
         raise TypeError("histograms() needs uint8 frames")
+    from opngx.analysis import native
+
+    h = native.hist256(flat)  # C kernel when available (releases the GIL)
+    if h is not None:
+        return h
     return np.stack([np.bincount(r, minlength=256) for r in flat]) if k else np.zeros((0, 256), np.int64)
 
 

@@ -96,12 +96,14 @@ QPushButton {
     padding: 9px 18px; font-weight: 500;
 }
 QPushButton:hover  { background: #182018; border-color: #3e6b3a; }
+QPushButton#compact { padding: 6px 10px; }
+QPushButton#icon { padding: 4px 6px; }
 QPushButton:pressed{ background: #22301f; }
 QPushButton:disabled { color: #4a554a; background: #0a0c0a; }
 QPushButton#accent {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
                 stop:0 #4d8248, stop:1 #3e6b3a);
-    color: white; border: none; font-weight: 700; padding: 10px 26px;
+    color: #fefefe; border: none; font-weight: 700; padding: 10px 26px;
 }
 QPushButton#accent:hover { background: #57914f; }
 QPushButton#danger {
@@ -125,7 +127,7 @@ QRadioButton:hover, QCheckBox:hover { color: #ffffff; }
 
 /* ---------- sliders ---------- */
 QSlider::groove:horizontal {
-    height: 6px; background: #0a0c0a; border-radius: 3px;
+    height: 6px; background: #1f261f; border-radius: 3px;
 }
 QSlider::sub-page:horizontal {
     background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
@@ -554,12 +556,38 @@ class MainWindow(QtWidgets.QMainWindow):
     def _tip(widget: QtWidgets.QWidget, title: str, body: str) -> None:
         widget.setToolTip(
             f"<div style='max-width:420px'>"
-            f"<b style='color:#60a5fa'>{title}</b><br>{body}</div>"
+            f"<b style='color:#60a5fa'>{title}</b><br>{body}</div>"  # heading role
         )
+
+    def _tab_host(self, page):
+        """The tab page that holds `page` (pages are wrapped in hosts)."""
+        return self._hosts.get(id(page), page)
 
     def _on_modules_changed(self) -> None:
         self.analyze_view.reload_modules()
+        self.docs_view.refresh()
         self._log("analysis modules reloaded")
+
+    def _set_theme(self, name: str, accent="keep") -> None:
+        from opngx.ui import themes
+
+        app = QtWidgets.QApplication.instance()
+        themes.apply(app, name, accent)
+        qs = QtCore.QSettings("opngx", "opngx-studio")
+        qs.setValue("ui/theme", name)
+        qs.setValue("ui/accent", themes.custom_accent() or "")
+        for a in self._theme_group.actions():
+            a.setChecked(a.text() == name)
+        if hasattr(self, "module_editor"):
+            self.module_editor.retheme()
+        self._log(f"theme: {name}" + (f" · accent {themes.custom_accent()}" if themes.custom_accent() else ""))
+
+    def _pick_accent(self) -> None:
+        from opngx.ui import themes
+
+        c = QtWidgets.QColorDialog.getColor(themes.qcolor("accent"), self, "Accent colour")
+        if c.isValid():
+            self._set_theme(themes.current(), accent=c.name())
 
     def _toggle_fullscreen(self, on: bool) -> None:
         if on:
@@ -616,6 +644,24 @@ class MainWindow(QtWidgets.QMainWindow):
             a.triggered.connect(lambda _=False, v=val: self._set_scale(v))
             self._scale_group.addAction(a)
             m_scale.addAction(a)
+        m_theme = m_view.addMenu("Theme")
+        from opngx.ui import themes as _th
+
+        self._theme_group = QtGui.QActionGroup(self)
+        for tname in _th.names():
+            a = QtGui.QAction(tname, self)
+            a.setCheckable(True)
+            a.setChecked(tname == _th.current())
+            a.triggered.connect(lambda _=False, n=tname: self._set_theme(n))
+            self._theme_group.addAction(a)
+            m_theme.addAction(a)
+        m_theme.addSeparator()
+        acc = QtGui.QAction("Custom accent colour…", self)
+        acc.triggered.connect(self._pick_accent)
+        m_theme.addAction(acc)
+        acc_reset = QtGui.QAction("Theme's own accent", self)
+        acc_reset.triggered.connect(lambda: self._set_theme(_th.current(), accent=None))
+        m_theme.addAction(acc_reset)
         m_view.addSeparator()
         fit = QtGui.QAction("Fit window to this screen", self)
         fit.triggered.connect(lambda: self._scaling.fit_to_screen(self, 1180, 800))
@@ -642,6 +688,11 @@ class MainWindow(QtWidgets.QMainWindow):
         g6.triggered.connect(lambda: self._guide("Verification", VERIFY_GUIDE))
         m_help.addAction(g6)
         m_help.addSeparator()
+        logs = QtGui.QAction("Open log / crash-report folder", self)
+        logs.triggered.connect(
+            lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(os.path.dirname(crash_log_path())))
+        )
+        m_help.addAction(logs)
         about = QtGui.QAction("About", self)
         about.triggered.connect(self._about)
         m_help.addAction(about)
@@ -651,17 +702,22 @@ class MainWindow(QtWidgets.QMainWindow):
         d.setWindowTitle(title)
         self._scaling.fit_to_screen(d, 720, 560)
         v = QtWidgets.QVBoxLayout(d)
+        from opngx.ui import themes
+
+        html = themes.recolor(html)
         tb = QtWidgets.QTextBrowser()
         # document text color must be set on the DOCUMENT, not the widget:
         # the widget-QSS color does not reach HTML body text on all themes
         tb.document().setDefaultStyleSheet(
-            "body { color: #e6ece6; } a { color: #8fbf7f; }"
+            themes.recolor("body { color: #e6ece6; } a { color: #8fbf7f; }")
         )
         tb.setHtml(f"<body>{html}</body>")
         tb.setStyleSheet(
-            "QTextBrowser { background: #070807; "
-            "color: #e6ece6; border: 1px solid #1f261f; "
-            "border-radius: 10px; }"
+            themes.recolor(
+                "QTextBrowser { background: #070807; "
+                "color: #e6ece6; border: 1px solid #1f261f; "
+                "border-radius: 10px; }"
+            )
         )
         v.addWidget(tb)
         close = QtWidgets.QPushButton("Close")
@@ -1221,8 +1277,10 @@ class MainWindow(QtWidgets.QMainWindow):
         wv.addLayout(vtools)
         vrow = QtWidgets.QHBoxLayout()
         self.prev_btn = QtWidgets.QPushButton("◀")
+        self.prev_btn.setObjectName("icon")
         self._scaling.fix(self.prev_btn, "setFixedWidth", 44)
         self.next_btn = QtWidgets.QPushButton("▶")
+        self.next_btn.setObjectName("icon")
         self._scaling.fix(self.next_btn, "setFixedWidth", 44)
         self.frame_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.frame_slider.setRange(0, 0)
@@ -1340,32 +1398,48 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.crop_btn.clicked.connect(self._open_crop_editor)
         bar.addWidget(self.crop_btn)
+        bar.addStretch(1)
+        # progress + status on their own row: at 720p/768p the eight action
+        # buttons need the whole width (the audit found "Verify vs source
+        # bin" clipped when they shared it with the bar)
+        prow = QtWidgets.QHBoxLayout()
         self.progress = QtWidgets.QProgressBar()
-        self._scaling.fix(self.progress, "setFixedHeight", 16)
-        bar.addWidget(self.progress, 1)
+        self._scaling.fix(self.progress, "setFixedHeight", 12)
+        prow.addWidget(self.progress, 1)
         self.status_lbl = QtWidgets.QLabel("idle")
         self.status_lbl.setObjectName("hint")
-        bar.addWidget(self.status_lbl)
+        prow.addWidget(self.status_lbl)
         ext_lay.addLayout(bar)
+        ext_lay.addLayout(prow)
 
         # ---------------- analysis workspaces (v1.10) ----------------
         from opngx.ui.analysis_ui import AnalyzeView, ModuleEditor
+        from opngx.ui.docs_ui import DocsView
 
         self.analyze_view = AnalyzeView(self)
         self.module_editor = ModuleEditor(self)
+        self.docs_view = DocsView(self)
         self.module_editor.modulesChanged.connect(self._on_modules_changed)
-        for page, title in ((self.analyze_view, "◎  Analyze"), (self.module_editor, "✎  Module editor")):
+        self.module_editor.docsChanged.connect(self.docs_view.refresh)
+        self._hosts = {}
+        for page, title in (
+            (self.analyze_view, "◎  Analyze"),
+            (self.module_editor, "✎  Editor"),
+            (self.docs_view, "📖  Docs"),
+        ):
             host = QtWidgets.QWidget()
             hl = QtWidgets.QVBoxLayout(host)
             hl.setContentsMargins(0, 8, 0, 0)
             hl.addWidget(page)
             self.tabs.addTab(host, title)
+            self._hosts[id(page)] = host
         self.tabs.setTabToolTip(0, "Extract frames, render video, verify — the classic studio")
         self.tabs.setTabToolTip(
             1, "Run analysis modules (motion tracking, luminosity, contrast, yours) "
             "and export their data files"
         )
-        self.tabs.setTabToolTip(2, "Write, validate and test your own analysis modules in Python")
+        self.tabs.setTabToolTip(2, "Write, validate and test analysis modules (Python) and docs (Markdown)")
+        self.tabs.setTabToolTip(3, "Guides, the generated API reference, every module's reference, your docs")
 
         # wiring
         browse.clicked.connect(self._pick_source)
@@ -1887,16 +1961,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ext_edit.setText(extmap.get(fmt, ".Png"))
 
     def _log(self, msg: str, tag: str = "info") -> None:
+        from opngx.ui import themes
+
         stamp = time.strftime("%H:%M:%S")
-        colors = {
-            "info": "#94a3b8",
-            "ok": "#34d399",
-            "warn": "#fbbf24",
-            "err": "#f87171",
-        }
+        role = {"info": "text_dim", "ok": "ok", "warn": "warn", "err": "err"}.get(tag, "text_dim")
         self.log_view.appendHtml(
-            f"<span style='color:#475569'>[{stamp}]</span> "
-            f"<span style='color:{colors.get(tag, '#94a3b8')}'>{msg}</span>"
+            f"<span style='color:{themes.hexc('text_muted')}'>[{stamp}]</span> "
+            f"<span style='color:{themes.hexc(role)}'>{msg}</span>"
         )
 
     def _on_scope_changed(self, batch: bool) -> None:
@@ -2096,6 +2167,9 @@ class MainWindow(QtWidgets.QMainWindow):
         from opngx.ui.batch import CropEditor
 
         batch = self._batch_win is not None and self._batch_win.isVisible()
+        def frame_fn(i: int):
+            return gray_to_qimage(self._render_gray(i))
+
         dlg = CropEditor(
             self,
             img,
@@ -2104,6 +2178,10 @@ class MainWindow(QtWidgets.QMainWindow):
             apply_all_default=batch,
             show_apply_all=batch,
             apply_all_text="Also apply to every recording in the open batch window it fits",
+            frame_fn=frame_fn,
+            n_frames=m.capacity_frames,
+            frame_index=idx,
+            track_fn=lambda: self.analyze_view.track_bbox(m.bin_path),
         )
         # v1.7.0 ignored the result, so Cancel applied the crop anyway
         if dlg.exec() != QtWidgets.QDialog.Accepted:
@@ -2481,7 +2559,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log(f"ERROR: {msg}", "err")
         QtWidgets.QMessageBox.critical(self, "opngx", msg)
 
-    def _on_dialog(self, payload) -> None:
+    def _on_dialog(self, payload) -> None:  # html colours follow the theme
+        from opngx.ui import themes
+
+        if isinstance(payload, tuple) and len(payload) == 2:
+            payload = (payload[0], themes.recolor(payload[1]))
         title, msg = payload
         box = QtWidgets.QMessageBox(self)
         box.setWindowTitle(title)
@@ -2503,52 +2585,74 @@ def main() -> int:
             "Falling back to the Tkinter UI is available via: opngx-ui --tk"
         )
     app = QtWidgets.QApplication([])
+    install_crash_handlers()
     apply_theme(app)
     win = MainWindow()
     win.show()
     return app.exec()
 
 
-def apply_theme(app: "QtWidgets.QApplication") -> None:
-    """Dark palette + QSS. Shared by main() and the packaged selftests so
-    what they render is what users see."""
-    # Dark QPalette FIRST: guarantees white-on-dark text in every dialog
-    # (QMessageBox, file dialogs, context menus) even where QSS does not
-    # reach — the black-on-black report came from unstyled message boxes.
-    pal = QtGui.QPalette()
-    cr = QtGui.QPalette.ColorRole
-    cg = QtGui.QPalette.ColorGroup
-    dark = QtGui.QColor("#0d0f0d")
-    text = QtGui.QColor("#e8ede8")
-    bright = QtGui.QColor("#ffffff")
-    for group in (cg.Active, cg.Inactive, cg.Disabled):
-        pal.setColor(group, cr.Window, dark)
-        pal.setColor(
-            group,
-            cr.WindowText,
-            text if group != cg.Disabled else QtGui.QColor("#8a948a"),
-        )
-        pal.setColor(group, cr.Base, QtGui.QColor("#070807"))
-        pal.setColor(group, cr.AlternateBase, dark)
-        pal.setColor(
-            group, cr.Text, text if group != cg.Disabled else QtGui.QColor("#8a948a")
-        )
-        pal.setColor(group, cr.Button, QtGui.QColor("#10140f"))
-        pal.setColor(
-            group,
-            cr.ButtonText,
-            bright if group != cg.Disabled else QtGui.QColor("#4a554a"),
-        )
-        pal.setColor(group, cr.Highlight, QtGui.QColor("#4d8248"))
-        pal.setColor(group, cr.HighlightedText, bright)
-        pal.setColor(group, cr.ToolTipBase, QtGui.QColor("#070807"))
-        pal.setColor(group, cr.ToolTipText, QtGui.QColor("#eaf2ea"))
-        pal.setColor(group, cr.PlaceholderText, QtGui.QColor("#8a948a"))
-    app.setPalette(pal)
-    # QSS + font + fixed sizes scaled to the monitor (720p..4K, cycle 24)
-    from opngx.ui import scaling
+def crash_log_path() -> str:
+    """<config>/opngx/crash.log (next to the modules and docs folders)."""
+    import opngx.analysis as _oa
 
-    scaling.install(app, QSS)
+    d = os.path.dirname(_oa.user_modules_dir())
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "crash.log")
+
+
+def install_crash_handlers() -> None:
+    """v2.0 diagnostics: native crashes (segfault, abort) dump every
+    thread's Python stack to crash.log via faulthandler; uncaught Python
+    exceptions — on the UI thread or a worker thread — are logged there
+    with a full traceback and shown in a dialog instead of vanishing."""
+    import faulthandler
+    import sys as _sys
+    import threading as _th
+    import traceback as _tb
+
+    path = crash_log_path()
+    try:
+        fh = open(path, "a", buffering=1, encoding="utf-8")
+        fh.write(f"\n=== opngx {opngx.__version__} started {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        faulthandler.enable(fh, all_threads=True)
+    except OSError:
+        fh = None
+
+    def report(kind, etype, value, tb) -> None:
+        text = "".join(_tb.format_exception(etype, value, tb))
+        if fh is not None:
+            fh.write(f"--- {kind} {time.strftime('%H:%M:%S')} ---\n{text}\n")
+        app = QtWidgets.QApplication.instance()
+        if app is not None and _th.current_thread() is _th.main_thread():
+            QtWidgets.QMessageBox.critical(
+                None, "opngx — unexpected error",
+                f"{etype.__name__}: {value}\n\nThe full traceback was written to\n{path}",
+            )
+
+    _sys.excepthook = lambda et, v, tb: report("uncaught exception", et, v, tb)
+    _th.excepthook = lambda a: report(f"thread '{a.thread.name if a.thread else '?'}'", a.exc_type, a.exc_value, a.exc_traceback)
+
+
+def apply_theme(app: "QtWidgets.QApplication", name: Optional[str] = None) -> None:
+    """Theme (palette + QSS) and resolution scaling. Shared by main() and
+    the packaged selftests so what they render is what users see."""
+    from opngx.ui import scaling, themes
+
+    qs = QtCore.QSettings("opngx", "opngx-studio")
+    if name is None:
+        name = str(qs.value("ui/theme", themes.DEFAULT) or themes.DEFAULT)
+        if name not in themes.THEMES:
+            name = themes.DEFAULT
+        acc = qs.value("ui/accent", "") or None
+        themes.set_theme(name, acc)
+    else:
+        themes.set_theme(name)
+    # QSS + font + fixed sizes scaled to the monitor (720p..4K, cycle 24),
+    # recoloured for the theme (v2.0)
+    sc = scaling.install(app, themes.recolor(QSS))
+    sc.raw_qss = QSS
+    themes.apply(app)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,9 @@ class AnalysisResult:
     overlay: dict[str, str] = field(default_factory=dict)
     plot: tuple = ()
     trajectory: bool = False
+    tables: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
+    table_units: dict[str, dict[str, str]] = field(default_factory=dict)
+    table_plots: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     def __len__(self) -> int:
@@ -96,6 +99,11 @@ class AnalysisResult:
                     for k in self.columns
                 ],
                 "rows": len(self),
+                "tables": {
+                    name: {"rows": len(next(iter(tb.values()), [])),
+                           "columns": [{"key": k, "unit": self.table_units.get(name, {}).get(k, "")} for k in tb]}
+                    for name, tb in self.tables.items()
+                },
                 "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             }
         )
@@ -106,6 +114,10 @@ class AnalysisResult:
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
         keys = list(self.columns)
         cols = [self.columns[k] for k in keys]
+        for name, tb in self.tables.items():
+            root, ext = os.path.splitext(path)
+            _write_table_csv(f"{root}.{name}{ext or '.csv'}", tb, self.table_units.get(name, {}),
+                             f"# opngx analysis: {self.module} — table '{name}'\n" if header_comments else "")
         with open(path, "w", newline="", encoding="utf-8") as fh:
             if header_comments:
                 md = self.metadata()
@@ -132,6 +144,7 @@ class AnalysisResult:
     def to_json(self, path: str) -> str:
         md = self.metadata()
         md["data"] = {k: _jsonable(v) for k, v in self.columns.items()}
+        md["table_data"] = {n: {k: _jsonable(v) for k, v in tb.items()} for n, tb in self.tables.items()}
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(md, fh, indent=1)
@@ -139,8 +152,9 @@ class AnalysisResult:
 
     def to_npz(self, path: str) -> str:
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+        extra = {f"tbl__{n}__{k}": v for n, tb in self.tables.items() for k, v in tb.items()}
         np.savez_compressed(
-            path, **self.columns, _metadata=np.array(json.dumps(self.metadata()))
+            path, **self.columns, **extra, _metadata=np.array(json.dumps(self.metadata()))
         )
         return path
 
@@ -169,13 +183,22 @@ def load_result(path: str) -> AnalysisResult:
     if path.lower().endswith(".npz"):
         z = np.load(path, allow_pickle=False)
         md = json.loads(str(z["_metadata"]))
-        cols = {k: z[k] for k in z.files if k != "_metadata"}
+        cols = {k: z[k] for k in z.files if k != "_metadata" and not k.startswith("tbl__")}
+        tables: dict = {}
+        for k in z.files:
+            if k.startswith("tbl__"):
+                _, n, c = k.split("__", 2)
+                tables.setdefault(n, {})[c] = z[k]
     else:
         with open(path, encoding="utf-8") as fh:
             md = json.load(fh)
         cols = {
             k: np.asarray([np.nan if x is None else x for x in v])
             for k, v in md["data"].items()
+        }
+        tables = {
+            n: {k: np.asarray([np.nan if x is None else x for x in v]) for k, v in tb.items()}
+            for n, tb in md.get("table_data", {}).items()
         }
     return AnalysisResult(
         module=md["module"],
@@ -188,4 +211,28 @@ def load_result(path: str) -> AnalysisResult:
         summary=md.get("summary", {}),
         recording=md.get("recording", {}),
         run=md.get("run", {}),
+        tables=tables,
+        table_units={n: {c["key"]: c.get("unit", "") for c in v.get("columns", [])}
+                     for n, v in md.get("tables", {}).items()},
     )
+
+
+def _write_table_csv(path: str, tb: dict, units: dict, head: str) -> None:
+    keys = list(tb)
+    n = len(next(iter(tb.values()), []))
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        fh.write(head)
+        u = ", ".join(f"{k}[{units[k]}]" for k in keys if units.get(k))
+        if u and head:
+            fh.write(f"# units: {u}\n")
+        w = csv.writer(fh)
+        w.writerow(keys)
+        for i in range(n):
+            row = []
+            for k in keys:
+                v = tb[k][i]
+                if isinstance(v, (float, np.floating)):
+                    row.append("" if not np.isfinite(v) else f"{float(v):.6g}")
+                else:
+                    row.append(str(v))
+            w.writerow(row)

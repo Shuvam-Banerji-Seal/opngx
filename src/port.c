@@ -454,7 +454,7 @@ int port_detect_gpus(char *buf, size_t cap) {
     };
     int found = 0;
     size_t off = 0;
-    char seen[16][32];
+    char seen[16][64];  /* holds a whole "vendor:device" sig (was 32: truncated sigs never matched) */
     int nseen = 0;
     FILE *nv = fopen("/proc/driver/nvidia/version", "r");
     if (nv) {
@@ -502,7 +502,7 @@ int port_detect_gpus(char *buf, size_t cap) {
             for (int k = 0; k < nseen; k++)
                 if (!strcmp(seen[k], sig)) { dup = 1; break; }
             if (dup) continue;
-            if (nseen < 16) snprintf(seen[nseen++], 32, "%s", sig);
+            if (nseen < 16) snprintf(seen[nseen++], sizeof seen[0], "%s", sig);
         }
         snprintf(vpath, sizeof vpath, "%s/device", base);
         f = fopen(vpath, "r");

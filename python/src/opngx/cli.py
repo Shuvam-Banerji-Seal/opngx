@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
                 else max(0, m.capacity_frames - args.start)
             )
             ts = read_timestamps(args.bin, m, start=args.start, count=n)
-            with open(args.csv, "w", newline="") as fh:
+            with open(args.csv, "w", newline="", encoding="utf-8") as fh:
                 w = _csv.writer(fh)
                 w.writerow(["frame_index", "timestamp_raw", "delta_ticks"])
                 prev = None

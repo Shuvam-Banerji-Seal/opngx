@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define OPNGX_VERSION "1.9.0"
+#define OPNGX_VERSION "2.0.0"
 #define OPNGX_ABI_VERSION 5
 
 /* Output formats */
@@ -132,6 +132,31 @@ const opngx_stats *opngx_job_stats(const opngx_job *job);
 /* One-shot convenience (used by CLI): run + fill stats. Returns 0 on success. */
 int opngx_extract(const opngx_params *p, opngx_stats *stats,
                   char *err, size_t err_cap);
+
+/* ---- analysis kernels (v2.0, src/analysis.c) ------------------------
+ * Native versions of the analysis-module hot paths. Single-threaded and
+ * re-entrant per call; frames are k contiguous (h, w) uint8 images. */
+typedef struct {
+    int    method;        /* 0 = circle (+ridge refine), 1 = centroid, 2 = peak */
+    int    window;        /* search window edge (px), >= 1                    */
+    double threshold;     /* fraction between window median (0) and peak (1)  */
+    int    min_pixels;    /* fewer above-threshold pixels => not found        */
+    int    locate_block;  /* coarse-search block (px)                          */
+    int    refine;        /* circle: ridge refinement on/off                  */
+    int    origin_x;      /* full-frame offset of frame (0,0): aligns the     */
+    int    origin_y;      /*   coarse grid so a crop never moves the search   */
+} opngx_track_params;
+
+/* Track one spot/ring per frame. Outputs are k-long arrays; positions are
+ * in frame coordinates (add the crop origin for full-frame). Returns 0,
+ * -1 on bad arguments, -2 on allocation failure. */
+int opngx_track(const uint8_t *frames, int64_t k, int h, int w,
+                const opngx_track_params *p,
+                double *x, double *y, double *radius, double *peak,
+                double *area, int8_t *found, double *fit_rms);
+
+/* k frames of npx pixels -> k x 256 int64 histograms. Returns 0 / -1. */
+int opngx_hist256(const uint8_t *frames, int64_t k, int64_t npx, int64_t *out);
 
 /* Utilities */
 const char *opngx_version(void);

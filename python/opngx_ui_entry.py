@@ -80,7 +80,9 @@ def _selftest_log():
     import sys
 
     log_path = os.environ.get("OPNGX_SELFTEST_LOG", "selftest-ui.log")
-    logf = open(log_path, "w", buffering=1)
+    # utf-8: the Windows default (cp1252) could not even print "✗" and the
+    # selftest died inside its own error report
+    logf = open(log_path, "w", buffering=1, encoding="utf-8", errors="replace")
     try:
         os.dup2(logf.fileno(), 1)
         os.dup2(logf.fileno(), 2)
@@ -367,7 +369,7 @@ def _selftest_analysis() -> int:
             assert os.path.getsize(p_) > 0
         # a user module written to disk loads and runs in the frozen app
         md = Path(oa.user_modules_dir(create=True))
-        (md / "selftest_mod.py").write_text(oa.template("selftest_mod", "Selftest"))
+        (md / "selftest_mod.py").write_text(oa.template("selftest_mod", "Selftest"), encoding="utf-8")
         v = oa.validate_file(str(md / "selftest_mod.py"))
         assert v.ok, v.messages
         r2 = oa.analyze(str(rec / "rec.bin"), "selftest_mod")

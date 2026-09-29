@@ -19,6 +19,8 @@ hidden = collect_submodules("opngx") + [
     "opngx.analysis.runner", "opngx.analysis.result", "opngx.analysis.stats",
     "opngx.analysis.builtin", "opngx.analysis.builtin.motion_tracking",
     "opngx.analysis.builtin.luminosity", "opngx.analysis.builtin.contrast",
+    "opngx.analysis.builtin.brownian", "opngx.analysis.native",
+    "opngx.ui.themes", "opngx.ui.editor", "opngx.ui.docs_ui", "opngx.ui.audit", "opngx.docs",
 ]
 
 # bundle an ffmpeg binary so Render-video works out of the box
@@ -46,7 +48,9 @@ if ffbin:
     _sh.copy2(ffbin, _dst)
     binaries.append((_dst, "."))
 
-hidden += ["imageio_ffmpeg"]
+# v2.0 compact build: imageio_ffmpeg is used at BUILD time only (to find
+# the binary above). Bundling the package as well shipped the 88 MB ffmpeg
+# twice — resolve_ffmpeg() uses _bundled_ffmpeg first.
 
 icon_path = os.path.join(root, "assets", "logo", "icon.ico")
 icon_png = os.path.join(root, "assets", "logo", "icon.png")
@@ -67,14 +71,49 @@ a = Analysis(
         (os.path.join(root, "README.md"), "docs"),
         (os.path.join(root, "docs", "FORMAT.md"), "docs"),
         (os.path.join(root, "docs", "BENCHMARKS.md"), "docs"),
+        (os.path.join(root, "docs", "ANALYSIS.md"), "docs"),
+        (os.path.join(root, "python", "src", "opngx", "docs", "ANALYSIS.md"), "opngx/docs"),
+        (os.path.join(root, "python", "src", "opngx", "docs", "FORMAT.md"), "opngx/docs"),
         (icon_png, "assets/logo") if os.path.exists(icon_png) else (os.path.join(root, "README.md"), "docs"),
     ],
     hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter.test", "test", "unittest"],
+    excludes=[
+        "tkinter", "_tkinter", "tkinter.test", "test", "unittest", "imageio_ffmpeg",
+        # Qt modules the studio never imports (widgets only)
+        "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickWidgets", "PySide6.QtQuick3D",
+        "PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
+        "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets", "PySide6.Qt3DCore", "PySide6.QtCharts",
+        "PySide6.QtDataVisualization", "PySide6.QtGraphs", "PySide6.QtNetwork", "PySide6.QtOpenGL",
+        "PySide6.QtOpenGLWidgets", "PySide6.QtSql", "PySide6.QtTest", "PySide6.QtDesigner",
+        "PySide6.QtHelp", "PySide6.QtBluetooth", "PySide6.QtPositioning", "PySide6.QtLocation",
+        "PySide6.QtSerialPort", "PySide6.QtWebSockets", "PySide6.QtRemoteObjects",
+        "PySide6.QtSpatialAudio", "PySide6.QtTextToSpeech", "PySide6.QtUiTools", "PySide6.QtXml",
+    ],
     cipher=block_cipher,
 )
+# drop binaries nothing loads: the software-OpenGL fallback (widgets never
+# need it), Qt Quick/QML/PDF/3D libraries pulled in by plugins, Tcl/Tk (the
+# Tk fallback UI is not shipped: PySide6 always is) and PIL's AVIF codec.
+_DROP = ("opengl32sw", "qt6quick", "qt6qml", "qt6pdf", "qt6quick3d", "qt6shadertools",
+         "qt6virtualkeyboard", "qt6webengine", "qt6designer", "qt6multimedia", "avcodec",
+         "avformat", "avutil", "swresample", "swscale", "tcl86", "tk86", "_avif", "qt6network",
+         "qt6opengl")
+
+
+def _keep(entry):
+    name = entry[0].replace("\\", "/").lower()
+    base = name.rsplit("/", 1)[-1]
+    if any(base.startswith(d) or d in base for d in _DROP):
+        return False
+    if name.startswith(("tcl/", "tk/", "_tcl_data", "_tk_data", "tcl8/")):
+        return False
+    return True
+
+
+a.binaries = [b for b in a.binaries if _keep(b)]
+a.datas = [d for d in a.datas if _keep(d)]
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

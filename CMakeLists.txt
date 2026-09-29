@@ -18,10 +18,15 @@ option(OPNGX_WITH_ZLIB       "Allow zlib fallback backend" ON)
 option(OPNGX_BUILD_SHARED    "Build libopngx shared library" ON)
 option(OPNGX_LTO             "Link-time optimization for Release" ON)
 
+# analysis.c mirrors numpy arithmetic; FMA contraction would change the
+# last bit and flip ties in degenerate windows (parity test AN-10)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  set_source_files_properties(src/analysis.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
 set(CORE_SOURCES
   src/footage.c src/transform.c src/pngout.c src/compress.c
   src/extract.c src/verify.c src/util.c src/cpu.c src/port.c
-  src/encode.c)
+  src/encode.c src/analysis.c)
 
 find_package(Threads REQUIRED)
 

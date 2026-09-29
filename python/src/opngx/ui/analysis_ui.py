@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import os
 import tempfile
 import threading
@@ -26,10 +27,20 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 
 import opngx
 import opngx.analysis as oa
-from opngx.ui import scaling
+from opngx.ui import scaling, themes
 from opngx.ui.frameview import FrameView, gray_to_qimage
 
-SERIES_COLORS = ("#7fb069", "#60a5fa", "#fbbf24", "#f472b6", "#a78bfa", "#34d399")
+class _Series:
+    """Plot series colours of the current theme (indexable like a tuple)."""
+
+    def __getitem__(self, i):
+        from opngx.ui import themes
+
+        s = themes.series()
+        return s[i % len(s)]
+
+
+SERIES_COLORS = _Series()
 
 
 # =========================================================================
@@ -78,19 +89,32 @@ class PlotView(QtWidgets.QWidget):
         self._hover: Optional[int] = None
         self._geom = None
         self.placeholder = "run a module to see its data"
+        self.log = False
+        self.raw_x = None
 
     def sizeHint(self) -> QtCore.QSize:  # noqa: N802
         return QtCore.QSize(420, 260)
 
-    def set_line(self, x, series, xlabel="", ylabel="") -> None:
+    def set_line(self, x, series, xlabel="", ylabel="", log=False) -> None:
+        """`log=True`: both axes logarithmic (non-positive values dropped);
+        ticks are labelled in real units."""
         self.mode = "line"
-        self.x = None if x is None else np.asarray(x, dtype=float)
+        self.log = bool(log)
+        x = None if x is None else np.asarray(x, dtype=float)
+        self.raw_x = x
+        if self.log and x is not None:
+            with np.errstate(all="ignore"):
+                x = np.where(x > 0, np.log10(x), np.nan)
+                series = [(lab, np.where(np.asarray(y, float) > 0, np.log10(np.asarray(y, float)), np.nan), col)
+                          for lab, y, col in series]
+        self.x = x
         self.series = [(lab, np.asarray(y, dtype=float), col) for lab, y, col in series]
         self.xlabel, self.ylabel = xlabel, ylabel
         self.update()
 
     def set_xy(self, x, y, label="trajectory", xlabel="x [px]", ylabel="y [px]") -> None:
         self.mode = "xy"
+        self.log = False
         self.x = np.asarray(x, dtype=float)
         self.series = [(label, np.asarray(y, dtype=float), SERIES_COLORS[0])]
         self.xlabel, self.ylabel = xlabel, ylabel
@@ -144,17 +168,17 @@ class PlotView(QtWidgets.QWidget):
 
     def paintEvent(self, ev) -> None:  # noqa: N802
         p = QtGui.QPainter(self)
-        p.fillRect(self.rect(), QtGui.QColor("#070807"))
+        p.fillRect(self.rect(), themes.qcolor("input"))
         # two series in "vs time" mode get independent axes (left/right):
         # x ~145 px and y ~62 px on one axis are two flat lines, and the
         # sub-pixel motion that matters is invisible
-        dual = self.mode == "line" and len(self.series) == 2
-        pal_text = QtGui.QColor("#9ab294")
-        grid = QtGui.QColor("#1b221b")
+        dual = self.mode == "line" and len(self.series) == 2 and not self.log
+        pal_text = themes.qcolor("text_dim")
+        grid = themes.qcolor("grid")
         r = self._ranges()
         fm = p.fontMetrics()
         if r is None:
-            p.setPen(QtGui.QColor("#5d6b5d"))
+            p.setPen(themes.qcolor("text_muted"))
             p.drawText(self.rect(), Qt.AlignCenter, self.placeholder)
             p.end()
             return
@@ -194,18 +218,19 @@ class PlotView(QtWidgets.QWidget):
         for t in _nice_ticks(ylo, yhi, max(2, int(area.height() / 45))):
             p.drawLine(QPointF(area.left(), Y(t)), QPointF(area.right(), Y(t)))
         p.setPen(pal_text)
+        lab = (lambda v: _fmt(10 ** v)) if self.log else _fmt
         for t in _nice_ticks(xlo, xhi, max(2, int(area.width() / 90))):
-            s_ = _fmt(t)
+            s_ = lab(t)
             p.drawText(QPointF(X(t) - fm.horizontalAdvance(s_) / 2, area.bottom() + fm.ascent() + 4), s_)
         if dual:
             p.setPen(QtGui.QColor(self.series[0][2]))
         for t in _nice_ticks(ylo, yhi, max(2, int(area.height() / 45))):
-            s_ = _fmt(t)
+            s_ = lab(t)
             p.drawText(QPointF(area.left() - fm.horizontalAdvance(s_) - 6, Y(t) + fm.ascent() / 2 - 1), s_)
         if dual:
             p.setPen(QtGui.QColor(self.series[1][2]))
             for t in _nice_ticks(y2lo, y2hi, max(2, int(area.height() / 45))):
-                p.drawText(QPointF(area.right() + 6, Y2(t) + fm.ascent() / 2 - 1), _fmt(t))
+                p.drawText(QPointF(area.right() + 6, Y2(t) + fm.ascent() / 2 - 1), lab(t))
             p.setPen(pal_text)
         p.drawText(
             QPointF(area.center().x() - fm.horizontalAdvance(self.xlabel) / 2, self.height() - 4), self.xlabel
@@ -216,7 +241,7 @@ class PlotView(QtWidgets.QWidget):
             p.rotate(-90)
             p.drawText(QPointF(0, 0), self.ylabel)
             p.restore()
-        p.setPen(QtGui.QPen(QtGui.QColor("#2f4a2c")))
+        p.setPen(QtGui.QPen(themes.qcolor("border_accent")))
         p.drawRect(area)
 
         p.setClipRect(area)
@@ -242,7 +267,7 @@ class PlotView(QtWidgets.QWidget):
                 if poly.size() > 1:
                     p.drawPolyline(poly)
         # cursor / hover
-        for row, color in ((self.cursor, "#ff5d8f"), (self._hover, "#e8ede8")):
+        for row, color in ((self.cursor, themes.hexc("marker")), (self._hover, themes.hexc("text"))):
             if row is None or x is None or not (0 <= row < len(x)):
                 continue
             p.setPen(QtGui.QPen(QtGui.QColor(color)))
@@ -263,9 +288,10 @@ class PlotView(QtWidgets.QWidget):
             lx += fm.horizontalAdvance(lab) + 18
         if self._hover is not None and x is not None and 0 <= self._hover < len(x):
             i = self._hover
-            vals = "  ".join(f"{lab}={_fmt(float(y[i]))}" for lab, y, _c in self.series if np.isfinite(y[i]))
-            txt = f"{self.xlabel.split(' ')[0]}={_fmt(float(x[i]))}  {vals}  (row {i})"
-            p.setPen(QtGui.QColor("#e8ede8"))
+            un = (lambda v: 10 ** v) if self.log else (lambda v: v)
+            vals = "  ".join(f"{lb}={_fmt(float(un(y[i])))}" for lb, y, _c in self.series if np.isfinite(y[i]))
+            txt = f"{self.xlabel.split(' ')[0]}={_fmt(float(un(x[i])))}  {vals}  (row {i})"
+            p.setPen(themes.qcolor("text"))
             p.drawText(QPointF(area.right() - fm.horizontalAdvance(txt) - 4, top - 4), txt)
         p.end()
 
@@ -348,14 +374,25 @@ class ResultModel(QtCore.QAbstractTableModel):
         super().__init__()
         self.set_result(result)
 
-    def set_result(self, result) -> None:
+    def set_result(self, result, table: Optional[str] = None) -> None:
+        """Show the per-frame table, or one of the result's extra tables."""
         self.beginResetModel()
         self.res = result
-        self.keys = list(result.columns) if result is not None else []
+        self.cols = {}
+        self.col_units = {}
+        if result is not None:
+            if table and table in result.tables:
+                self.cols = result.tables[table]
+                self.col_units = result.table_units.get(table, {})
+            else:
+                self.cols = result.columns
+                self.col_units = result.units
+        self.keys = list(self.cols)
+        self.nrows = len(next(iter(self.cols.values()), [])) if self.cols else 0
         self.endResetModel()
 
     def rowCount(self, parent=QtCore.QModelIndex()) -> int:  # noqa: N802
-        return len(self.res) if self.res is not None else 0
+        return self.nrows
 
     def columnCount(self, parent=QtCore.QModelIndex()) -> int:  # noqa: N802
         return len(self.keys)
@@ -363,7 +400,7 @@ class ResultModel(QtCore.QAbstractTableModel):
     def data(self, idx, role=Qt.DisplayRole):
         if role != Qt.DisplayRole or self.res is None:
             return None
-        v = self.res.columns[self.keys[idx.column()]][idx.row()]
+        v = self.cols[self.keys[idx.column()]][idx.row()]
         if isinstance(v, (np.floating, float)):
             return "" if not np.isfinite(v) else f"{float(v):.6g}"
         return str(v)
@@ -373,7 +410,7 @@ class ResultModel(QtCore.QAbstractTableModel):
             return None
         if orient == Qt.Horizontal and self.res is not None:
             k = self.keys[section]
-            u = self.res.units.get(k, "")
+            u = self.col_units.get(k, "")
             return f"{k} [{u}]" if u else k
         return str(section)
 
@@ -687,7 +724,15 @@ class AnalyzeView(QtWidgets.QWidget):
         self.cmb_y2 = QtWidgets.QComboBox()
         for c in (self.cmb_y1, self.cmb_y2):
             c.currentIndexChanged.connect(lambda *_: self._refresh_plot())
+        self.cmb_table = QtWidgets.QComboBox()
+        self.cmb_table.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        self.cmb_table.setToolTip("per-frame data, or an extra table the module produced (MSD, PSD, …)")
+        self.cmb_table.currentIndexChanged.connect(lambda *_: self._on_pick_table())
+        prow.addWidget(self.cmb_table)
         prow.addWidget(self.cmb_plot)
+        self.cb_log = QtWidgets.QCheckBox("log")
+        self.cb_log.toggled.connect(lambda *_: self._refresh_plot())
+        prow.addWidget(self.cb_log)
         for lab_, c in (("y", self.cmb_y1), ("y2", self.cmb_y2)):
             lb = QtWidgets.QLabel(lab_)
             lb.setObjectName("fieldlabel")
@@ -708,7 +753,9 @@ class AnalyzeView(QtWidgets.QWidget):
         self.table.setModel(self.model)
         self.table.verticalHeader().setDefaultSectionSize(scaling.px(20))
         self.table.horizontalHeader().setResizeContentsPrecision(200)  # sample rows: 50k stays fast
-        self.table.clicked.connect(lambda idx: self.row_slider.setValue(idx.row()))
+        self.table.clicked.connect(
+            lambda idx: None if self._current_table() else self.row_slider.setValue(idx.row())
+        )
         self.tabs.addTab(self.table, "Data")
         self.summary = QtWidgets.QPlainTextEdit()
         self.summary.setReadOnly(True)
@@ -759,7 +806,7 @@ class AnalyzeView(QtWidgets.QWidget):
                 form.changed.connect(lambda n=info.name: self._save_params(n))
             else:
                 it.setFlags(it.flags() & ~Qt.ItemIsUserCheckable)
-                it.setForeground(QtGui.QColor("#f87171"))
+                it.setForeground(themes.qcolor("err"))
                 it.setText(label + "  — BROKEN")
                 it.setToolTip(info.error)
                 form = QtWidgets.QLabel("This module failed to load:\n\n" + info.error)
@@ -1021,6 +1068,12 @@ class AnalyzeView(QtWidgets.QWidget):
             return
         self.current = key
         res = self.results[key]
+        self.cmb_table.blockSignals(True)
+        self.cmb_table.clear()
+        self.cmb_table.addItem("per-frame", "")
+        for tn in res.tables:
+            self.cmb_table.addItem(f"table: {tn}", tn)
+        self.cmb_table.blockSignals(False)
         self.model.set_result(res)
         self.table.resizeColumnsToContents()
         numeric = [k for k in res.columns if k not in ("frame", "timestamp_raw", "time_s")]
@@ -1043,6 +1096,10 @@ class AnalyzeView(QtWidgets.QWidget):
         self.cmb_plot.blockSignals(False)
         s = dict(res.summary)
         txt = [f"{res.module_title}  (module {res.module} v{res.module_version})", ""]
+        for w in s.pop("warnings", []) or []:
+            txt.append(f"⚠ {w}")
+        if txt[-1].startswith("⚠"):
+            txt.append("")
         txt += [f"{k}: {v:.6g}" if isinstance(v, float) else f"{k}: {v}" for k, v in s.items()]
         txt += ["", "run: " + json.dumps(res.run), "params: " + json.dumps(res.params),
                 "recording: " + str(res.recording.get("bin_path", ""))]
@@ -1054,10 +1111,61 @@ class AnalyzeView(QtWidgets.QWidget):
         self._refresh_plot()
         self._on_row(0)
 
+    def _current_table(self) -> str:
+        return self.cmb_table.currentData() or "" if hasattr(self, "cmb_table") else ""
+
+    def _on_pick_table(self) -> None:
+        res = self.result()
+        if res is None:
+            return
+        tn = self._current_table()
+        self.model.set_result(res, tn or None)
+        self.table.resizeColumnsToContents()
+        cols = list(res.tables[tn]) if tn else [k for k in res.columns if k not in ("frame", "timestamp_raw", "time_s")]
+        spec = res.table_plots.get(tn, {}) if tn else {}
+        for c in (self.cmb_y1, self.cmb_y2):
+            c.blockSignals(True)
+            c.clear()
+        self.cmb_y2.addItem("—")
+        xcol = spec.get("x", cols[0] if (tn and cols) else "")
+        for k in cols:
+            if k == xcol and tn:
+                continue
+            self.cmb_y1.addItem(k)
+            self.cmb_y2.addItem(k)
+        want = list(spec.get("y", [])) if tn else list(res.plot)
+        if want:
+            self.cmb_y1.setCurrentText(want[0])
+        if len(want) > 1:
+            self.cmb_y2.setCurrentText(want[1])
+        for c in (self.cmb_y1, self.cmb_y2):
+            c.blockSignals(False)
+        self.cmb_plot.setEnabled(not tn)
+        self.cb_log.blockSignals(True)
+        self.cb_log.setChecked(bool(spec.get("log", False)) if tn else False)
+        self.cb_log.blockSignals(False)
+        self._refresh_plot()
+
     def _refresh_plot(self) -> None:
         res = self.result()
         if res is None:
             self.plot.clear()
+            return
+        tn = self._current_table()
+        if tn:
+            tb = res.tables[tn]
+            spec = res.table_plots.get(tn, {})
+            xcol = spec.get("x", next(iter(tb)))
+            units = res.table_units.get(tn, {})
+            series = []
+            for i, c in enumerate((self.cmb_y1, self.cmb_y2)):
+                k = c.currentText()
+                if k and k != "—" and k in tb:
+                    u = units.get(k, "")
+                    series.append((f"{k} [{u}]" if u else k, tb[k], SERIES_COLORS[i]))
+            ux = units.get(xcol, "")
+            self.plot.set_line(tb[xcol], series, xlabel=f"{xcol} [{ux}]" if ux else xcol, log=self.cb_log.isChecked())
+            self.plot.set_cursor(None)
             return
         ov = res.overlay
         if self.cmb_plot.currentIndex() == 1 and "x" in ov and "y" in ov:
@@ -1070,7 +1178,7 @@ class AnalyzeView(QtWidgets.QWidget):
                 if k and k != "—" and k in res.columns:
                     u = res.units.get(k, "")
                     series.append((f"{k} [{u}]" if u else k, res.columns[k], SERIES_COLORS[i]))
-            self.plot.set_line(res.columns["time_s"], series, xlabel="time [s]")
+            self.plot.set_line(res.columns["time_s"], series, xlabel="time [s]", log=self.cb_log.isChecked())
         self.plot.set_cursor(self.row_slider.value())
 
     def _reader_for(self, bin_path: str):
@@ -1114,7 +1222,22 @@ class AnalyzeView(QtWidgets.QWidget):
                 v = res.columns[k][row]
                 vals.append(f"{k}={float(v):.3f}" if np.isfinite(v) else f"{k}=—")
         self.row_lbl.setText(f"frame {frame:,} · t={t:.4f}s · " + " ".join(vals))
-        self.table.selectRow(row)
+        if not self._current_table():
+            self.table.selectRow(row)
+
+    def track_bbox(self, bin_path: str):
+        """(x0, y0, x1, y1) of the latest motion-tracking result for a
+        recording, padded by the ring radius — for the crop editor."""
+        res = self.results.get((bin_path, "motion_tracking"))
+        if res is None:
+            return None
+        x, y = res.columns["x"], res.columns["y"]
+        if not np.isfinite(x).any():
+            return None
+        r = res.columns.get("radius")
+        pad = float(np.nanmax(r)) if r is not None and np.isfinite(r).any() else 0.0
+        return (float(np.nanmin(x)) - pad, float(np.nanmin(y)) - pad,
+                float(np.nanmax(x)) + pad, float(np.nanmax(y)) + pad)
 
     # ------------------------------------------------------------ export --
     def export_current(self) -> Optional[str]:
@@ -1162,275 +1285,147 @@ class AnalyzeView(QtWidgets.QWidget):
 
 
 # =========================================================================
-#  code editor
+#  module & docs editor (v2.0: tabs, find/replace, docs, themes)
 # =========================================================================
-class PythonHighlighter(QtGui.QSyntaxHighlighter):
-    KEYWORDS = (
-        "and as assert async await break class continue def del elif else except False finally for "
-        "from global if import in is lambda None nonlocal not or pass raise return True try while with yield"
-    ).split()
-
-    def __init__(self, doc) -> None:
-        super().__init__(doc)
-        import re
-
-        def fmt(color, bold=False, italic=False):
-            f = QtGui.QTextCharFormat()
-            f.setForeground(QtGui.QColor(color))
-            if bold:
-                f.setFontWeight(QtGui.QFont.Bold)
-            f.setFontItalic(italic)
-            return f
-
-        # (pattern, format, capture group to colour: 0 = whole match)
-        self.rules = [
-            (re.compile(r"\b(?:" + "|".join(self.KEYWORDS) + r")\b"), fmt("#c792ea", True), 0),
-            (re.compile(r"\b(?:self|ctx|np)\b"), fmt("#f78c6c"), 0),
-            (re.compile(r"\b(?:Module|Param|Column|Context)\b"), fmt("#82aaff", True), 0),
-            (re.compile(r"@\w+"), fmt("#ffcb6b"), 0),
-            (re.compile(r"\b\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\b"), fmt("#f78c6c"), 0),
-            (re.compile(r"\b(?:def|class)\s+(\w+)"), fmt("#82aaff"), 1),
-            (re.compile(r"\"[^\"\n]*\"|'[^'\n]*'"), fmt("#c3e88d"), 0),
-            (re.compile(r"#[^\n]*"), fmt("#5f7e5f", italic=True), 0),
-        ]
-        self.tri = fmt("#c3e88d")
-
-    def highlightBlock(self, text: str) -> None:  # noqa: N802
-        for rx, f, grp in self.rules:
-            for m in rx.finditer(text):
-                s, e = m.span(grp)
-                self.setFormat(s, e - s, f)
-        # triple-quoted strings spanning lines: block state 1 = still inside
-        self.setCurrentBlockState(0)
-        i = 0
-        if self.previousBlockState() == 1:
-            end = self._find_tq(text, 0)
-            if end < 0:
-                self.setFormat(0, len(text), self.tri)
-                self.setCurrentBlockState(1)
-                return
-            self.setFormat(0, end + 3, self.tri)
-            i = end + 3
-        while True:
-            s = self._find_tq(text, i)
-            if s < 0:
-                return
-            e = self._find_tq(text, s + 3)
-            if e < 0:
-                self.setFormat(s, len(text) - s, self.tri)
-                self.setCurrentBlockState(1)
-                return
-            self.setFormat(s, e + 3 - s, self.tri)
-            i = e + 3
-
-    @staticmethod
-    def _find_tq(text: str, frm: int) -> int:
-        a, b = text.find('"""', frm), text.find("'''", frm)
-        c = [i for i in (a, b) if i >= 0]
-        return min(c) if c else -1
+from opngx.ui.editor import EditorTabs  # noqa: E402
 
 
-class _LineNumbers(QtWidgets.QWidget):
-    def __init__(self, editor) -> None:
-        super().__init__(editor)
-        self.ed = editor
-
-    def sizeHint(self):  # noqa: N802
-        return QtCore.QSize(self.ed.gutter_width(), 0)
-
-    def paintEvent(self, ev):  # noqa: N802
-        self.ed.paint_gutter(ev)
+def user_docs_dir(create: bool = False) -> str:
+    """Per-user folder for your own documentation (Markdown); shown in the
+    Docs tab next to the bundled docs. Override with OPNGX_DOCS_DIR."""
+    d = os.environ.get("OPNGX_DOCS_DIR") or os.path.join(os.path.dirname(oa.user_modules_dir()), "docs")
+    if create:
+        os.makedirs(d, exist_ok=True)
+    return d
 
 
-class CodeEditor(QtWidgets.QPlainTextEdit):
-    """Plain-text Python editor: line numbers, highlighting, 4-space tabs,
-    auto-indent, current-line and error-line highlight."""
+DOC_TEMPLATE = """# {title}
 
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        f = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont)
-        f.setPointSizeF(max(8.0, QtWidgets.QApplication.font().pointSizeF()))
-        self.setFont(f)
-        self.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
-        self.setTabStopDistance(self.fontMetrics().horizontalAdvance(" ") * 4)
-        self.gutter = _LineNumbers(self)
-        self.blockCountChanged.connect(lambda *_: self._update_margins())
-        self.updateRequest.connect(self._on_update_request)
-        self.cursorPositionChanged.connect(self._highlight_line)
-        self.hl = PythonHighlighter(self.document())
-        self.error_line: Optional[int] = None
-        self._update_margins()
-        self._highlight_line()
+Write anything here — notes on an experiment, how a module is meant to be
+used, calibration values. Markdown: **bold**, *italic*, `code`, tables,
+lists, links. Saved documents appear in the **Docs** tab.
 
-    def gutter_width(self) -> int:
-        digits = len(str(max(1, self.blockCount())))
-        return 14 + self.fontMetrics().horizontalAdvance("9") * max(3, digits)
-
-    def _update_margins(self) -> None:
-        self.setViewportMargins(self.gutter_width(), 0, 0, 0)
-
-    def _on_update_request(self, rect, dy) -> None:
-        if dy:
-            self.gutter.scroll(0, dy)
-        else:
-            self.gutter.update(0, rect.y(), self.gutter.width(), rect.height())
-
-    def resizeEvent(self, ev) -> None:  # noqa: N802
-        super().resizeEvent(ev)
-        cr = self.contentsRect()
-        self.gutter.setGeometry(QtCore.QRect(cr.left(), cr.top(), self.gutter_width(), cr.height()))
-
-    def paint_gutter(self, ev) -> None:
-        p = QtGui.QPainter(self.gutter)
-        p.fillRect(ev.rect(), QtGui.QColor("#0a0c0a"))
-        block = self.firstVisibleBlock()
-        num = block.blockNumber()
-        top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
-        bottom = top + round(self.blockBoundingRect(block).height())
-        while block.isValid() and top <= ev.rect().bottom():
-            if block.isVisible() and bottom >= ev.rect().top():
-                p.setPen(QtGui.QColor("#f87171" if (num + 1) == self.error_line else "#4a554a"))
-                p.drawText(0, top, self.gutter.width() - 6, self.fontMetrics().height(),
-                           Qt.AlignRight, str(num + 1))
-            block = block.next()
-            top = bottom
-            bottom = top + round(self.blockBoundingRect(block).height())
-            num += 1
-        p.end()
-
-    def _highlight_line(self) -> None:
-        sels = []
-        cur = QtWidgets.QTextEdit.ExtraSelection()
-        cur.format.setBackground(QtGui.QColor("#101610"))
-        cur.format.setProperty(QtGui.QTextFormat.FullWidthSelection, True)
-        cur.cursor = self.textCursor()
-        cur.cursor.clearSelection()
-        sels.append(cur)
-        if self.error_line:
-            blk = self.document().findBlockByNumber(self.error_line - 1)
-            if blk.isValid():
-                e = QtWidgets.QTextEdit.ExtraSelection()
-                e.format.setBackground(QtGui.QColor("#3a1414"))
-                e.format.setProperty(QtGui.QTextFormat.FullWidthSelection, True)
-                e.cursor = QtGui.QTextCursor(blk)
-                sels.append(e)
-        self.setExtraSelections(sels)
-
-    def set_error_line(self, line: Optional[int]) -> None:
-        self.error_line = line
-        self._highlight_line()
-        self.gutter.update()
-        if line:
-            blk = self.document().findBlockByNumber(line - 1)
-            if blk.isValid():
-                c = QtGui.QTextCursor(blk)
-                self.setTextCursor(c)
-                self.centerCursor()
-
-    def keyPressEvent(self, ev) -> None:  # noqa: N802
-        if ev.key() == Qt.Key_Tab and not ev.modifiers():
-            self.insertPlainText("    ")
-            return
-        if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
-            line = self.textCursor().block().text()
-            indent = line[: len(line) - len(line.lstrip(" "))]
-            if line.rstrip().endswith(":"):
-                indent += "    "
-            super().keyPressEvent(ev)
-            self.insertPlainText(indent)
-            return
-        if ev.key() == Qt.Key_Backtab:
-            c = self.textCursor()
-            line = c.block().text()
-            n = min(4, len(line) - len(line.lstrip(" ")))
-            if n:
-                c.movePosition(QtGui.QTextCursor.StartOfBlock)
-                for _ in range(n):
-                    c.deleteChar()
-            return
-        super().keyPressEvent(ev)
+## Section
+"""
 
 
 class ModuleEditor(QtWidgets.QWidget):
-    """The Module editor tab."""
+    """The Editor tab: write analysis modules (Python) and docs (Markdown)."""
 
     modulesChanged = Signal()
+    docsChanged = Signal()
 
     def __init__(self, studio, parent=None) -> None:
         super().__init__(parent)
         self.studio = studio
-        self.path: Optional[str] = None
-        self.read_only = False
         self._build()
         self.refresh_files()
 
+    # ------------------------------------------------------------- compat
+    @property
+    def editor(self):
+        """The CodeEditor of the current tab (opens a scratch tab if none)."""
+        ed = self.tabs.editor()
+        if ed is None:
+            ed = self.tabs.open(None, "", read_only=False)
+        return ed
+
+    @property
+    def path(self) -> Optional[str]:
+        return self.tabs.path()
+
+    @property
+    def read_only(self) -> bool:
+        ed = self.tabs.editor()
+        return bool(ed.property("read_only")) if ed is not None else False
+
+    # --------------------------------------------------------------- ui --
     def _build(self) -> None:
         outer = QtWidgets.QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         split = QtWidgets.QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(False)
         outer.addWidget(split)
 
         left = QtWidgets.QFrame()
         left.setObjectName("card")
         lv = QtWidgets.QVBoxLayout(left)
-        t = QtWidgets.QLabel("MODULE FILES")
+        t = QtWidgets.QLabel("FILES")
         t.setObjectName("cardtitle")
         lv.addWidget(t)
-        self.files = QtWidgets.QListWidget()
-        self.files.itemActivated.connect(lambda it: self.open_path(it.data(Qt.UserRole)))
-        self.files.itemClicked.connect(lambda it: self.open_path(it.data(Qt.UserRole)))
-        lv.addWidget(self.files, 1)
+        self.tree = QtWidgets.QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.itemActivated.connect(self._open_item)
+        self.tree.itemClicked.connect(self._open_item)
+        lv.addWidget(self.tree, 1)
         self.dir_lbl = QtWidgets.QLabel("")
         self.dir_lbl.setObjectName("hint")
         self.dir_lbl.setWordWrap(True)
         self.dir_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lv.addWidget(self.dir_lbl)
-        for text, fn in (
-            ("New module…", self.new_module),
-            ("Duplicate as my module", self.duplicate),
-            ("Open file…", self.open_dialog),
-            ("Open modules folder", self.open_folder),
-            ("Delete my module…", self.delete_current),
-        ):
+        grid = QtWidgets.QGridLayout()
+        buttons = (
+            ("New module…", self.new_module), ("New doc…", self.new_doc),
+            ("Duplicate", self.duplicate), ("Open file…", self.open_dialog),
+            ("Open folder", self.open_folder), ("Delete…", self.delete_current),
+        )
+        for i, (text, fn) in enumerate(buttons):
             b = QtWidgets.QPushButton(text)
+            b.setObjectName("compact")
             b.clicked.connect(fn)
-            lv.addWidget(b)
-            setattr(self, "btn_" + text.split()[0].lower(), b)
-        scaling.fix(left, "setMinimumWidth", 230)
+            grid.addWidget(b, i // 2, i % 2)
+            setattr(self, "btn_" + text.split()[0].lower().rstrip("…"), b)
+        lv.addLayout(grid)
+        scaling.fix(left, "setMinimumWidth", 270)
         split.addWidget(left)
 
         mid = QtWidgets.QWidget()
         mv = QtWidgets.QVBoxLayout(mid)
         mv.setContentsMargins(6, 0, 0, 0)
         bar = QtWidgets.QHBoxLayout()
-        self.title = QtWidgets.QLabel("no file")
+        from opngx.ui.editor import ElideLabel
+
+        self.title = ElideLabel("no file")
         self.title.setObjectName("cardtitle")
         bar.addWidget(self.title, 1)
-        self.btn_save = QtWidgets.QPushButton("Save  (Ctrl+S)")
+        self.btn_save = QtWidgets.QPushButton("Save")
+        self.btn_save.setToolTip("Ctrl+S")
         self.btn_save.clicked.connect(self.save)
-        self.btn_validate = QtWidgets.QPushButton("Validate  (F5)")
+        self.btn_validate = QtWidgets.QPushButton("Validate")
+        self.btn_validate.setToolTip("F5 — load the module and dry-run it on synthetic frames")
         self.btn_validate.clicked.connect(self.validate)
-        self.btn_test = QtWidgets.QPushButton("Test on recording  (F6)")
+        self.btn_test = QtWidgets.QPushButton("Test on recording")
+        self.btn_test.setToolTip("F6 — run it on the first 500 frames of the loaded recording")
         self.btn_test.clicked.connect(self.test_run)
         self.btn_apply = QtWidgets.QPushButton("Save && use")
         self.btn_apply.setObjectName("accent")
         self.btn_apply.clicked.connect(self.save_and_reload)
-        self.btn_api = QtWidgets.QPushButton("API help")
+        self.btn_api = QtWidgets.QPushButton("API docs")
         self.btn_api.clicked.connect(self.show_api)
         for b in (self.btn_save, self.btn_validate, self.btn_test, self.btn_apply, self.btn_api):
             bar.addWidget(b)
         mv.addLayout(bar)
+        hint = QtWidgets.QLabel(
+            "Ctrl+F find · Ctrl+H replace · Ctrl+G line · Ctrl+/ comment · Tab/Shift+Tab indent · "
+            "Ctrl+D duplicate · Ctrl+Space complete · Ctrl+wheel zoom"
+        )
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        mv.addWidget(hint)
         vs = QtWidgets.QSplitter(Qt.Vertical)
-        self.editor = CodeEditor()
-        self.editor.document().modificationChanged.connect(lambda *_: self._update_title())
-        vs.addWidget(self.editor)
+        self.tabs = EditorTabs()
+        self.tabs.currentChanged.connect(self._update_title)
+        self.tabs.saved.connect(self._on_saved)
+        vs.addWidget(self.tabs)
         self.console = QtWidgets.QPlainTextEdit()
         self.console.setReadOnly(True)
-        f = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont)
-        self.console.setFont(f)
+        self.console.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
+        self.console.setMaximumBlockCount(5000)
         vs.addWidget(self.console)
         vs.setStretchFactor(0, 4)
         vs.setStretchFactor(1, 1)
+        vs.setSizes([8000, 1800])  # the editor, not the console, gets the room
+        scaling.fix(self.console, "setMinimumHeight", 60)
         mv.addWidget(vs, 1)
         split.addWidget(mid)
         split.setStretchFactor(1, 1)
@@ -1439,78 +1434,125 @@ class ModuleEditor(QtWidgets.QWidget):
             sc.setContext(Qt.WidgetWithChildrenShortcut)
             sc.activated.connect(fn)
 
+    def retheme(self) -> None:
+        self.tabs.retheme()
+        self.refresh_files()
+
     # ------------------------------------------------------------ files ---
     def refresh_files(self) -> None:
-        d = oa.user_modules_dir()
-        self.dir_lbl.setText(f"your modules folder:\n{d}")
-        self.files.clear()
-        infos = oa.discover()
+        from opngx.ui.docs_ui import bundled_docs
+
+        self.dir_lbl.setText(f"modules: {oa.user_modules_dir()}\ndocs: {user_docs_dir()}")
+        self.tree.clear()
+        groups = {}
+
+        def group(label):
+            if label not in groups:
+                g = QtWidgets.QTreeWidgetItem([label])
+                g.setFlags(g.flags() & ~Qt.ItemIsSelectable)
+                f = g.font(0)
+                f.setBold(True)
+                g.setFont(0, f)
+                self.tree.addTopLevelItem(g)
+                g.setExpanded(True)
+                groups[label] = g
+            return groups[label]
+
         seen = set()
-        for info in infos:
+        for info in oa.discover():
             if not info.path or info.path in seen:
                 continue
             seen.add(info.path)
-            label = os.path.basename(info.path) + ("   (built-in, read-only)" if info.origin == "builtin" else "")
+            builtin = info.origin == "builtin"
+            g = group("Built-in modules (read-only)" if builtin else "My modules")
+            it = QtWidgets.QTreeWidgetItem([os.path.basename(info.path) + ("" if info.ok else "   ✗")])
+            it.setData(0, Qt.UserRole, info.path)
+            it.setData(0, Qt.UserRole + 1, builtin)
+            it.setToolTip(0, info.error or info.path)
             if not info.ok:
-                label += "   ✗"
-            it = QtWidgets.QListWidgetItem(label)
-            it.setData(Qt.UserRole, info.path)
-            if info.origin == "builtin":
-                it.setForeground(QtGui.QColor("#8a948a"))
-            elif not info.ok:
-                it.setForeground(QtGui.QColor("#f87171"))
-                it.setToolTip(info.error)
-            self.files.addItem(it)
+                it.setForeground(0, themes.qcolor("err"))
+            elif builtin:
+                it.setForeground(0, themes.qcolor("text_dim"))
+            g.addChild(it)
+        ud = user_docs_dir()
+        if os.path.isdir(ud):
+            for fn in sorted(os.listdir(ud)):
+                if fn.lower().endswith((".md", ".markdown", ".txt")):
+                    it = QtWidgets.QTreeWidgetItem([fn])
+                    it.setData(0, Qt.UserRole, os.path.join(ud, fn))
+                    it.setData(0, Qt.UserRole + 1, False)
+                    group("My docs").addChild(it)
+        group("My modules")
+        group("My docs")
+        for title, path in bundled_docs():
+            it = QtWidgets.QTreeWidgetItem([title])
+            it.setData(0, Qt.UserRole, path)
+            it.setData(0, Qt.UserRole + 1, True)
+            it.setForeground(0, themes.qcolor("text_dim"))
+            group("Documentation (read-only)").addChild(it)
+        self._update_title()
+
+    def _open_item(self, item, _col=0) -> None:
+        p = item.data(0, Qt.UserRole)
+        if p:
+            self.open_path(p)
 
     def _is_builtin(self, path: str) -> bool:
         import opngx.analysis.builtin as bi
+        from opngx.ui.docs_ui import bundled_docs
 
-        return os.path.abspath(os.path.dirname(path)) == os.path.abspath(os.path.dirname(bi.__file__))
-
-    def open_path(self, path: str) -> None:
-        if not path or not os.path.isfile(path):
-            return
-        if not self._confirm_discard():
-            return
-        with open(path, encoding="utf-8") as fh:
-            self.editor.setPlainText(fh.read())
-        self.path = path
-        self.read_only = self._is_builtin(path)
-        self.editor.setReadOnly(self.read_only)
-        self.editor.document().setModified(False)
-        self.editor.set_error_line(None)
-        self._update_title()
-        self.console.appendPlainText(
-            f"opened {path}" + ("  — built-in modules are read-only; use 'Duplicate as my module'" if self.read_only else "")
+        ap = os.path.abspath(path)
+        return os.path.dirname(ap) == os.path.abspath(os.path.dirname(bi.__file__)) or any(
+            os.path.abspath(p) == ap for _t, p in bundled_docs()
         )
+
+    def open_path(self, path: str):
+        if not path or not os.path.isfile(path):
+            return None
+        ro = self._is_builtin(path)
+        ed = self.tabs.open(path, read_only=ro)
+        ed.set_error_line(None)
+        self.console.appendPlainText(
+            f"opened {path}" + ("  — read-only; use 'Duplicate' to make an editable copy" if ro else "")
+        )
+        self._update_title()
+        return ed
 
     def _update_title(self) -> None:
-        name = os.path.basename(self.path) if self.path else "untitled"
-        mod = " •" if self.editor.document().isModified() else ""
-        ro = "  (read-only)" if self.read_only else ""
-        self.title.setText(f"{name}{mod}{ro}")
-        self.btn_save.setEnabled(not self.read_only)
-        self.btn_apply.setEnabled(not self.read_only)
+        ed = self.tabs.editor()
+        if ed is None:
+            self.title.setFullText("no file — pick one on the left, or New module / New doc")
+            for b in (self.btn_save, self.btn_apply, self.btn_validate, self.btn_test):
+                b.setEnabled(False)
+            return
+        p = ed.property("path")
+        ro = bool(ed.property("read_only"))
+        py = ed.lang == "python"
+        self.title.setFullText((p or "untitled") + ("   (read-only)" if ro else ""))
+        self.btn_save.setEnabled(not ro)
+        self.btn_apply.setEnabled(not ro)
+        self.btn_validate.setEnabled(py)
+        self.btn_test.setEnabled(py)
 
-    def _confirm_discard(self) -> bool:
-        if not self.editor.document().isModified() or self.read_only:
-            return True
-        r = QtWidgets.QMessageBox.question(
-            self, "opngx", "Discard unsaved changes?",
-            QtWidgets.QMessageBox.Discard | QtWidgets.QMessageBox.Cancel,
-        )
-        return r == QtWidgets.QMessageBox.Discard
+    def _on_saved(self, path: str) -> None:
+        self.console.appendPlainText(f"saved {path}")
+        self.refresh_files()
+        if path.lower().endswith((".md", ".markdown", ".txt")):
+            self.docsChanged.emit()
 
-    def new_module(self, name: Optional[str] = None) -> Optional[str]:
-        if name is None:
-            name, ok = QtWidgets.QInputDialog.getText(
-                self, "New analysis module", "module name (lowercase, digits, _):", text="my_module"
-            )
-            if not ok:
-                return None
+    def _ask_name(self, title: str, default: str) -> Optional[str]:
+        name, ok = QtWidgets.QInputDialog.getText(self, title, "name (letters, digits, _):", text=default)
+        if not ok:
+            return None
         name = "".join(ch for ch in name.strip().lower().replace(" ", "_") if ch.isalnum() or ch == "_")
         if not name or not name[0].isalpha():
-            QtWidgets.QMessageBox.warning(self, "opngx", "A module name must start with a letter.")
+            QtWidgets.QMessageBox.warning(self, "opngx", "A name must start with a letter.")
+            return None
+        return name
+
+    def new_module(self, name: Optional[str] = None) -> Optional[str]:
+        name = name or self._ask_name("New analysis module", "my_module")
+        if not name:
             return None
         path = os.path.join(oa.user_modules_dir(create=True), f"{name}.py")
         if os.path.exists(path):
@@ -1519,37 +1561,54 @@ class ModuleEditor(QtWidgets.QWidget):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(oa.template(name, name.replace("_", " ").capitalize()))
         self.refresh_files()
-        self.editor.document().setModified(False)
         self.open_path(path)
         self.console.appendPlainText(f"created {path} from the template")
         return path
 
-    def duplicate(self) -> Optional[str]:
-        if not self.path:
+    def new_doc(self, name: Optional[str] = None) -> Optional[str]:
+        name = name or self._ask_name("New document", "my_notes")
+        if not name:
             return None
-        src = self.editor.toPlainText()
-        base = os.path.splitext(os.path.basename(self.path))[0]
+        path = os.path.join(user_docs_dir(create=True), f"{name}.md")
+        if os.path.exists(path):
+            QtWidgets.QMessageBox.warning(self, "opngx", f"{path} already exists.")
+            return None
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(DOC_TEMPLATE.format(title=name.replace("_", " ").capitalize()))
+        self.refresh_files()
+        self.open_path(path)
+        self.docsChanged.emit()
+        return path
+
+    def duplicate(self) -> Optional[str]:
+        ed = self.tabs.editor()
+        if ed is None or not ed.property("path"):
+            return None
+        src_path = ed.property("path")
+        src = ed.toPlainText()
+        base, ext = os.path.splitext(os.path.basename(src_path))
+        is_doc = ext.lower() in (".md", ".markdown", ".txt")
+        folder = user_docs_dir(create=True) if is_doc else oa.user_modules_dir(create=True)
         name = f"my_{base}" if not base.startswith("my_") else f"{base}_copy"
-        path = os.path.join(oa.user_modules_dir(create=True), f"{name}.py")
+        path = os.path.join(folder, f"{name}{ext}")
         i = 2
         while os.path.exists(path):
-            path = os.path.join(oa.user_modules_dir(), f"{name}{i}.py")
+            path = os.path.join(folder, f"{name}{i}{ext}")
             i += 1
         stem = os.path.splitext(os.path.basename(path))[0]
-        import re
-
-        # rename the module id so it does not clash with the original
-        src = re.sub(r'(^\s*name\s*=\s*)["\'][^"\']*["\']', lambda m: f'{m.group(1)}"{stem}"', src, count=1, flags=re.M)
+        if not is_doc:
+            src = re.sub(r'(^\s*name\s*=\s*)["\'][^"\']*["\']', lambda m: f'{m.group(1)}"{stem}"', src, count=1, flags=re.M)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(src)
         self.refresh_files()
-        self.editor.document().setModified(False)
         self.open_path(path)
-        self.console.appendPlainText(f"duplicated as {path} (module name '{stem}')")
+        self.console.appendPlainText(f"duplicated as {path}" + ("" if is_doc else f" (module name '{stem}')"))
         return path
 
     def open_dialog(self) -> None:
-        p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open module", oa.user_modules_dir(create=True), "Python (*.py)")
+        p, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open file", oa.user_modules_dir(create=True), "Modules and docs (*.py *.md *.txt *.json);;All files (*)"
+        )
         if p:
             self.open_path(p)
 
@@ -1557,39 +1616,35 @@ class ModuleEditor(QtWidgets.QWidget):
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(oa.user_modules_dir(create=True)))
 
     def delete_current(self) -> None:
-        if not self.path or self.read_only:
+        ed = self.tabs.editor()
+        if ed is None or ed.property("read_only") or not ed.property("path"):
             return
-        r = QtWidgets.QMessageBox.question(self, "opngx", f"Delete {self.path}?")
+        path = ed.property("path")
+        r = QtWidgets.QMessageBox.question(self, "opngx", f"Delete {path}?")
         if r != QtWidgets.QMessageBox.Yes:
             return
-        os.remove(self.path)
-        self.console.appendPlainText(f"deleted {self.path}")
-        self.path = None
-        self.editor.clear()
-        self.editor.document().setModified(False)
-        self._update_title()
+        os.remove(path)
+        self.tabs.close_tab(self.tabs.tabs.indexOf(ed), force=True)
+        self.console.appendPlainText(f"deleted {path}")
         self.refresh_files()
         self.modulesChanged.emit()
+        self.docsChanged.emit()
 
     # -------------------------------------------------------------- actions
     def save(self) -> bool:
-        if self.read_only:
-            self.console.appendPlainText("built-in modules are read-only — use 'Duplicate as my module'")
+        ed = self.tabs.editor()
+        if ed is None:
             return False
-        if not self.path:
-            name, ok = QtWidgets.QInputDialog.getText(self, "Save module", "file name:", text="my_module.py")
-            if not ok or not name:
+        if ed.property("read_only"):
+            self.console.appendPlainText("read-only — use 'Duplicate' to make an editable copy")
+            return False
+        path = ed.property("path")
+        if not path:
+            name = self._ask_name("Save as", "my_module")
+            if not name:
                 return False
-            if not name.endswith(".py"):
-                name += ".py"
-            self.path = os.path.join(oa.user_modules_dir(create=True), name)
-        with open(self.path, "w", encoding="utf-8") as fh:
-            fh.write(self.editor.toPlainText())
-        self.editor.document().setModified(False)
-        self._update_title()
-        self.console.appendPlainText(f"saved {self.path}")
-        self.refresh_files()
-        return True
+            path = os.path.join(oa.user_modules_dir(create=True), f"{name}.py")
+        return self.tabs.save(ed, path) is not None
 
     def _source_file(self) -> str:
         """The current text as a file to load (a temp copy when it differs
@@ -1597,29 +1652,31 @@ class ModuleEditor(QtWidgets.QWidget):
         programmatic setPlainText() clears that flag, and validation then
         silently checked the old file instead of what is on screen."""
         text = self.editor.toPlainText()
-        if self.path and os.path.isfile(self.path):
-            with open(self.path, encoding="utf-8") as fh:
+        p = self.path
+        if p and os.path.isfile(p):
+            with open(p, encoding="utf-8") as fh:
                 if fh.read() == text:
-                    return self.path
+                    return p
         fd, tmp = tempfile.mkstemp(suffix=".py", prefix="opngx_mod_")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
         return tmp
 
     def validate(self) -> bool:
+        if self.tabs.editor() is None or self.editor.lang != "python":
+            return False
         path = self._source_file()
         self.console.appendPlainText(f"— validate {os.path.basename(self.path or 'untitled')} —")
         v = oa.validate_file(path)
-        self.console.appendPlainText("\n".join(v.messages))
+        msgs = [m for m in v.messages if isinstance(m, str)]
+        self.console.appendPlainText("\n".join(msgs))
         self.console.appendPlainText("VALID ✓" if v.ok else "NOT VALID ✗")
-        self._mark_error("\n".join(v.messages), path)
+        self._mark_error("\n".join(msgs), path)
         if path != self.path:
             os.unlink(path)
         return v.ok
 
     def _mark_error(self, text: str, path: str) -> None:
-        import re
-
         line = None
         for m in re.finditer(r'File "([^"]+)", line (\d+)', text):
             if os.path.abspath(m.group(1)) == os.path.abspath(path):
@@ -1629,10 +1686,12 @@ class ModuleEditor(QtWidgets.QWidget):
             line = int(m.group(1)) if (m and "SyntaxError" in text) else None
         self.editor.set_error_line(line)
 
-    def test_run(self, frames: int = 500) -> Optional[oa.AnalysisRun]:
+    def test_run(self, frames: int = 500):
         meta = getattr(self.studio, "meta", None)
         if meta is None:
             self.console.appendPlainText("load a recording in the Extract tab to test on real frames")
+            return None
+        if self.tabs.editor() is None or self.editor.lang != "python":
             return None
         path = self._source_file()
         infos = oa.load_file(path)
@@ -1645,7 +1704,9 @@ class ModuleEditor(QtWidgets.QWidget):
             return None
         if path != self.path:
             os.unlink(path)
-        self.console.appendPlainText(f"— test {', '.join(i.name for i in infos)} on {os.path.basename(meta.bin_path)}, first {frames} frames —")
+        self.console.appendPlainText(
+            f"— test {', '.join(i.name for i in infos)} on {os.path.basename(meta.bin_path)}, first {frames} frames —"
+        )
         try:
             run = oa.analyze(meta.bin_path, [i.cls for i in infos], meta=meta, count=frames,
                              log=lambda s: self.console.appendPlainText("  " + s))
@@ -1657,9 +1718,8 @@ class ModuleEditor(QtWidgets.QWidget):
             self._mark_error(err.tb, self.path or "")
         for n, res in run.results.items():
             cols = [c for c in res.columns if c not in ("frame", "timestamp_raw", "time_s")]
-            self.console.appendPlainText(
-                f"✓ {n}: {len(res)} rows in {run.seconds:.2f}s → {cols}"
-            )
+            self.console.appendPlainText(f"✓ {n}: {len(res)} rows in {run.seconds:.2f}s → {cols}"
+                                         + (f", tables {sorted(res.tables)}" if res.tables else ""))
             for k in cols[:6]:
                 a = res.columns[k].astype(float)
                 if np.isfinite(a).any():
@@ -1675,20 +1735,15 @@ class ModuleEditor(QtWidgets.QWidget):
     def save_and_reload(self) -> None:
         if not self.save():
             return
+        if self.editor.lang != "python":
+            self.docsChanged.emit()
+            return
         if self.validate():
             self.modulesChanged.emit()
             self.console.appendPlainText("module list reloaded — it is ready in the Analyze tab")
 
     def show_api(self) -> None:
-        from opngx.analysis import base
-
-        d = QtWidgets.QDialog(self)
-        d.setWindowTitle("Analysis module API")
-        scaling.fit_to_screen(d, 760, 620)
-        v = QtWidgets.QVBoxLayout(d)
-        tb = QtWidgets.QPlainTextEdit(base.__doc__ or "")
-        tb.setReadOnly(True)
-        tb.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
-        v.addWidget(tb)
-        d.show()
-        self._api_dialog = d
+        docs = getattr(self.studio, "docs_view", None)
+        if docs is not None:
+            docs.show_doc("api")
+            self.studio.tabs.setCurrentWidget(self.studio._tab_host(docs))

@@ -140,6 +140,28 @@ def analyze(
     names = [type(m).name or type(m).__name__ for m in insts]
     if len(set(names)) != len(names):
         raise ValueError(f"a module was requested twice: {names}")
+    # v2.0: pull in required modules (depth-first, dependencies first) so a
+    # dependent's finish() sees their finished tables in ctx.inputs
+    ordered: list[Module] = []
+    seen: set[str] = set()
+
+    def add(m: Module, chain: tuple = ()) -> None:
+        nm = type(m).name
+        if nm in chain:
+            raise ValueError(f"circular module requirement: {' -> '.join(chain + (nm,))}")
+        if nm in seen:
+            return
+        for req in getattr(type(m), "requires", ()) or ():
+            existing = next((x for x in insts + ordered if type(x).name == req), None)
+            add(existing if existing is not None else _instantiate(req), chain + (nm,))
+        seen.add(nm)
+        ordered.append(m)
+
+    for m in insts:
+        add(m)
+    auto_added = [type(m).name for m in ordered if type(m).name not in names]
+    insts = ordered
+    names = [type(m).name for m in insts]
     params = params or {}
     unknown = sorted(set(params) - set(names))
     if unknown:
@@ -292,8 +314,12 @@ def analyze(
     ts = ts_all[:rows]
     t_s, time_source = _time_axis(ts, idx, meta)
 
+    finished: dict[str, dict[str, np.ndarray]] = {}
     for m in live:
         name = type(m).name
+        missing = [r for r in (getattr(type(m), "requires", ()) or ()) if r not in finished]
+        if missing and name not in run.errors:
+            run.errors[name] = ModuleError(name, f"requires {missing}, which did not finish")
         if name in run.errors:
             continue
         cls = type(m)
@@ -308,10 +334,12 @@ def analyze(
         table.update({k: v[:rows] for k, v in cols.items()})
         ctx = ctxs[name]
         ctx.frame_index, ctx.timestamp_raw = idx, ts
+        ctx.inputs = {r: finished[r] for r in (getattr(cls, "requires", ()) or ())}
         try:
             new = m.finish(table, ctx)
             if new is not None:
                 table = dict(new)
+            tables = _check_tables(name, ctx.tables)
         except Exception as exc:  # noqa: BLE001
             err = ModuleError(name, f"finish() failed: {exc}", traceback.format_exc())
             if raise_errors:
@@ -319,6 +347,7 @@ def analyze(
             run.errors[name] = err
             log(str(err))
             continue
+        finished[name] = table
         units = {"frame": "", "timestamp_raw": "tick", "time_s": "s"}
         helps = {
             "frame": "absolute frame index in the recording",
@@ -355,14 +384,40 @@ def analyze(
                 "transform": dict(transform or {}) if source == "display" else None,
                 "time_source": time_source,
                 "cancelled": run.cancelled,
+                "auto_added": [a for a in auto_added],
             },
             overlay=dict(getattr(cls, "overlay", {}) or {}),
             plot=tuple(getattr(cls, "plot", ()) or ()),
             trajectory=bool(getattr(cls, "trajectory", False)),
+            tables=tables,
+            table_units={
+                **{tn: {c.key: c.unit for c in cols}
+                   for tn, cols in (getattr(cls, "table_columns", {}) or {}).items()},
+                **{tn: dict(u) for tn, u in (ctx.table_units or {}).items()},
+            },
+            table_plots=dict(getattr(cls, "table_plots", {}) or {}),
         )
     run.frames = rows
     run.seconds = time.perf_counter() - t0
     return run
+
+
+def _check_tables(name: str, tables: dict) -> dict:
+    """Extra tables must be {table: {column: 1-D numeric array}} with one
+    length per table."""
+    out: dict[str, dict[str, np.ndarray]] = {}
+    for tn, tb in (tables or {}).items():
+        if not isinstance(tb, dict):
+            raise ModuleError(name, f"ctx.tables['{tn}'] must be a dict of columns")
+        cols = {k: np.asarray(v) for k, v in tb.items()}
+        lens = {len(v) if v.ndim == 1 else -1 for v in cols.values()}
+        if -1 in lens or len(lens) > 1:
+            raise ModuleError(name, f"table '{tn}': columns must be 1-D and equally long")
+        for k, v in cols.items():
+            if v.dtype.kind not in "biuf":
+                raise ModuleError(name, f"table '{tn}' column '{k}' must be numeric")
+        out[str(tn)] = cols
+    return out
 
 
 def _time_axis(ts: np.ndarray, idx: np.ndarray, meta) -> tuple[np.ndarray, str]:

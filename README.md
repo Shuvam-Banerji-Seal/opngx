@@ -21,9 +21,39 @@
 | batch window with a preview per recording | ✗ | ✗ | ✓ |
 | in-app frame viewer + verification | ✗ | ✗ | ✓ |
 | per-frame timestamps + metadata JSON | ✗ | ✗ | ✓ |
+| **motion tracking → trajectory data file** (sub-pixel, C kernel) | ✗ | manual | ✓ |
+| **Brownian / optical-trap analysis** (MSD, PSD, stiffness) | ✗ | manual | ✓ |
+| **write your own analysis modules in the app** (editor + docs) | ✗ | ✗ | ✓ |
 | pixel-exact verification tool | ✗ | manual | built-in |
 | runs anywhere (Intel/AMD/ARM, any OS) | ✗ | ✓ | ✓ |
 
+
+## New in 2.0 — analysis modules
+
+opngx turns recordings into **time-series data** as well as images, through
+switchable **analysis modules** (plain Python, with C kernels on the hot path):
+
+* **motion tracking** — the bright spot or ring's sub-pixel trajectory per frame
+  (0.044 px RMS on a ring, 0.049 px on a spot, vs synthetic ground truth), ring
+  radius, velocity, timed by the camera's frame clock; a 50 000-frame recording in ~7 s;
+* **Brownian motion & trap analysis** — drift, MSD (D, α, localisation noise),
+  power spectrum with corner frequency, trap stiffness, step statistics, and
+  explicit warnings when the data is *not* a thermally driven trapped bead
+  (it finds the 38.8 / 98 / 103 Hz lines in this project's recordings);
+* **luminosity** and **contrast** over time;
+* **your own** — the studio's **Editor** tab (tabs, find/replace, completion,
+  validate, test on a recording) and the `Module` API
+  ([`docs/ANALYSIS.md`](docs/ANALYSIS.md)); docs of every module are generated.
+
+```bash
+opngx analyze recording.bin -m motion_tracking -o trajectory.csv
+opngx analyze Footages/ --batch -m brownian_motion -p brownian_motion.pixel_size_um=0.1 -o Results/
+```
+
+The studio has four tabs — **Extract · Analyze · Editor · Docs** — eight themes
+(Midnight, Catppuccin Latte/Frappé/Macchiato/Mocha, Tokyo Night/Day,
+Cappuccino, plus a custom accent), a zoomable pixel-exact viewer, a full crop editor,
+and scales itself from 720p to 4K. See [`docs/STUDIO.md`](docs/STUDIO.md).
 
 The reverse-engineered format and the proven transform are documented in
 [`docs/FORMAT.md`](docs/FORMAT.md); measured performance in

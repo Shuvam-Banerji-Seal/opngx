@@ -119,6 +119,12 @@ class Context:
     timestamp_raw: Optional[np.ndarray] = None
     summary: dict[str, Any] = field(default_factory=dict)
     state: dict[str, Any] = field(default_factory=dict)  # free for modules
+    # v2.0: finished tables of the modules this one `requires` (by name),
+    # available in finish(); and extra non-per-frame tables a module may
+    # publish (e.g. MSD vs lag), exported next to the main table
+    inputs: dict[str, dict] = field(default_factory=dict)
+    tables: dict[str, dict] = field(default_factory=dict)
+    table_units: dict[str, dict] = field(default_factory=dict)  # {table: {col: unit}}
     _sampler: Optional[Callable[[int], np.ndarray]] = None
     log: Callable[[str], None] = print
 
@@ -154,6 +160,11 @@ class Module:
     # trajectory plot makes sense for this module.
     plot: Sequence[str] = ()
     trajectory: bool = False
+    # v2.0: names of modules whose finished table this one needs (runner
+    # adds them to the same pass and finishes them first); and per extra
+    # table the default plot: {table: {"x": col, "y": [cols], "log": bool}}
+    requires: Sequence[str] = ()
+    table_plots: dict = {}
 
     # -- lifecycle ------------------------------------------------------
     def begin(self, ctx: Context) -> None:  # noqa: D401 - optional hook
