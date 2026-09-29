@@ -321,7 +321,75 @@ def _selftest_batch() -> int:
         logf.flush()
 
 
+def _selftest_analysis() -> int:
+    """Prove the v1.10 analysis system INSIDE the packaged exe: the built-in
+    modules are bundled, motion tracking recovers a known sub-pixel
+    trajectory from a real .bin, a USER module loads from a file on disk,
+    and the data files are written. Exit 0 = pass."""
+    import os
+    import struct
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+
+    logf = _selftest_log()
+    print("SELFTEST-ANALYSIS start")
+    try:
+        d = Path(tempfile.mkdtemp(prefix="opngx_an_selftest_"))
+        os.environ["OPNGX_MODULES_DIR"] = str(d / "modules")
+        import opngx.analysis as oa  # noqa: PLC0415
+
+        names = [i.name for i in oa.list_modules()]
+        assert {"motion_tracking", "luminosity", "contrast"} <= set(names), names
+        W, H, n = 96, 80, 40
+        truth = np.c_[40 + 0.37 * np.arange(n), 38 + 0.21 * np.arange(n)]
+        yy, xx = np.mgrid[0:H, 0:W]
+        rec = d / "rec"
+        rec.mkdir()
+        with open(rec / "rec.bin", "wb") as f:
+            for i, (x, y) in enumerate(truth):
+                img = 60 + 150 * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * 2.2**2))
+                f.write(struct.pack("<Q", 7_000_000 + 2000 * i))
+                f.write(np.clip(np.round(img), 0, 255).astype(np.uint8).tobytes())
+        (rec / "rec.footage").write_text(
+            f"<x><ResolutionX>{W}</ResolutionX><ResolutionY>{H}</ResolutionY>"
+            f"<NumberOfImages>{n}</NumberOfImages></x>"
+        )
+        run = oa.analyze(str(rec / "rec.bin"), ["motion_tracking", "luminosity", "contrast"])
+        assert run.ok, run.errors
+        tr = run["motion_tracking"]
+        err = np.hypot(tr.columns["x"] - truth[:, 0], tr.columns["y"] - truth[:, 1])
+        assert np.sqrt(np.mean(err**2)) < 0.05, f"tracking RMS {np.sqrt(np.mean(err**2)):.4f} px"
+        assert np.allclose(tr.columns["time_s"], 0.002 * np.arange(n))
+        for ext in ("csv", "json", "npz"):
+            p_ = tr.save(str(d / f"traj.{ext}"))
+            assert os.path.getsize(p_) > 0
+        # a user module written to disk loads and runs in the frozen app
+        md = Path(oa.user_modules_dir(create=True))
+        (md / "selftest_mod.py").write_text(oa.template("selftest_mod", "Selftest"))
+        v = oa.validate_file(str(md / "selftest_mod.py"))
+        assert v.ok, v.messages
+        r2 = oa.analyze(str(rec / "rec.bin"), "selftest_mod")
+        assert len(r2["selftest_mod"]) == n
+        print(
+            f"SELFTEST-ANALYSIS PASS ({len(names)} built-in modules; tracking RMS "
+            f"{np.sqrt(np.mean(err**2)):.4f} px over {n} frames; user module OK)"
+        )
+        return 0
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        print("SELFTEST-ANALYSIS FAIL")
+        return 1
+    finally:
+        logf.flush()
+
+
 if __name__ == "__main__":
+    if "--selftest-analysis" in sys.argv:
+        raise SystemExit(_selftest_analysis())
     if "--debug-ffmpeg" in sys.argv:
         raise SystemExit(_debug_ffmpeg())
     if "--selftest-video" in sys.argv:

@@ -43,6 +43,16 @@ QWidget#root        { background: #050505; }
 
 /* ---------- header ---------- */
 QLabel { color: #e8ede8; }
+QTabWidget#workspaces::pane { border: none; }
+QTabWidget#workspaces > QTabBar::tab {
+    background: #0d0f0d; color: #9ab294; padding: 7px 18px; margin-right: 4px;
+    border: 1px solid #1f261f; border-bottom: none;
+    border-top-left-radius: 9px; border-top-right-radius: 9px;
+    font-size: 12px; font-weight: 600;
+}
+QTabWidget#workspaces > QTabBar::tab:selected { background: #16200f; color: #ffffff; border-color: #3e6b3a; }
+QTabWidget#workspaces > QTabBar::tab:hover { color: #ffffff; }
+QPlainTextEdit, QTableView, QListWidget { background: #070807; color: #e6ece6; }
 QLabel#title { color: #ffffff; font-size: 21px; font-weight: 700; }
 QLabel#subtitle { color: #7d8a7d; font-size: 11px; }
 QLabel#chip {
@@ -547,6 +557,10 @@ class MainWindow(QtWidgets.QMainWindow):
             f"<b style='color:#60a5fa'>{title}</b><br>{body}</div>"
         )
 
+    def _on_modules_changed(self) -> None:
+        self.analyze_view.reload_modules()
+        self._log("analysis modules reloaded")
+
     def _toggle_fullscreen(self, on: bool) -> None:
         if on:
             self.showFullScreen()
@@ -734,10 +748,23 @@ class MainWindow(QtWidgets.QMainWindow):
 
         outer.addLayout(head)
 
+        # ---------------- workspaces (v1.10) ----------------
+        # Extract (everything up to v1.9) · Analyze (analysis modules, e.g.
+        # motion tracking) · Module editor (write your own modules)
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setObjectName("workspaces")
+        self.tabs.setDocumentMode(True)
+        outer.addWidget(self.tabs, 1)
+        extract_page = QtWidgets.QWidget()
+        ext_lay = QtWidgets.QVBoxLayout(extract_page)
+        ext_lay.setContentsMargins(0, 8, 0, 0)
+        ext_lay.setSpacing(10)
+        self.tabs.addTab(extract_page, "⬇  Extract")
+
         # ---------------- splitter body ----------------
         self.split = QtWidgets.QSplitter(Qt.Horizontal)
         self.split.setChildrenCollapsible(False)
-        outer.addWidget(self.split, 1)
+        ext_lay.addWidget(self.split, 1)
 
         # ===== left column =====
         left = QtWidgets.QWidget()
@@ -1319,7 +1346,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_lbl = QtWidgets.QLabel("idle")
         self.status_lbl.setObjectName("hint")
         bar.addWidget(self.status_lbl)
-        outer.addLayout(bar)
+        ext_lay.addLayout(bar)
+
+        # ---------------- analysis workspaces (v1.10) ----------------
+        from opngx.ui.analysis_ui import AnalyzeView, ModuleEditor
+
+        self.analyze_view = AnalyzeView(self)
+        self.module_editor = ModuleEditor(self)
+        self.module_editor.modulesChanged.connect(self._on_modules_changed)
+        for page, title in ((self.analyze_view, "◎  Analyze"), (self.module_editor, "✎  Module editor")):
+            host = QtWidgets.QWidget()
+            hl = QtWidgets.QVBoxLayout(host)
+            hl.setContentsMargins(0, 8, 0, 0)
+            hl.addWidget(page)
+            self.tabs.addTab(host, title)
+        self.tabs.setTabToolTip(0, "Extract frames, render video, verify — the classic studio")
+        self.tabs.setTabToolTip(
+            1, "Run analysis modules (motion tracking, luminosity, contrast, yours) "
+            "and export their data files"
+        )
+        self.tabs.setTabToolTip(2, "Write, validate and test your own analysis modules in Python")
 
         # wiring
         browse.clicked.connect(self._pick_source)

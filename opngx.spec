@@ -12,6 +12,13 @@ dll = os.path.join(root, "build-win", "libopngx.dll")
 hidden = collect_submodules("opngx") + [
     "opngx.ui.app", "opngx.ui.theme", "opngx.ui.widgets",
     "opngx.ui.qt_app", "opngx.ui.batch", "opngx.ui.frameview", "opngx.video",
+    "opngx.ui.scaling", "opngx.ui.analysis_ui",
+    # analysis modules (v1.10): built-ins are imported by NAME at runtime,
+    # which PyInstaller's static analysis cannot see
+    "opngx.analysis", "opngx.analysis.base", "opngx.analysis.registry",
+    "opngx.analysis.runner", "opngx.analysis.result", "opngx.analysis.stats",
+    "opngx.analysis.builtin", "opngx.analysis.builtin.motion_tracking",
+    "opngx.analysis.builtin.luminosity", "opngx.analysis.builtin.contrast",
 ]
 
 # bundle an ffmpeg binary so Render-video works out of the box

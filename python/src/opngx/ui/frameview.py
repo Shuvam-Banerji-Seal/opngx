@@ -73,6 +73,12 @@ class FrameView(QtWidgets.QWidget):
         self._placeholder = placeholder
         self._drag: Optional[dict] = None
         self._smooth_down = True
+        # analysis overlay (v1.10), image coordinates:
+        #   path   — [(x, y), ...] polyline (e.g. a trajectory)
+        #   point  — (x, y) marker, circle — (x, y, r)
+        self._path = None
+        self._point = None
+        self._circle = None
         if editable:
             self.setCursor(Qt.CrossCursor)
 
@@ -100,6 +106,17 @@ class FrameView(QtWidgets.QWidget):
 
     def selection(self) -> Optional[Rect]:
         return self._sel
+
+    def setMarkers(self, *, path=None, point=None, circle=None) -> None:  # noqa: N802
+        """Overlay in IMAGE pixel coordinates (pixel centres at integers).
+        `path` may be an (n, 2) array; NaN rows break the line."""
+        self._path = None if path is None else path
+        self._point = point
+        self._circle = circle
+        self.update()
+
+    def clearMarkers(self) -> None:  # noqa: N802
+        self.setMarkers()
 
     # ---------------------------------------------------------- geometry ---
     def _target(self) -> tuple[QRectF, float]:
@@ -187,6 +204,7 @@ class FrameView(QtWidgets.QWidget):
         t, s = self._target()
         p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, s < 1.0 and self._smooth_down)
         p.drawImage(t, self._img)
+        self._paint_markers(p, t, s)
         r = self._sel_rect()
         if r is not None:
             # dim OUTSIDE the selection. v1.7.0 filled the whole frame and
@@ -213,6 +231,55 @@ class FrameView(QtWidgets.QWidget):
                 ):
                     p.drawRect(QRectF(cx - 3, cy - 3, 6, 6))
         p.end()
+
+    def _paint_markers(self, p, t, s) -> None:
+        if self._path is None and self._point is None and self._circle is None:
+            return
+        p.save()
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+
+        def m(x, y):  # pixel CENTRE -> widget position
+            return QPointF(t.x() + (x + 0.5) * s, t.y() + (y + 0.5) * s)
+
+        if self._path is not None and len(self._path) > 1:
+            import numpy as np
+
+            pts = np.asarray(self._path, dtype=float)
+            pen = QtGui.QPen(QtGui.QColor(255, 196, 64, 200))
+            pen.setWidthF(1.2)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            poly = QtGui.QPolygonF()
+            for x, y in pts:
+                if x != x or y != y:  # NaN: lost frame, break the line
+                    if poly.size() > 1:
+                        p.drawPolyline(poly)
+                    poly = QtGui.QPolygonF()
+                    continue
+                poly.append(m(x, y))
+            if poly.size() > 1:
+                p.drawPolyline(poly)
+        if self._circle is not None:
+            x, y, r = self._circle
+            if r == r and r > 0 and x == x:
+                pen = QtGui.QPen(QtGui.QColor("#ff5d8f"))
+                pen.setWidthF(1.5)
+                pen.setCosmetic(True)
+                p.setPen(pen)
+                p.setBrush(Qt.NoBrush)
+                p.drawEllipse(m(x, y), r * s, r * s)
+        if self._point is not None:
+            x, y = self._point
+            if x == x and y == y:
+                c = m(x, y)
+                pen = QtGui.QPen(QtGui.QColor("#ff5d8f"))
+                pen.setWidthF(1.5)
+                pen.setCosmetic(True)
+                p.setPen(pen)
+                arm = max(6.0, 3 * s)
+                p.drawLine(QPointF(c.x() - arm, c.y()), QPointF(c.x() + arm, c.y()))
+                p.drawLine(QPointF(c.x(), c.y() - arm), QPointF(c.x(), c.y() + arm))
+        p.restore()
 
     # ------------------------------------------------------------ mouse ----
     def mousePressEvent(self, ev) -> None:  # noqa: N802

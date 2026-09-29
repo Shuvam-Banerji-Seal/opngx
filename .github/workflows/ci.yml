@@ -195,6 +195,21 @@ jobs:
           if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written)" }
           exit $p.ExitCode
 
+      - name: Analysis selftest — modules + motion tracking inside the exe
+        shell: pwsh
+        env:
+          OPNGX_SELFTEST_LOG: selftest-analysis.log
+        run: |
+          # v1.10: built-in modules bundled, tracking accurate, user module
+          # loads from disk inside the frozen app
+          $log = Join-Path $PWD "selftest-analysis.log"
+          $env:OPNGX_SELFTEST_LOG = $log
+          $p = Start-Process -FilePath "dist\opngx-studio.exe" `
+                 -ArgumentList "--selftest-analysis" -Wait -PassThru -NoNewWindow
+          "exit code: 0x{0:X8} ({0})" -f $p.ExitCode
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written)" }
+          exit $p.ExitCode
+
       - name: Video selftest — bundled ffmpeg renders inside the exe
         shell: pwsh
         env:

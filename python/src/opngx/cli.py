@@ -141,6 +141,52 @@ def main(argv: list[str] | None = None) -> int:
     pv2.add_argument("--gamma", type=float, default=None)
     pv2.add_argument("--crop", default=None, metavar="X,Y,W,H")
 
+    # v1.10: analysis modules (motion tracking, luminosity, contrast, yours)
+    pa = sub.add_parser(
+        "analyze",
+        help="run analysis modules (e.g. motion tracking) and write data files",
+    )
+    pa.add_argument("source", help="a .bin, or a batch mother folder with --batch")
+    pa.add_argument(
+        "-m", "--module", action="append", required=True, dest="modules",
+        help="module name (repeatable); see `opngx modules`",
+    )
+    pa.add_argument(
+        "-o", "--out", required=True,
+        help="output file (.csv/.json/.npz/.tsv) for ONE module on ONE recording, "
+        "otherwise a folder: <out>/<recording>/ANALYSIS/<module>.<fmt>",
+    )
+    pa.add_argument("--format", choices=["csv", "json", "npz", "tsv"], default="csv")
+    pa.add_argument(
+        "-p", "--param", action="append", default=[], metavar="[MODULE.]KEY=VALUE",
+        help="module parameter; the module prefix may be omitted with one module",
+    )
+    pa.add_argument("--footage", default=None)
+    pa.add_argument("--start", type=int, default=0)
+    pa.add_argument("--frames", type=int, default=None)
+    pa.add_argument("--stride", type=int, default=1, help="analyse every Nth frame")
+    pa.add_argument("--crop", default=None, metavar="X,Y,W,H")
+    pa.add_argument(
+        "--source", dest="pixels", choices=["raw", "display"], default="raw",
+        help="raw sensor bytes (default) or the display curve (-M/B/C/G)",
+    )
+    pa.add_argument("-M", "--mode", choices=["reference", "raw", "custom"], default="reference")
+    pa.add_argument("--brightness", type=float, default=None)
+    pa.add_argument("--contrast", type=float, default=None)
+    pa.add_argument("--gamma", type=float, default=None)
+    pa.add_argument("--batch", action="store_true", help="SOURCE is a mother folder")
+    pa.add_argument("-j", "--jobs", type=int, default=0)
+    pa.add_argument("--json-summary", action="store_true", help="print summaries as JSON")
+
+    pm = sub.add_parser("modules", help="list / inspect / create / validate analysis modules")
+    pm.add_argument(
+        "action", nargs="?", default="list",
+        choices=["list", "show", "template", "validate", "dir"],
+    )
+    pm.add_argument("target", nargs="?", help="module name (show), file (validate), or new name (template)")
+    pm.add_argument("-o", "--out", default=None, help="template: write here (default: modules folder)")
+    pm.add_argument("--json", action="store_true")
+
     pi = sub.add_parser("info", help="show metadata + machine capabilities")
     pi.add_argument("bin", nargs="?")
 
@@ -303,6 +349,11 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"opngx: --crop needs integers (got {spec!r})")
         return (x, y, w, h)
 
+    if args.cmd == "modules":
+        return _cmd_modules(args)
+    if args.cmd == "analyze":
+        return _cmd_analyze(args)
+
     if args.cmd == "video":
         st = opngx.render_video(
             args.bin,
@@ -403,6 +454,147 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"opngx: error: {exc}", file=sys.stderr)
         return 1
+
+
+# ------------------------------------------------------------ analysis (v1.10)
+def _cmd_modules(args) -> int:
+    import json
+
+    import opngx.analysis as oa
+
+    if args.action == "dir":
+        print(oa.user_modules_dir(create=True))
+        return 0
+    if args.action == "template":
+        name = (args.target or "my_module").strip()
+        path = args.out or os.path.join(oa.user_modules_dir(create=True), f"{name}.py")
+        if os.path.exists(path):
+            print(f"opngx: {path} exists; not overwriting", file=sys.stderr)
+            return 1
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(oa.template(name, name.replace("_", " ").capitalize()))
+        print(path)
+        return 0
+    if args.action == "validate":
+        if not args.target:
+            print("opngx: modules validate FILE.py", file=sys.stderr)
+            return 2
+        v = oa.validate_file(args.target)
+        print("\n".join(v.messages))
+        return 0 if v.ok else 1
+    infos = oa.discover()
+    if args.action == "show":
+        for i in infos:
+            if i.name == args.target:
+                if not i.ok:
+                    print(f"{i.name}: BROKEN ({i.path})\n{i.error}")
+                    return 1
+                c = i.cls
+                print(f"{c.name}  v{c.version}  [{i.origin}]  {i.path}")
+                print(f"  {c.title}\n  {c.description}")
+                print("  parameters:")
+                for p_ in c.params:
+                    extra = f" one of {list(p_.choices)}" if p_.choices else ""
+                    print(f"    {p_.key} ({p_.type.__name__}, default {p_.default!r}){extra} — {p_.help}")
+                print("  columns: frame, timestamp_raw, time_s, " + ", ".join(
+                    f"{c_.key}[{c_.unit}]" if c_.unit else c_.key for c_ in c.columns))
+                return 0
+        print(f"opngx: no module '{args.target}'", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps([
+            {"name": i.name, "origin": i.origin, "path": i.path, "ok": i.ok,
+             "title": i.title, "error": i.error} for i in infos], indent=1))
+        return 0
+    print(f"analysis modules (user folder: {oa.user_modules_dir()})")
+    for i in infos:
+        state = "" if i.ok else f"  BROKEN: {i.error.strip().splitlines()[-1][:90]}"
+        print(f"  {i.name:22s} {i.origin:8s} {i.title}{state}")
+    return 0
+
+
+def _parse_params(items, modules):
+    out: dict = {m: {} for m in modules}
+    for it in items:
+        if "=" not in it:
+            raise SystemExit(f"opngx: --param needs KEY=VALUE (got {it!r})")
+        key, val = it.split("=", 1)
+        if "." in key:
+            mod, key = key.split(".", 1)
+        elif len(modules) == 1:
+            mod = modules[0]
+        else:
+            raise SystemExit(f"opngx: with several modules write MODULE.{key}={val}")
+        if mod not in out:
+            raise SystemExit(f"opngx: --param for '{mod}', which is not being run")
+        out[mod][key] = val
+    return {m: p for m, p in out.items() if p}
+
+
+def _cmd_analyze(args) -> int:
+    import json
+
+    import opngx.analysis as oa
+    from opngx.layout import recording_key, safe_name
+
+    def crop_of(spec):
+        if not spec:
+            return None
+        parts = spec.replace(" ", "").split(",")
+        if len(parts) != 4:
+            raise SystemExit(f"opngx: --crop needs X,Y,W,H (got {spec!r})")
+        return tuple(int(v) for v in parts)
+
+    params = _parse_params(args.param, args.modules)
+    if args.batch:
+        root = Path(args.source)
+        bins = sorted(root.glob("*/*.bin")) + sorted(root.glob("*.bin"))
+        if not bins:
+            print(f"opngx: no .bin files found under {root}", file=sys.stderr)
+            return 1
+    else:
+        bins = [Path(args.source)]
+    single_file = (not args.batch and len(args.modules) == 1
+                   and os.path.splitext(args.out)[1].lower() in (".csv", ".json", ".npz", ".tsv"))
+    rc = 0
+    for b in bins:
+        def prog(d, t_):
+            sys.stderr.write(f"\ropngx: {b.name}: {d:,}/{t_:,} frames ({100 * d / max(t_, 1):5.1f}%)")
+            if d >= t_:
+                sys.stderr.write("\n")
+
+        try:
+            run = oa.analyze(
+                str(b), args.modules, params=params, footage=args.footage if not args.batch else None,
+                start=args.start, count=args.frames, stride=args.stride, crop=crop_of(args.crop),
+                source=args.pixels,
+                transform=dict(mode=args.mode, brightness=args.brightness,
+                               contrast=args.contrast, gamma=args.gamma),
+                jobs=args.jobs, progress=prog, log=lambda s: print(f"opngx: {s}", file=sys.stderr),
+            )
+        except (ValueError, KeyError) as exc:
+            print(f"opngx: {b}: {exc}", file=sys.stderr)
+            rc = 1
+            continue
+        for name, err in run.errors.items():
+            print(f"opngx: {b.name}: {err}\n{err.tb}", file=sys.stderr)
+            rc = 1
+        for name, res in run.results.items():
+            if single_file:
+                path = args.out
+            else:
+                key = recording_key(str(args.source), str(b)) if args.batch else safe_name(b.stem)
+                path = os.path.join(args.out, key, "ANALYSIS", f"{name}.{args.format}")
+            res.save(path)
+            print(f"opngx: {res.describe()} -> {path}  ({run.frames / max(run.seconds, 1e-9):,.0f} frames/s)")
+            if args.json_summary:
+                print(json.dumps({"recording": str(b), "module": name, "summary": res.metadata()["summary"]}))
+            else:
+                for k, v in res.summary.items():
+                    if isinstance(v, float):
+                        v = f"{v:.6g}"
+                    print(f"    {k}: {v}")
+    return rc
 
 
 if __name__ == "__main__":
