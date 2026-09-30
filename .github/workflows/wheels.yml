@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build + test manylinux2014 wheel and sdist (in the manylinux container)
+      - name: Build + test manylinux_2_28 wheel and sdist (in the manylinux container)
         # JS actions can't run inside the CentOS 7 image, so plain docker run
         run: |
-          docker run --rm -v "$PWD:/io" -w /io quay.io/pypa/manylinux2014_x86_64 \
+          docker run --rm -v "$PWD:/io" -w /io quay.io/pypa/manylinux_2_28_x86_64 \
             bash scripts/ci/build-linux-wheel.sh
       - name: Test the wheel on the runner's own distro (Ubuntu, Qt extra)
         run: |
@@ -88,7 +88,7 @@ jobs:
           foreach ($v in "3.9", "3.13") {
             $venv = "$env:RUNNER_TEMP\venv$v"
             py -$v -m venv $venv
-            & "$venv\Scripts\python.exe" -m pip install --quiet $whl pytest
+            & "$venv\Scripts\python.exe" -m pip install --quiet $whl pytest pillow
             if ($LASTEXITCODE) { exit 1 }
             Push-Location $env:RUNNER_TEMP
             & "$venv\Scripts\python.exe" -c "import opngx, opngx.analysis.native as n; from opngx import _engine; p = _engine.library_path(); print(opngx.__version__, p, n.available()); assert '_native' in str(p) and n.available()"

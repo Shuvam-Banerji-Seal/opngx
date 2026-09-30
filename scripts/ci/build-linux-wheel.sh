@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Build the manylinux2014 x86_64 wheel + the sdist. Runs INSIDE
-# quay.io/pypa/manylinux2014_x86_64 (glibc 2.17, so the wheel loads on any
-# distro newer than CentOS 7), with the repository mounted at /io:
+# Build the manylinux_2_28 x86_64 wheel + the sdist. Runs INSIDE
+# quay.io/pypa/manylinux_2_28_x86_64 (glibc 2.28: RHEL 8+, Debian 10+,
+# Ubuntu 18.10+; its GCC 14 knows the x86-64-v3/v4 targets the engine's
+# runtime SIMD dispatch uses, manylinux2014's GCC 10 does not), with the
+# repository mounted at /io:
 #
-#   docker run --rm -v "$PWD:/io" -w /io quay.io/pypa/manylinux2014_x86_64 \
+#   docker run --rm -v "$PWD:/io" -w /io quay.io/pypa/manylinux_2_28_x86_64 \
 #       bash scripts/ci/build-linux-wheel.sh
 #
-# Output: /io/wheelhouse/opngx-<ver>-py3-none-manylinux2014_x86_64.whl
+# Output: /io/wheelhouse/opngx-<ver>-py3-none-manylinux_2_28_x86_64.whl
 #         /io/wheelhouse/opngx-<ver>.tar.gz
 set -euxo pipefail
 export PYTHONDONTWRITEBYTECODE=1   # /io is shared with the runner: leave no root-owned caches
@@ -36,14 +38,15 @@ rm -rf /tmp/raw wheelhouse
 "$PY" scripts/build_wheel.py --lib /tmp/bw/libopngx.so --engine /tmp/bw/opngx-engine \
   --plat-tag linux_x86_64 --outdir /tmp/raw
 auditwheel show /tmp/raw/*.whl
-auditwheel repair --plat manylinux2014_x86_64 -w wheelhouse /tmp/raw/*.whl
+auditwheel repair --plat manylinux_2_28_x86_64 -w wheelhouse /tmp/raw/*.whl
 "$PY" -m build --sdist --outdir wheelhouse python
 
-# install-test the repaired wheel on the oldest and newest supported CPython
-for v in cp39-cp39 cp313-cp313; do
+# install-test the repaired wheel on the oldest and newest CPython the image has
+VERS=$(ls /opt/python | grep -E '^cp3[0-9]+-cp3[0-9]+$' | sort -V)
+for v in $(echo "$VERS" | head -1) $(echo "$VERS" | tail -1); do
   rm -rf "/tmp/venv-$v"
   "/opt/python/$v/bin/python" -m venv "/tmp/venv-$v"
-  "/tmp/venv-$v/bin/python" -m pip install --quiet wheelhouse/*.whl pytest
+  "/tmp/venv-$v/bin/python" -m pip install --quiet wheelhouse/*.whl pytest pillow
   (cd /tmp && "/tmp/venv-$v/bin/python" -c "
 import opngx, opngx.analysis.native as n
 from opngx import _engine

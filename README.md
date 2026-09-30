@@ -70,11 +70,11 @@ The reverse-engineered format and the proven transform are documented in
 wheels include the compiled C engine, so there's nothing to build:
 
 ```bash
-pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.1/opngx-2.0.1-py3-none-manylinux2014_x86_64.whl
+pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.1/opngx-2.0.1-py3-none-manylinux_2_28_x86_64.whl
 pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.1/opngx-2.0.1-py3-none-win_amd64.whl"   # + studio
 ```
 
-The manylinux2014 wheel runs on any glibc ≥ 2.17 distro. The sdist
+The Linux wheel runs on any distro with glibc ≥ 2.28 (RHEL/Rocky 8+, Debian 10+, Ubuntu 18.10+). The sdist
 (`opngx-2.0.1.tar.gz`) installs anywhere, with the numpy fallback.
 
 **From source:**
