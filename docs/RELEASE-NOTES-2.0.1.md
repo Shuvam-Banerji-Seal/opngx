@@ -39,7 +39,9 @@ ctypes library, so **one wheel serves CPython 3.9 through 3.13+**.
 - **Linux:** compiled with GCC 14 in the manylinux_2_28 container, with libdeflate linked in
   statically. (manylinux2014's GCC 10 can't compile the engine's AVX2/AVX-512 dispatch, which
   targets x86-64-v3/v4.) The C code needs no glibc symbol newer than 2.17, and
-  `auditwheel repair` certifies the wheel as **manylinux2014**.
+  `auditwheel repair` certifies the wheel as **manylinux2014**. CI installs and tests it inside
+  CentOS 7 (glibc 2.17) on CPython 3.9 and 3.13. There, pip picks an older NumPy, because current
+  NumPy releases no longer ship glibc-2.17 wheels.
 - **Windows:** built with MinGW. libdeflate and the GCC/pthread runtime are linked
   statically, so the DLL imports only Windows system libraries (CI checks this).
 - **sdist:** `opngx-2.0.1.tar.gz` installs on any platform. Extraction and analysis

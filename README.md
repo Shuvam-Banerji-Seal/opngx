@@ -74,7 +74,8 @@ pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.
 pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.1/opngx-2.0.1-py3-none-win_amd64.whl"   # + studio
 ```
 
-The Linux wheel runs on any distro with glibc ≥ 2.17 (CentOS 7 and newer). The sdist
+The Linux wheel runs on any distro with glibc ≥ 2.17 (CentOS 7 and newer). On glibc < 2.28,
+pip picks an older NumPy that still ships wheels there. The sdist
 (`opngx-2.0.1.tar.gz`) installs anywhere, with the numpy fallback.
 
 **From source:**

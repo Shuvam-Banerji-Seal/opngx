@@ -24,9 +24,12 @@ jobs:
           docker run --rm -v "$PWD:/io" -w /io -e PYTHONDONTWRITEBYTECODE=1 \
             quay.io/pypa/manylinux2014_x86_64 bash -euxc '
               ldd --version | head -1
+              # current NumPy has no glibc-2.17 wheels for new Pythons: binaries
+              # only, so pip picks the newest NumPy that runs here, as for a real user
               for v in cp39-cp39 cp313-cp313; do
                 /opt/python/$v/bin/python -m venv /tmp/$v
-                /tmp/$v/bin/python -m pip install --quiet wheelhouse/*.whl pytest pillow
+                /tmp/$v/bin/python -m pip install --quiet --only-binary :all: wheelhouse/*.whl pytest pillow
+                /tmp/$v/bin/python -c "import numpy; print(\"numpy\", numpy.__version__)"
                 /tmp/$v/lib/python*/site-packages/opngx/_native/opngx-engine --version
                 (cd python/tests && /tmp/$v/bin/python -m pytest -q -p no:cacheprovider \
                    test_analysis.py test_opngx.py)
