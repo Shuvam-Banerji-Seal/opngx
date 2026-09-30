@@ -1,30 +1,42 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "opngx"
-version = "2.0.0"
-description = "Ultra-fast Optronis TimeViewer .bin footage extractor - multi-core PNG conversion with metadata & timestamp export"
+version = "2.0.1"
+description = "Pixel-exact Optronis .bin high-speed-camera footage extraction, motion tracking and Brownian/optical-trap analysis - C engine, Python API, Qt studio"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
-authors = [{ name = "opngx contributors" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Shuvam Banerji Seal" }]
 keywords = ["optronis", "high-speed-camera", "png", "extraction", "footage", "motion-tracking", "optical-tweezers", "brownian-motion"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: C",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Image Processing",
     "Topic :: Multimedia :: Video :: Conversion",
-    "Environment :: X11 Applications",
+    "Environment :: X11 Applications :: Qt",
+    "Environment :: Win32 (MS Windows)",
 ]
 dependencies = ["numpy>=1.22"]
 
 [project.optional-dependencies]
 ui = ["pillow>=9.0"]
-qt = ["PySide6>=6.5", "imageio-ffmpeg>=0.4"]
+qt = ["PySide6>=6.5", "imageio-ffmpeg>=0.4", "pillow>=9.0"]
+all = ["PySide6>=6.5", "imageio-ffmpeg>=0.4", "pillow>=9.0"]
 dev = ["pytest>=7.0", "pillow>=9.0"]
 
 [project.scripts]
@@ -32,10 +44,16 @@ opngx = "opngx.cli:main"
 opngx-ui = "opngx.ui:main"
 
 [project.urls]
-Homepage = "https://github.com/shuvam07/opngx"
+Homepage = "https://github.com/Shuvam-Banerji-Seal/opngx"
+Repository = "https://github.com/Shuvam-Banerji-Seal/opngx"
+Documentation = "https://github.com/Shuvam-Banerji-Seal/opngx/blob/main/docs/ANALYSIS.md"
+Changelog = "https://github.com/Shuvam-Banerji-Seal/opngx/releases"
+Issues = "https://github.com/Shuvam-Banerji-Seal/opngx/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-opngx = ["py.typed", "docs/*.md"]
+# docs for the studio's Docs tab; _native/ holds the C engine library + CLI
+# in the platform wheels (scripts/build_wheel.py) and is empty in the sdist
+opngx = ["py.typed", "docs/*.md", "_native/*"]

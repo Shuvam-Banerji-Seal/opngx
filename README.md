@@ -61,6 +61,24 @@ The reverse-engineered format and the proven transform are documented in
 
 ## Install
 
+**Windows:** run `opngx-setup-v2.0.1.exe` from the
+[latest release](https://github.com/Shuvam-Banerji-Seal/opngx/releases/latest)
+(engine, studio, ffmpeg and docs, with Start-menu shortcuts), or use the portable
+`opngx-studio-portable-v2.0.1.exe`.
+
+**Python package (Linux x86_64 / Windows amd64, Python ≥ 3.9):** the release
+wheels include the compiled C engine, so there's nothing to build:
+
+```bash
+pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.1/opngx-2.0.1-py3-none-manylinux2014_x86_64.whl
+pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.1/opngx-2.0.1-py3-none-win_amd64.whl"   # + studio
+```
+
+The manylinux2014 wheel runs on any glibc ≥ 2.17 distro. The sdist
+(`opngx-2.0.1.tar.gz`) installs anywhere, with the numpy fallback.
+
+**From source:**
+
 ```bash
 # engine (C17 + OpenMP; libdeflate recommended, zlib fallback)
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

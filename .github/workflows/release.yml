@@ -190,8 +190,11 @@ jobs:
           name: lin-rel
           path: stage/*
 
+  wheels:
+    uses: ./.github/workflows/wheels.yml
+
   publish:
-    needs: [windows, linux]
+    needs: [windows, linux, wheels]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -215,6 +218,8 @@ jobs:
             * opngx-engine-*.exe - raw Windows CLI
 
             * Linux tarball / .deb / arch package - static CLI, any distro
+
+            * opngx-*.whl / opngx-*.tar.gz - Python package (pip install)
         run: |
           TAG="${GITHUB_REF_NAME}"
           mkdir -p rel
@@ -229,11 +234,18 @@ jobs:
           V="${TAG#v}"
           NF=""
           [ -f "docs/RELEASE-NOTES-$V.md" ] && NF="docs/RELEASE-NOTES-$V.md"
+          # title = the notes' first "# " heading (e.g. "opngx v2.0.1 — ...")
+          TITLE="opngx ${TAG}"
+          if [ -n "$NF" ]; then
+            H=$(grep -m1 '^# ' "$NF" | sed 's/^# *//')
+            [ -n "$H" ] && TITLE="$H"
+          fi
+          echo "title: $TITLE"
           if gh release view "$TAG" --repo $GITHUB_REPOSITORY >/dev/null 2>&1; then
             gh release upload "$TAG" --repo $GITHUB_REPOSITORY --clobber rel/*
           elif [ -n "$NF" ]; then
             gh release create "$TAG" --repo $GITHUB_REPOSITORY \
-              --title "opngx ${TAG}" --notes-file "$NF" rel/*
+              --title "$TITLE" --notes-file "$NF" rel/*
           else
             gh release create "$TAG" --repo $GITHUB_REPOSITORY \
               --title "opngx ${TAG}" --notes "$NOTES" rel/*

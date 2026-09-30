@@ -715,3 +715,23 @@ def test_an17_every_theme_covers_every_role_and_switches_live():
     assert "#ff8800" in app.styleSheet()
     themes.apply(app, "Midnight", accent=None)
     assert "#4d8248" in app.styleSheet()
+
+
+def test_an18_python_package_metadata_and_native_staging():
+    """v2.0.1 packaging: the wheel's metadata is right and the staging
+    folder for the bundled engine never gets committed."""
+    py = REPO / "python"
+    if not (py / "pyproject.toml").exists():
+        pytest.skip("not a source checkout")
+    assert (py / "LICENSE").read_text() == (REPO / "LICENSE").read_text()
+    toml = (py / "pyproject.toml").read_text()
+    assert f'version = "{opngx.__version__}"' in toml
+    assert 'license = "MIT"' in toml and 'readme = "README.md"' in toml
+    assert "github.com/Shuvam-Banerji-Seal/opngx" in toml
+    assert '"_native/*"' in toml  # the engine is package data
+    assert opngx.__version__ in (py / "README.md").read_text()
+    ign = (REPO / ".gitignore").read_text()
+    assert "python/src/opngx/_native/*" in ign
+    # the loader and the verifier both look in _native/
+    src = (py / "src" / "opngx" / "_engine.py").read_text()
+    assert '"_native"' in src

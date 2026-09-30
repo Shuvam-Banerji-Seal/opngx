@@ -90,6 +90,10 @@ jobs:
         run: |
           cd python && uv sync --all-extras && uv run pytest ../python/tests -q
 
+  # platform wheels (C engine inside) + sdist, install-tested on py3.9/3.13
+  wheels:
+    uses: ./.github/workflows/wheels.yml
+
   abi-guard:
     runs-on: ubuntu-latest
     steps:

@@ -35,3 +35,6 @@ build-pkg/
 build-rel/
 dist/
 _bundled_ffmpeg*
+# wheel staging for the native engine (scripts/build_wheel.py)
+python/src/opngx/_native/*
+!python/src/opngx/_native/README.txt

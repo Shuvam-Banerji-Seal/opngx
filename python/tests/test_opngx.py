@@ -189,8 +189,23 @@ def test_verify_detects_corruption(fixture_dir):
 
 
 # ------------------------------------------------------------- CLI smoke
+def _opngx_cmd() -> list:
+    """The installed `opngx` entry point of THIS interpreter's environment
+    (a non-activated venv is not on PATH — e.g. CI testing a wheel on
+    Windows), else `python -m opngx.cli`."""
+    import shutil
+    import sys
+
+    here = Path(sys.executable).parent
+    for cand in (here / "opngx", here / "opngx.exe", here / "Scripts" / "opngx.exe"):
+        if cand.exists():
+            return [str(cand)]
+    exe = shutil.which("opngx")
+    return [exe] if exe else [sys.executable, "-m", "opngx.cli"]
+
+
 def test_cli_help():
-    r = subprocess.run(["opngx", "--help"], capture_output=True, text=True)
+    r = subprocess.run(_opngx_cmd() + ["--help"], capture_output=True, text=True)
     assert r.returncode == 0
     assert "extract" in r.stdout
 
@@ -199,7 +214,7 @@ def test_cli_info_on_sample():
     if not Path(SAMPLE_BIN).exists():
         pytest.skip("real sample data not present")
     r = subprocess.run(
-        ["opngx", "info", str(SAMPLE_BIN)], capture_output=True, text=True
+        _opngx_cmd() + ["info", str(SAMPLE_BIN)], capture_output=True, text=True
     )
     assert r.returncode == 0
     assert "width: 256" in r.stdout
