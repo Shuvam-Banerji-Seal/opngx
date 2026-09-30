@@ -221,7 +221,7 @@ def test_cli_info_on_sample():
 
 
 # ------------------------------------------------- audit regressions
-def test_backend_reported_truthfully(fixture_dir):
+def test_backend_reported_truthfully(fixture_dir, native_available):
     """stats.backend_used must reflect the engine actually used (audit #9)."""
     out = fixture_dir / "be_out"
     st = opngx.extract(
@@ -231,7 +231,9 @@ def test_backend_reported_truthfully(fixture_dir):
         prefix="cam_",
         backend="zlib",
     )
-    assert st.backend in ("zlib", "libdeflate")  # never the literal 'auto'
+    # never the literal 'auto'; without the engine (sdist) it is the fallback
+    real = ("zlib", "libdeflate") if native_available else ("python-fallback",)
+    assert st.backend in real
     st2 = opngx.extract(
         str(fixture_dir / "cam_9.9" / "cam_9.9.bin"),
         str(out) + "_2",
@@ -394,3 +396,82 @@ def test_verify_survives_colon_in_error_text(fixture_dir):
     victim.write_bytes(bytes(data))
     rep = opngx.verify(fixture_dir / "ref_pngs", out, prefix="cam_")
     assert not rep.passed and rep.mismatched_files >= 1
+
+
+def _png_with_filters(path, img, bpp, filters, bd=8, ct=6):
+    """Hand-encode a PNG whose row y uses filter filters[y % len]."""
+    import zlib as _z
+
+    h, n = img.shape
+    prev = np.zeros(n, np.int64)
+    raw = bytearray()
+    for y in range(h):
+        cur = img[y].astype(np.int64)
+        ft = filters[y % len(filters)]
+        left = np.concatenate([np.zeros(bpp, np.int64), cur[:-bpp]])
+        ul = np.concatenate([np.zeros(bpp, np.int64), prev[:-bpp]])
+        if ft == 0:
+            pred = np.zeros(n, np.int64)
+        elif ft == 1:
+            pred = left
+        elif ft == 2:
+            pred = prev
+        elif ft == 3:
+            pred = (left + prev) >> 1
+        else:
+            p = left + prev - ul
+            pa, pb, pc = abs(p - left), abs(p - prev), abs(p - ul)
+            pred = np.where((pa <= pb) & (pa <= pc), left, np.where(pb <= pc, prev, ul))
+        raw += bytes([ft]) + ((cur - pred) & 0xFF).astype(np.uint8).tobytes()
+        prev = cur
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", _z.crc32(t + d) & 0xFFFFFFFF)
+
+    w = n // bpp
+    Path(path).write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, bd, ct, 0, 0, 0))
+        + chunk(b"IDAT", _z.compress(bytes(raw)))
+        + chunk(b"IEND", b"")
+    )
+
+
+def test_pure_python_verifier_all_png_filters(tmp_path, fixture_dir, monkeypatch):
+    """v2.0.1: without the engine CLI (sdist installs) opngx.verify() uses a
+    numpy PNG decoder. Its Average/Paeth un-filtering used the still-filtered
+    left byte, so it failed 30 of 200 pixel-identical frames. Every filter,
+    8- and 16-bit, grey/RGB/RGBA, must decode like PIL; the fixture must
+    verify; a one-pixel change must not."""
+    import importlib
+
+    vm = importlib.import_module("opngx.verify")
+    monkeypatch.setattr(vm, "_engine_binary", lambda: None)
+    rng = np.random.default_rng(3)
+    cases = [(6, 8, 4, "RGBA"), (2, 8, 3, "RGB"), (0, 8, 1, "L"), (6, 16, 8, None)]
+    for ct, bd, bpp, mode in cases:
+        w, h = 23, 10
+        img = rng.integers(0, 256, (h, w * bpp), dtype=np.uint8)
+        for filt in ([0], [1], [2], [3], [4], [4, 3, 1, 2, 0]):
+            ref, out = tmp_path / "r", tmp_path / "o"
+            for d in (ref, out):
+                d.mkdir(exist_ok=True)
+                for f in d.glob("*"):
+                    f.unlink()
+            _png_with_filters(ref / "x_00000.Png", img, bpp, filt, bd, ct)
+            _png_with_filters(out / "x_00000.Png", img, bpp, [0], bd, ct)
+            if mode:
+                dec = np.asarray(Image.open(ref / "x_00000.Png").convert(mode)).reshape(h, -1)
+                assert np.array_equal(dec, img), (ct, bd, filt)
+            rep = opngx.verify(ref, out, prefix="x_")
+            assert rep.passed, (ct, bd, filt, rep)
+            bad = img.copy()
+            bad[h // 2, 5] ^= 1
+            _png_with_filters(out / "x_00000.Png", bad, bpp, filt, bd, ct)
+            rep = opngx.verify(ref, out, prefix="x_")
+            assert not rep.passed and rep.mismatched_files == 1, (ct, bd, filt)
+    # the real fixture (vendor-style reference PNGs) through the python path
+    out = fixture_dir / "pyverify_out"
+    opngx.extract(str(fixture_dir / "cam_9.9" / "cam_9.9.bin"), str(out), jobs=2, prefix="cam_")
+    rep = opngx.verify(fixture_dir / "ref_pngs", out, prefix="cam_")
+    assert rep.passed and rep.files_compared == 200, rep

@@ -261,36 +261,48 @@ def verify(
         if ihdr is None:
             raise ValueError(f"no IHDR in {path}")
         w, h, bd, ct = ihdr[0], ihdr[1], ihdr[2], ihdr[3]
-        bpp = 8 if bd == 16 else 4
+        chans = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(ct)
+        if chans is None or bd not in (8, 16):
+            raise ValueError(f"unsupported PNG (bit depth {bd}, colour type {ct}) in {path}")
+        bpp = chans * (bd // 8)
         raw = zlib.decompress(idat)
         stride = w * bpp + 1
-        px = np.frombuffer(bytearray(raw), dtype=np.uint8).reshape(h, stride)
-        # unfilter (supports all PNG filters; ours and vendor's are simple)
-        out = np.zeros((h, w * bpp), dtype=np.int32)
-        prev = np.zeros(w * bpp, dtype=np.int32)
-        fbpp = bpp
+        if len(raw) < h * stride:
+            raise ValueError(f"truncated image data in {path}")
+        px = np.frombuffer(raw, dtype=np.uint8)[: h * stride].reshape(h, stride)
+        # Un-filter (PNG spec §9). Sub/Average/Paeth predict from the
+        # RECONSTRUCTED left neighbour, a sequential dependency, so those
+        # rows go byte by byte; None/Up vectorise. (v2.0.1: Average and
+        # Paeth used the still-filtered left byte, so the pure-Python
+        # verifier failed pixel-identical PNGs whose rows used them.)
+        n = w * bpp
+        out = np.zeros((h, n), dtype=np.uint8)
+        prev = np.zeros(n, dtype=np.int32)
         for y in range(h):
-            ftype = px[y, 0]
-            row = px[y, 1:].astype(np.int32)
-            if ftype == 1:
-                for i in range(fbpp, w * bpp):
-                    row[i] = (row[i] + row[i - fbpp]) & 0xFF
+            ftype = int(px[y, 0])
+            fil = px[y, 1:].astype(np.int32)
+            if ftype == 0:
+                row = fil
             elif ftype == 2:
-                row = (row + prev) & 0xFF
-            elif ftype == 3:
-                left = np.concatenate([np.zeros(fbpp, dtype=np.int32), row[:-fbpp]])
-                row = (row + ((left + prev) >> 1)) & 0xFF
-            elif ftype == 4:
-                left = np.concatenate([np.zeros(fbpp, dtype=np.int32), row[:-fbpp]])
-                cprev = np.concatenate([np.zeros(fbpp, dtype=np.int32), prev[:-fbpp]])
-                pp = left.astype(np.int32) + prev - cprev
-                pa = np.abs(pp - left)
-                pb = np.abs(pp - prev)
-                pc = np.abs(pp - cprev)
-                pred = np.where(
-                    (pa <= pb) & (pa <= pc), left, np.where(pb <= pc, prev, cprev)
-                )
-                row = (row + pred) & 0xFF
+                row = (fil + prev) & 0xFF
+            elif ftype in (1, 3, 4):
+                f, up, r = fil.tolist(), prev.tolist(), [0] * n
+                for i in range(n):
+                    a = r[i - bpp] if i >= bpp else 0
+                    if ftype == 1:
+                        pred = a
+                    elif ftype == 3:
+                        pred = (a + up[i]) >> 1
+                    else:
+                        b = up[i]
+                        c = up[i - bpp] if i >= bpp else 0
+                        p_ = a + b - c
+                        pa, pb, pc = abs(p_ - a), abs(p_ - b), abs(p_ - c)
+                        pred = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                    r[i] = (f[i] + pred) & 0xFF
+                row = np.array(r, dtype=np.int32)
+            else:
+                raise ValueError(f"bad PNG filter type {ftype} in row {y} of {path}")
             out[y] = row
             prev = row
         return out
@@ -310,6 +322,8 @@ def verify(
             continue
         if a.shape != b.shape or not np.array_equal(a, b):
             mism += 1
+            if not first_err:
+                first_err = f"{name_r}: pixels differ"
         else:
             bytes_ok += a.size
     names_ok = set_equal or (subset and len(on) <= len(rn))

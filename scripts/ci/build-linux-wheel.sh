@@ -57,4 +57,18 @@ assert '_native' in str(_engine.library_path()) and n.available()
   (cd python/tests && "/tmp/venv-$v/bin/python" -m pytest -q -p no:cacheprovider \
       test_analysis.py test_opngx.py)
 done
+
+# the sdist has no engine: everything must pass on the numpy fallback path
+# (v2.0.1's pure-Python verifier bug was only reachable this way)
+v=$(echo "$VERS" | tail -1)
+rm -rf /tmp/venv-sdist
+"/opt/python/$v/bin/python" -m venv /tmp/venv-sdist
+/tmp/venv-sdist/bin/python -m pip install --quiet wheelhouse/*.tar.gz pytest pillow
+(cd /tmp && /tmp/venv-sdist/bin/python -c "
+from opngx import _engine
+assert _engine.library_path() is None, _engine.library_path()
+print('sdist: numpy fallback, no native library')
+")
+(cd python/tests && /tmp/venv-sdist/bin/python -m pytest -q -p no:cacheprovider \
+    test_analysis.py test_opngx.py)
 ls -la wheelhouse
