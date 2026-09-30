@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Build the manylinux_2_28 x86_64 wheel + the sdist. Runs INSIDE
-# quay.io/pypa/manylinux_2_28_x86_64 (glibc 2.28: RHEL 8+, Debian 10+,
-# Ubuntu 18.10+; its GCC 14 knows the x86-64-v3/v4 targets the engine's
-# runtime SIMD dispatch uses, manylinux2014's GCC 10 does not), with the
-# repository mounted at /io:
+# Build the Linux x86_64 wheel + the sdist. Runs INSIDE
+# quay.io/pypa/manylinux_2_28_x86_64, whose GCC 14 knows the x86-64-v3/v4
+# targets of the engine's runtime SIMD dispatch (manylinux2014's GCC 10 does
+# not). The C code only needs glibc symbols up to 2.17, so auditwheel
+# certifies the result as manylinux2014 (any distro since CentOS 7).
+# The repository is mounted at /io:
 #
 #   docker run --rm -v "$PWD:/io" -w /io quay.io/pypa/manylinux_2_28_x86_64 \
 #       bash scripts/ci/build-linux-wheel.sh
 #
-# Output: /io/wheelhouse/opngx-<ver>-py3-none-manylinux_2_28_x86_64.whl
+# Output: /io/wheelhouse/opngx-<ver>-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
 #         /io/wheelhouse/opngx-<ver>.tar.gz
 set -euxo pipefail
 export PYTHONDONTWRITEBYTECODE=1   # /io is shared with the runner: leave no root-owned caches
@@ -38,7 +39,7 @@ rm -rf /tmp/raw wheelhouse
 "$PY" scripts/build_wheel.py --lib /tmp/bw/libopngx.so --engine /tmp/bw/opngx-engine \
   --plat-tag linux_x86_64 --outdir /tmp/raw
 auditwheel show /tmp/raw/*.whl
-auditwheel repair --plat manylinux_2_28_x86_64 -w wheelhouse /tmp/raw/*.whl
+auditwheel repair --plat manylinux2014_x86_64 -w wheelhouse /tmp/raw/*.whl
 "$PY" -m build --sdist --outdir wheelhouse python
 
 # install-test the repaired wheel on the oldest and newest CPython the image has

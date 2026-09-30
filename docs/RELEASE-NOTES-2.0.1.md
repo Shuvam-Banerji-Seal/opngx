@@ -18,8 +18,8 @@ Code, ABI, CLI, output tree and numbers are unchanged from 2.0.0.
 ## Python wheels with the engine inside
 
 ```bash
-# Linux x86_64 (glibc ≥ 2.28: RHEL/Rocky 8+, Debian 10+, Ubuntu 18.10+)
-pip install opngx-2.0.1-py3-none-manylinux_2_28_x86_64.whl
+# Linux x86_64 (any distro with glibc ≥ 2.17)
+pip install opngx-2.0.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
 # Windows amd64
 pip install opngx-2.0.1-py3-none-win_amd64.whl
 # add the Qt studio (PySide6 + ffmpeg)
@@ -36,9 +36,10 @@ Each wheel contains:
 The wheels are `py3-none-<platform>`: the package is pure Python plus a
 ctypes library, so **one wheel serves CPython 3.9 through 3.13+**.
 
-- **Linux:** built in the manylinux_2_28 container, with libdeflate linked in
-  statically. `auditwheel repair` certifies it, so it has no dependencies beyond glibc 2.28.
-  manylinux2014's GCC 10 can't compile the engine's AVX2/AVX-512 dispatch, which targets x86-64-v3/v4.
+- **Linux:** compiled with GCC 14 in the manylinux_2_28 container, with libdeflate linked in
+  statically. (manylinux2014's GCC 10 can't compile the engine's AVX2/AVX-512 dispatch, which
+  targets x86-64-v3/v4.) The C code needs no glibc symbol newer than 2.17, and
+  `auditwheel repair` certifies the wheel as **manylinux2014**.
 - **Windows:** built with MinGW. libdeflate and the GCC/pthread runtime are linked
   statically, so the DLL imports only Windows system libraries (CI checks this).
 - **sdist:** `opngx-2.0.1.tar.gz` installs on any platform. Extraction and analysis
@@ -86,7 +87,7 @@ run["motion_tracking"].save("trajectory.csv")
 | `opngx-setup-v2.0.1.exe` | Windows installer: engine + Qt studio + ffmpeg + docs, Start-menu shortcuts, uninstaller |
 | `opngx-studio-portable-v2.0.1.exe` | Windows studio, single file, no install |
 | `opngx-engine-v2.0.1.exe` | Windows CLI engine only |
-| `opngx-2.0.1-py3-none-manylinux_2_28_x86_64.whl` | Python package + C engine, Linux x86_64 |
+| `opngx-2.0.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` | Python package + C engine, Linux x86_64 |
 | `opngx-2.0.1-py3-none-win_amd64.whl` | Python package + C engine, Windows amd64 |
 | `opngx-2.0.1.tar.gz` | Python sdist (numpy fallback) |
 | `opngx-2.0.1-linux-x86_64.tar.gz` | static Linux engine + docs |

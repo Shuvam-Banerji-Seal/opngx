@@ -10,12 +10,12 @@ is a Qt studio (`opngx-ui`).
 
 The platform wheels on the
 [releases page](https://github.com/Shuvam-Banerji-Seal/opngx/releases)
-include the compiled engine: manylinux_2_28 x86_64 (glibc ≥ 2.28: RHEL 8+, Debian 10+, Ubuntu 18.10+)
+include the compiled engine: manylinux2014 x86_64 (any distro with glibc ≥ 2.17)
 and Windows amd64. They work on Python 3.9 and newer.
 
 ```bash
-pip install opngx-2.0.1-py3-none-manylinux_2_28_x86_64.whl          # engine + CLI + library
-pip install "opngx-2.0.1-py3-none-manylinux_2_28_x86_64.whl[qt]"    # + the studio (PySide6, ffmpeg)
+pip install opngx-2.0.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl          # engine + CLI + library
+pip install "opngx-2.0.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl[qt]"    # + the studio (PySide6, ffmpeg)
 ```
 
 Without a platform wheel, installing from the sdist still works: extraction and

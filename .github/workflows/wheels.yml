@@ -19,6 +19,18 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/io" -w /io quay.io/pypa/manylinux_2_28_x86_64 \
             bash scripts/ci/build-linux-wheel.sh
+      - name: Prove the glibc 2.17 claim - install + test inside CentOS 7 (manylinux2014)
+        run: |
+          docker run --rm -v "$PWD:/io" -w /io -e PYTHONDONTWRITEBYTECODE=1 \
+            quay.io/pypa/manylinux2014_x86_64 bash -euxc '
+              ldd --version | head -1
+              for v in cp39-cp39 cp313-cp313; do
+                /opt/python/$v/bin/python -m venv /tmp/$v
+                /tmp/$v/bin/python -m pip install --quiet wheelhouse/*.whl pytest pillow
+                /tmp/$v/lib/python*/site-packages/opngx/_native/opngx-engine --version
+                (cd python/tests && /tmp/$v/bin/python -m pytest -q -p no:cacheprovider \
+                   test_analysis.py test_opngx.py)
+              done'
       - name: Test the wheel on the runner's own distro (Ubuntu, Qt extra)
         run: |
           sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3
