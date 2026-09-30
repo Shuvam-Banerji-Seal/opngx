@@ -349,7 +349,7 @@ wheels = [
 
 [[package]]
 name = "opngx"
-version = "1.4.0"
+version = "2.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -359,6 +359,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "imageio-ffmpeg" },
+    { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pillow", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pyside6", version = "6.10.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pyside6", version = "6.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
 dev = [
     { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pillow", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -367,6 +374,8 @@ dev = [
 ]
 qt = [
     { name = "imageio-ffmpeg" },
+    { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pillow", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pyside6", version = "6.10.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pyside6", version = "6.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
@@ -377,14 +386,18 @@ ui = [
 
 [package.metadata]
 requires-dist = [
+    { name = "imageio-ffmpeg", marker = "extra == 'all'", specifier = ">=0.4" },
     { name = "imageio-ffmpeg", marker = "extra == 'qt'", specifier = ">=0.4" },
     { name = "numpy", specifier = ">=1.22" },
+    { name = "pillow", marker = "extra == 'all'", specifier = ">=9.0" },
     { name = "pillow", marker = "extra == 'dev'", specifier = ">=9.0" },
+    { name = "pillow", marker = "extra == 'qt'", specifier = ">=9.0" },
     { name = "pillow", marker = "extra == 'ui'", specifier = ">=9.0" },
+    { name = "pyside6", marker = "extra == 'all'", specifier = ">=6.5" },
     { name = "pyside6", marker = "extra == 'qt'", specifier = ">=6.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
 ]
-provides-extras = ["ui", "qt", "dev"]
+provides-extras = ["ui", "qt", "all", "dev"]
 
 [[package]]
 name = "packaging"
