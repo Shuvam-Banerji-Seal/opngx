@@ -518,11 +518,12 @@ def _selftest_speed() -> int:
         out = d / "o_cli"
         t0 = time.perf_counter()
         first = _first_file_watch(out, t0)
+        ch0 = _proc_cpu_seconds(0) if os.name != "nt" else 0.0   # POSIX child times are cumulative
         p = subprocess.Popen([eng, "extract", "--bin", binp, "--footage", str(rec / "speed.footage"),
                               "--out", str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         p.wait()
         dt = time.perf_counter() - t0
-        cpu = _proc_cpu_seconds(getattr(p, "_handle", None) if os.name == "nt" else 0)
+        cpu = _proc_cpu_seconds(getattr(p, "_handle", None) if os.name == "nt" else 0) - ch0
         assert p.returncode == 0, f"engine exit {p.returncode}"
         res["cli"] = (n / dt, 100 * cpu / dt, first["t"])
         shutil.rmtree(out, ignore_errors=True)
@@ -587,11 +588,12 @@ def _selftest_speed() -> int:
         out = d / "o_cli2"
         t0 = time.perf_counter()
         first = _first_file_watch(out, t0)
+        ch0 = _proc_cpu_seconds(0) if os.name != "nt" else 0.0   # POSIX child times are cumulative
         p = subprocess.Popen([eng, "extract", "--bin", binp, "--footage", str(rec / "speed.footage"),
                               "--out", str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         p.wait()
         dt = time.perf_counter() - t0
-        cpu = _proc_cpu_seconds(getattr(p, "_handle", None) if os.name == "nt" else 0)
+        cpu = _proc_cpu_seconds(getattr(p, "_handle", None) if os.name == "nt" else 0) - ch0
         res["cli#2"] = (n / dt, 100 * cpu / dt, first["t"])
         shutil.rmtree(out, ignore_errors=True)
 
