@@ -214,6 +214,23 @@ jobs:
           if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written)" }
           exit $p.ExitCode
 
+      - name: Speed selftest - CLI vs API vs studio inside the exe (real Windows)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          OPNGX_SELFTEST_LOG: selftest-speed.log
+        run: |
+          # field report: "extraction stopped using all cores" in the Windows
+          # build. Same recording through the bundled CLI, the in-process API
+          # and the studio's Extract; fails if Python/Qt starves the engine.
+          $log = Join-Path $PWD "selftest-speed.log"
+          $env:OPNGX_SELFTEST_LOG = $log
+          $p = Start-Process -FilePath "dist\opngx-studio.exe" `
+                 -ArgumentList "--selftest-speed" -Wait -PassThru -NoNewWindow
+          "exit code: 0x{0:X8} ({0})" -f $p.ExitCode
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "(no log written)" }
+          exit $p.ExitCode
+
       - name: Video selftest — bundled ffmpeg renders inside the exe
         shell: pwsh
         env:

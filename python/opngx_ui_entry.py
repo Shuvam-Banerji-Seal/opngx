@@ -374,6 +374,30 @@ def _selftest_analysis() -> int:
         assert v.ok, v.messages
         r2 = oa.analyze(str(rec / "rec.bin"), "selftest_mod")
         assert len(r2["selftest_mod"]) == n
+        # v2.0.3: the Editor opens built-in modules from their SOURCE file,
+        # which a frozen app only has if the spec bundles it (v2.0.0-2.0.2
+        # did not: clicking a built-in module silently did nothing)
+        for info in oa.discover():
+            if info.origin == "builtin":
+                assert os.path.isfile(info.path), f"no source for built-in {info.name}: {info.path}"
+        # samples land in an EMPTY user folder, validate, and are not re-copied
+        sd = d / "fresh"
+        got = oa.seed_examples(str(sd / "modules"), str(sd / "docs"))
+        pys = sorted(p_.name for p_ in (sd / "modules").glob("example_*.py"))
+        assert len(pys) >= 4 and (sd / "modules" / "README.md").is_file(), got
+        assert list((sd / "docs").glob("*.md")), "sample doc missing"
+        for fn in pys:
+            vv = oa.validate_file(str(sd / "modules" / fn))
+            assert vv.ok, (fn, vv.messages)
+        assert oa.seed_examples(str(sd / "modules"), str(sd / "docs")) == []
+        # every guide + the release notes reach the Docs tab
+        from opngx.ui.docs_ui import bundled_docs  # noqa: PLC0415
+
+        docs = {os.path.basename(p_) for _t, p_ in bundled_docs()}
+        need = {"ANALYSIS.md", "STUDIO.md", "FORMAT.md"}
+        assert need <= docs, f"missing docs: {need - docs}"
+        assert any(x.startswith("RELEASE-NOTES-") for x in docs), "no release notes bundled"
+        print(f"editor sources OK; samples {pys}; {len(docs)} docs")
         print(
             f"SELFTEST-ANALYSIS PASS ({len(names)} built-in modules; tracking RMS "
             f"{np.sqrt(np.mean(err**2)):.4f} px over {n} frames; user module OK)"
@@ -389,7 +413,162 @@ def _selftest_analysis() -> int:
         logf.flush()
 
 
+def _proc_cpu_seconds(handle=None) -> float:
+    """User+kernel CPU seconds of this process (or of a child's handle on
+    Windows, where os.times() never reports children)."""
+    import os
+
+    if handle is not None and os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        ft = [wintypes.FILETIME() for _ in range(4)]
+        ctypes.windll.kernel32.GetProcessTimes(wintypes.HANDLE(int(handle)), *[ctypes.byref(f) for f in ft])
+        to_s = lambda f: ((f.dwHighDateTime << 32) | f.dwLowDateTime) / 1e7  # noqa: E731
+        return to_s(ft[2]) + to_s(ft[3])
+    t = os.times()
+    if handle is not None:
+        return t.children_user + t.children_system
+    return t.user + t.system
+
+
+def _selftest_speed() -> int:
+    """Throughput INSIDE the packaged app, the three ways a user extracts:
+    the bundled engine CLI, the in-process API (ctypes -> libopngx) and the
+    studio window's Extract button. Same synthetic recording for all.
+    Reports frames/s, CPU utilisation, threads, backend and the DLL that
+    loaded. Fails if the API or the studio is far behind the CLI, i.e. if
+    the Python/Qt layer starves the engine (field report: 'extraction no
+    longer uses all cores'). Exit 0 = pass."""
+    import os
+    import shutil
+    import struct
+    import subprocess
+    import tempfile
+    import time
+    from pathlib import Path
+
+    import numpy as np
+
+    logf = _selftest_log()
+    print("SELFTEST-SPEED start")
+    try:
+        import opngx
+        from opngx._engine import library_path, load_library
+        from opngx.verify import _engine_binary
+
+        assert load_library() is not None, "libopngx did not load"
+        cores = os.cpu_count() or 1
+        n = int(os.environ.get("OPNGX_SPEED_FRAMES", "6000"))
+        w, h = 256, 300  # this project's sensor window
+        d = Path(tempfile.mkdtemp(prefix="opngx_speed_"))
+        rec = d / "speed"
+        rec.mkdir()
+        rng = np.random.default_rng(5)
+        yy, xx = np.mgrid[0:h, 0:w]
+        base = 40 + 8 * rng.standard_normal((h, w))
+        with open(rec / "speed.bin", "wb") as f:
+            for i in range(n):
+                cx, cy = 128 + 3 * np.sin(i / 40), 150 + 3 * np.cos(i / 55)
+                r = np.hypot(xx - cx, yy - cy)
+                img = base + 90 * np.exp(-((r - 18) ** 2) / 8) + rng.normal(0, 3, (h, w))
+                f.write(struct.pack("<Q", 9_000_000 + 2000 * i))
+                f.write(np.clip(img, 0, 255).astype(np.uint8).tobytes())
+        # a real TimeViewer layout, so the default (reference) mode applies
+        (rec / "speed.footage").write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n<Optronis-TimeViewer-Footage>'
+            f"<Footage><ResolutionX>{w}</ResolutionX><ResolutionY>{h}</ResolutionY>"
+            f"<NumberOfImages>{n}</NumberOfImages><Framerate>500</Framerate></Footage>"
+            "<SettingsProcessing><Brightness>49</Brightness><Contrast>18</Contrast>"
+            "<Gamma>1</Gamma></SettingsProcessing><Camera><Name>speed</Name></Camera>"
+            "</Optronis-TimeViewer-Footage>",
+            encoding="utf-8",
+        )
+        binp = str(rec / "speed.bin")
+        open(binp, "rb").read()  # warm the file cache: measure the engine, not the disk
+        print(f"cores={cores} frames={n} size={w}x{h} lib={library_path()}")
+        res = {}
+
+        # 1. bundled CLI (the reference: pure C, no Python)
+        eng = _engine_binary()
+        assert eng, "bundled opngx-engine CLI not found"
+        out = d / "o_cli"
+        t0 = time.perf_counter()
+        p = subprocess.Popen([eng, "extract", "--bin", binp, "--footage", str(rec / "speed.footage"),
+                              "--out", str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p.wait()
+        dt = time.perf_counter() - t0
+        cpu = _proc_cpu_seconds(getattr(p, "_handle", None) if os.name == "nt" else 0)
+        assert p.returncode == 0, f"engine exit {p.returncode}"
+        res["cli"] = (n / dt, 100 * cpu / dt)
+        shutil.rmtree(out, ignore_errors=True)
+
+        # 2. in-process API
+        out = d / "o_api"
+        c0, t0 = _proc_cpu_seconds(), time.perf_counter()
+        st = opngx.extract(binp, str(out))
+        dt = time.perf_counter() - t0
+        res["api"] = (n / dt, 100 * (_proc_cpu_seconds() - c0) / dt)
+        assert st.frames_written == n, st
+        print(f"api backend={st.backend}")
+        shutil.rmtree(out, ignore_errors=True)
+
+        # 3. the studio window, exactly as a user clicks Extract
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6 import QtWidgets
+
+        from opngx.ui.qt_app import MainWindow
+
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        win = MainWindow()
+        win.show()
+        app.processEvents()
+        win.bin_edit.setText(binp)
+        win._probe()
+        out = d / "o_studio"
+        win.out_edit.setText(str(out))
+        app.processEvents()
+        jobs = win.jobs_slider.value()
+        c0, t0 = _proc_cpu_seconds(), time.perf_counter()
+        win._start()
+        while True:
+            app.processEvents()
+            time.sleep(0.005)
+            if not win._running and time.perf_counter() - t0 > 0.3:
+                break
+            if time.perf_counter() - t0 > 900:
+                raise RuntimeError("studio extraction did not finish in 15 min")
+        dt = time.perf_counter() - t0
+        res["studio"] = (n / dt, 100 * (_proc_cpu_seconds() - c0) / dt)
+        files = sum(len(fs) for _, _, fs in os.walk(out))
+        assert files >= n, f"studio wrote {files} files"
+        print(f"studio jobs slider={jobs}")
+        win.close()
+        shutil.rmtree(d, ignore_errors=True)
+
+        for k, (fps, cpu) in res.items():
+            print(f"  {k:7} {fps:8.0f} frames/s   CPU {cpu:5.0f}% of {100 * cores}%")
+        ref = res["cli"][0]
+        bad = [k for k in ("api", "studio") if res[k][0] < 0.6 * ref]
+        if bad:
+            print(f"SELFTEST-SPEED FAIL: {bad} under 60% of the CLI's throughput")
+            return 1
+        print(f"SELFTEST-SPEED PASS (studio {res['studio'][0]:.0f} fps = "
+              f"{100 * res['studio'][0] / ref:.0f}% of the bundled CLI)")
+        return 0
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        print("SELFTEST-SPEED FAIL")
+        return 1
+    finally:
+        logf.flush()
+
+
 if __name__ == "__main__":
+    if "--selftest-speed" in sys.argv:
+        raise SystemExit(_selftest_speed())
     if "--selftest-analysis" in sys.argv:
         raise SystemExit(_selftest_analysis())
     if "--debug-ffmpeg" in sys.argv:

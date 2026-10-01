@@ -162,6 +162,55 @@ def get_module(name: str) -> type:
     raise KeyError(f"no analysis module named '{name}' (available: {avail})")
 
 
+# ---------------------------------------------------------------- samples --
+SEED_MARKER = ".opngx-samples"
+
+
+def examples_dir() -> str:
+    """The pristine sample modules + docs shipped inside the package (also
+    inside the frozen Windows app, where they are bundled as data files)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples")
+
+
+def seed_examples(
+    modules_dir: Optional[str] = None, docs_dir: Optional[str] = None, force: bool = False
+) -> list[str]:
+    """Copy the sample modules (and README) into the user's modules folder and
+    the sample doc into the docs folder. Returns the files written.
+
+    Runs once per folder: a marker file records it, so samples the user
+    deleted are not resurrected on the next start. `force=True` (the
+    studio's "Restore samples") ignores the marker. An existing file is
+    NEVER overwritten - the user's edits always win."""
+    import shutil
+
+    src = examples_dir()
+    if not os.path.isdir(src):
+        return []
+    md = modules_dir or user_modules_dir()
+    dd = docs_dir or os.path.join(os.path.dirname(md), "docs")
+    marker = os.path.join(md, SEED_MARKER)
+    if os.path.exists(marker) and not force:
+        return []
+    plan = [(os.path.join(src, fn), md) for fn in sorted(os.listdir(src))
+            if fn.endswith((".py", ".md")) and not fn.startswith("_")]
+    sdocs = os.path.join(src, "docs")
+    if os.path.isdir(sdocs):
+        plan += [(os.path.join(sdocs, fn), dd) for fn in sorted(os.listdir(sdocs)) if fn.endswith(".md")]
+    written = []
+    for path, dest in plan:
+        os.makedirs(dest, exist_ok=True)
+        target = os.path.join(dest, os.path.basename(path))
+        if os.path.exists(target):
+            continue
+        shutil.copyfile(path, target)
+        written.append(target)
+    os.makedirs(md, exist_ok=True)
+    with open(marker, "w", encoding="utf-8") as fh:
+        fh.write("opngx copied its sample modules here once; delete this file to get them back.\n")
+    return written
+
+
 # --------------------------------------------------------------- validate --
 def synthetic_frames(k: int = 32, h: int = 64, w: int = 80, seed: int = 0) -> np.ndarray:
     """Test frames: noisy background with a bright disc drifting right."""

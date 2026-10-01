@@ -475,3 +475,60 @@ def test_pure_python_verifier_all_png_filters(tmp_path, fixture_dir, monkeypatch
     opngx.extract(str(fixture_dir / "cam_9.9" / "cam_9.9.bin"), str(out), jobs=2, prefix="cam_")
     rep = opngx.verify(fixture_dir / "ref_pngs", out, prefix="cam_")
     assert rep.passed and rep.files_compared == 200, rep
+
+
+def _png_samples(path):
+    """(IHDR, big-endian samples) of an all-filter-0 PNG, no PIL: PIL
+    narrows 16-bit RGBA to 8 bits and would hide a 16-bit defect."""
+    import zlib as _z
+
+    d = Path(path).read_bytes()
+    pos, idat, ihdr = 8, b"", None
+    while pos < len(d):
+        ln = struct.unpack(">I", d[pos : pos + 4])[0]
+        typ = d[pos + 4 : pos + 8]
+        if typ == b"IHDR":
+            ihdr = struct.unpack(">IIBB", d[pos + 8 : pos + 18])
+        elif typ == b"IDAT":
+            idat += d[pos + 8 : pos + 8 + ln]
+        pos += 12 + ln
+    w, h, bd, ct = ihdr
+    rows = np.frombuffer(_z.decompress(idat), np.uint8).reshape(h, -1)
+    assert (rows[:, 0] == 0).all()
+    return ihdr, (rows[:, 1:].view(">u2") if bd == 16 else rows[:, 1:])
+
+
+@pytest.mark.parametrize("bit_depth", [8, 16])
+@pytest.mark.parametrize("channels", [6, 0])
+@pytest.mark.parametrize("crop", [None, (5, 7, 30, 20)])
+def test_fallback_png_samples_match_native(fixture_dir, native_available, tmp_path, bit_depth, channels, crop):
+    """Every PNG variant from the numpy fallback carries exactly the native
+    engine's samples. 16-bit RGBA used to raise ValueError in encode_png
+    (and would have written alpha 255 of 65535)."""
+    if not native_available:
+        pytest.skip("native engine not built")
+    from opngx import _fallback
+
+    binp = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    kw = dict(mode="custom", brightness=30.0, contrast=40.0, gamma=1.6,
+              bit_depth=bit_depth, channels=channels, frames=4, start=3,
+              prefix="cam_", jobs=1)
+    if crop:
+        kw["crop"] = crop
+    opngx.extract(binp, str(tmp_path / "nat"), **kw)
+    x, y, w, h = crop or (0, 0, 0, 0)
+    _fallback.extract_frames(
+        binp, str(tmp_path / "fb"), 64, 48, 4, 8 + 64 * 48, "cam_", ".Png",
+        30.0, 40.0, 1.6, bit_depth, jobs=1, channels=channels, start=3,
+        crop=(x, y, w, h),
+    )
+    nat = sorted((tmp_path / "nat").glob("cam_*.Png"))
+    fb = sorted((tmp_path / "fb").glob("cam_*.Png"))
+    assert [p.name for p in nat] == [p.name for p in fb] and len(nat) == 4
+    for a, b in zip(nat, fb):
+        (ha, sa), (hb, sb) = _png_samples(a), _png_samples(b)
+        assert ha == hb, (a.name, ha, hb)
+        assert np.array_equal(sa, sb), a.name
+        if channels == 6:
+            full = 65535 if bit_depth == 16 else 255
+            assert (sa.reshape(ha[1], ha[0], 4)[..., 3] == full).all()

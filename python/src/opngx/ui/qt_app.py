@@ -2587,9 +2587,26 @@ def main() -> int:
     app = QtWidgets.QApplication([])
     install_crash_handlers()
     apply_theme(app)
+    seed_user_samples()
     win = MainWindow()
     win.show()
     return app.exec()
+
+
+def seed_user_samples() -> list[str]:
+    """First start: put the sample modules + README into the (empty) user
+    modules folder and a sample doc into the docs folder, so the Editor has
+    something real to open and copy. Once per folder, never overwrites;
+    a failure (read-only profile, ...) must not stop the studio."""
+    import sys  # noqa: PLC0415
+
+    try:
+        import opngx.analysis as oa  # noqa: PLC0415
+
+        return oa.seed_examples()
+    except Exception as exc:  # noqa: BLE001
+        print(f"opngx: could not copy the sample modules: {exc}", file=sys.stderr)
+        return []
 
 
 def crash_log_path() -> str:

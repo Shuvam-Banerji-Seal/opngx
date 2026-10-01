@@ -53,11 +53,12 @@ def encode_png(pixels: np.ndarray, bit_depth: int = 8, channels: int = 6) -> byt
             rawbytes = v16.view("<u2").astype(">u2").tobytes()
             stride_len = w * 2
         else:
-            up = pixels.astype(np.uint16)
-            up[..., :3] *= 257
-            # repack each channel pair little->big endian
-            pairs = up.reshape(h, w * 4, 2).view("<u2")
-            rawbytes = pairs.astype(">u2").tobytes()
+            # every channel, alpha included (255 -> 65535), widened by 257
+            # and written big-endian. The old code reshaped the uint16 array
+            # as if it were bytes (ValueError on every 16-bit RGBA frame)
+            # and left alpha at 255, i.e. almost transparent.
+            up = pixels.astype(np.uint16) * 257
+            rawbytes = up.astype(">u2").tobytes()
             stride_len = w * 8
     else:
         bd = 8

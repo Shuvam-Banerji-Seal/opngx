@@ -735,3 +735,63 @@ def test_an18_python_package_metadata_and_native_staging():
     # the loader and the verifier both look in _native/
     src = (py / "src" / "opngx" / "_engine.py").read_text()
     assert '"_native"' in src
+
+
+def test_an19_sample_modules_seed_once_validate_and_never_overwrite(tmp_path):
+    """v2.0.3: the studio ships sample modules + docs and copies them into the
+    user's (empty) folders on first start: once, never over user edits;
+    'Restore samples' brings back only what was deleted."""
+    md, dd = tmp_path / "modules", tmp_path / "docs"
+    got = oa.seed_examples(str(md), str(dd))
+    names = sorted(os.path.basename(p) for p in got)
+    pys = [n for n in names if n.endswith(".py")]
+    assert len(pys) >= 4 and "README.md" in names and any(n.endswith(".md") for n in os.listdir(dd))
+    for fn in pys:
+        src = (md / fn).read_bytes()
+        assert src.isascii(), fn  # cp1252 lesson (v2.0): samples stay ASCII
+        v = oa.validate_file(str(md / fn))
+        assert v.ok, (fn, v.messages)
+    # second start: nothing copied, even after the user deleted a sample
+    (md / pys[0]).unlink()
+    (md / pys[1]).write_text("# my edit\n", encoding="utf-8")
+    assert oa.seed_examples(str(md), str(dd)) == []
+    assert not (md / pys[0]).exists()
+    # Restore samples: only the missing file comes back; the edit survives
+    back = oa.seed_examples(str(md), str(dd), force=True)
+    assert [os.path.basename(p) for p in back] == [pys[0]]
+    assert (md / pys[1]).read_text(encoding="utf-8") == "# my edit\n"
+
+
+def test_an20_samples_run_on_a_recording(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPNGX_MODULES_DIR", str(tmp_path / "modules"))
+    oa.seed_examples()
+    names = sorted(i.name for i in oa.list_modules() if i.origin == "user")
+    assert {"example_bright_area", "example_frame_difference", "example_background",
+            "example_track_speed"} <= set(names)
+    frames = oa.synthetic_frames(k=48, h=60, w=72)
+    binp = tmp_path / "rec.bin"
+    with open(binp, "wb") as f:
+        for i, fr in enumerate(frames):
+            f.write(struct.pack("<Q", 1_000_000 + 2000 * i) + fr.tobytes())
+    (tmp_path / "rec.footage").write_text(
+        "<x><ResolutionX>72</ResolutionX><ResolutionY>60</ResolutionY>"
+        "<NumberOfImages>48</NumberOfImages></x>", encoding="utf-8")
+    run = oa.analyze(str(binp), names, params={"example_track_speed": {"pixel_size_um": 0.5}})
+    assert run.ok, run.errors
+    assert np.all(run["example_bright_area"].columns["area_px"] > 0)
+    assert run["example_frame_difference"].columns["mean_abs_diff"][0] == 0
+    assert "speed_hist" in run["example_track_speed"].tables
+    assert run["example_track_speed"].summary["unit"] == "um/s"
+
+
+def test_an21_windows_exe_bundles_module_sources_samples_and_docs():
+    """The frozen app only has files the spec collects. A built-in module's
+    __file__ there is <_MEIPASS>/opngx/analysis/builtin/<name>.py, so its
+    source must be bundled or the Editor can't open it (v2.0.0-2.0.2)."""
+    spec = (REPO / "opngx.spec").read_text(encoding="utf-8")
+    for needle in ('"opngx/analysis/builtin"', '"opngx/analysis/examples"',
+                   '"opngx/analysis/examples/docs"', '"opngx/docs"', '(root, "docs", "*.md")'):
+        assert needle in spec, needle
+    toml = (REPO / "python" / "pyproject.toml").read_text(encoding="utf-8")
+    assert "analysis/examples/*.md" in toml and "analysis/examples/docs/*.md" in toml
+    assert "--selftest-speed" in (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")

@@ -56,4 +56,5 @@ where = ["src"]
 [tool.setuptools.package-data]
 # docs for the studio's Docs tab; _native/ holds the C engine library + CLI
 # in the platform wheels (scripts/build_wheel.py) and is empty in the sdist
-opngx = ["py.typed", "docs/*.md", "_native/*"]
+# analysis/examples: sample modules + docs seeded into the user's folders
+opngx = ["py.typed", "docs/*.md", "_native/*", "analysis/examples/*.md", "analysis/examples/docs/*.md"]

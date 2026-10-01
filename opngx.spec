@@ -52,6 +52,27 @@ if ffbin:
 # the binary above). Bundling the package as well shipped the 88 MB ffmpeg
 # twice — resolve_ffmpeg() uses _bundled_ffmpeg first.
 
+# Data files, by glob so a new guide / module / release note can't be
+# forgotten again (v2.0 shipped 2 of 3 guides and no release notes).
+import glob as _glob
+
+_pkg = os.path.join(root, "python", "src", "opngx")
+_datas = [(os.path.join(root, "README.md"), "docs")]
+# repo docs: guides + every release note (the Docs tab lists them)
+_datas += [(f, "docs") for f in sorted(_glob.glob(os.path.join(root, "docs", "*.md")))]
+# package docs, found by the studio next to opngx.docs.__file__
+_datas += [(f, "opngx/docs") for f in sorted(_glob.glob(os.path.join(_pkg, "docs", "*.md")))]
+# SOURCE of the built-in analysis modules: a frozen module's __file__ is
+# <_MEIPASS>/opngx/analysis/builtin/<name>.py, which only exists if it is
+# collected. Without it the Editor could not open (or Duplicate) a
+# built-in module - clicking it silently did nothing.
+_datas += [(f, "opngx/analysis/builtin") for f in sorted(_glob.glob(os.path.join(_pkg, "analysis", "builtin", "*.py")))]
+# sample modules + docs copied into the user's empty folders on first start
+_datas += [(f, "opngx/analysis/examples") for f in sorted(_glob.glob(os.path.join(_pkg, "analysis", "examples", "*.*")))]
+_datas += [(f, "opngx/analysis/examples/docs") for f in sorted(_glob.glob(os.path.join(_pkg, "analysis", "examples", "docs", "*.md")))]
+if os.path.exists(os.path.join(root, "assets", "logo", "icon.png")):
+    _datas.append((os.path.join(root, "assets", "logo", "icon.png"), "assets/logo"))
+
 icon_path = os.path.join(root, "assets", "logo", "icon.ico")
 icon_png = os.path.join(root, "assets", "logo", "icon.png")
 a = Analysis(
@@ -67,15 +88,7 @@ a = Analysis(
         os.path.join(root, "python", "src"),
     ],
     binaries=binaries,
-    datas=[
-        (os.path.join(root, "README.md"), "docs"),
-        (os.path.join(root, "docs", "FORMAT.md"), "docs"),
-        (os.path.join(root, "docs", "BENCHMARKS.md"), "docs"),
-        (os.path.join(root, "docs", "ANALYSIS.md"), "docs"),
-        (os.path.join(root, "python", "src", "opngx", "docs", "ANALYSIS.md"), "opngx/docs"),
-        (os.path.join(root, "python", "src", "opngx", "docs", "FORMAT.md"), "opngx/docs"),
-        (icon_png, "assets/logo") if os.path.exists(icon_png) else (os.path.join(root, "README.md"), "docs"),
-    ],
+    datas=_datas,
     hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],

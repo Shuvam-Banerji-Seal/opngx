@@ -1368,6 +1368,7 @@ class ModuleEditor(QtWidgets.QWidget):
             ("New module…", self.new_module), ("New doc…", self.new_doc),
             ("Duplicate", self.duplicate), ("Open file…", self.open_dialog),
             ("Open folder", self.open_folder), ("Delete…", self.delete_current),
+            ("Restore samples", self.restore_samples),
         )
         for i, (text, fn) in enumerate(buttons):
             b = QtWidgets.QPushButton(text)
@@ -1491,6 +1492,19 @@ class ModuleEditor(QtWidgets.QWidget):
             it.setForeground(0, themes.qcolor("text_dim"))
             group("Documentation (read-only)").addChild(it)
         self._update_title()
+
+    def restore_samples(self) -> None:
+        """Copy back any sample module / doc the user deleted (existing
+        files are left alone)."""
+        written = oa.seed_examples(docs_dir=user_docs_dir(), force=True)
+        self.console.appendPlainText(
+            "restored: " + ", ".join(os.path.basename(p) for p in written)
+            if written else "all sample modules and docs are already present"
+        )
+        self.refresh_files()
+        if written:
+            self.modulesChanged.emit()
+            self.docsChanged.emit()
 
     def _open_item(self, item, _col=0) -> None:
         p = item.data(0, Qt.UserRole)
