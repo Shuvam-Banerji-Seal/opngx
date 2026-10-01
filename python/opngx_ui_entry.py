@@ -581,12 +581,25 @@ def _selftest_speed() -> int:
         assert files >= n, f"studio wrote {files} files"
         print(f"studio jobs slider={jobs}")
         win.close()
-        shutil.rmtree(d, ignore_errors=True)
+
+        # CLI again, last: separates "the CLI is slow" from "whatever ran
+        # first paid for the freshly written recording" (antivirus, cache)
+        out = d / "o_cli2"
+        t0 = time.perf_counter()
+        first = _first_file_watch(out, t0)
+        p = subprocess.Popen([eng, "extract", "--bin", binp, "--footage", str(rec / "speed.footage"),
+                              "--out", str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p.wait()
+        dt = time.perf_counter() - t0
+        cpu = _proc_cpu_seconds(getattr(p, "_handle", None) if os.name == "nt" else 0)
+        res["cli#2"] = (n / dt, 100 * cpu / dt, first["t"])
+        shutil.rmtree(out, ignore_errors=True)
 
         for k, (fps, cpu, first_s) in res.items():
             fs = f"{first_s:.3f}s" if first_s is not None else "n/a"
             print(f"  {k:7} {fps:8.0f} frames/s   CPU {cpu:5.0f}% of {100 * cores}%   first frame after {fs}")
-        ref = res["cli"][0]
+        shutil.rmtree(d, ignore_errors=True)
+        ref = max(res["cli"][0], res["cli#2"][0])
         bad = [k for k in ("api", "studio") if res[k][0] < 0.6 * ref]
         if bad:
             print(f"SELFTEST-SPEED FAIL: {bad} under 60% of the CLI's throughput")
