@@ -538,6 +538,17 @@ def _selftest_speed() -> int:
         print(f"api backend={st.backend}")
         shutil.rmtree(out, ignore_errors=True)
 
+        # 2b. informational: oversubscribed workers (hide blocking file
+        # creation / on-close antivirus scans behind other threads' compute)
+        for mult in (2, 3):
+            out = d / f"o_api{mult}"
+            c0, t0 = _proc_cpu_seconds(), time.perf_counter()
+            opngx.extract(binp, str(out), jobs=mult * cores)
+            dt = time.perf_counter() - t0
+            print(f"  api x{mult}  {n / dt:8.0f} frames/s   CPU {100 * (_proc_cpu_seconds() - c0) / dt:5.0f}% "
+                  f"of {100 * cores}%   ({mult * cores} threads, informational)")
+            shutil.rmtree(out, ignore_errors=True)
+
         # 3. the studio window, exactly as a user clicks Extract
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PySide6 import QtWidgets
