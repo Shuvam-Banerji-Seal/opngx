@@ -67,6 +67,20 @@ This is a text editor for **modules** (Python) and **docs** (Markdown), with a t
 *New module…* starts from a working template, and *Duplicate* makes an editable copy of a
 built-in. *Save & use* validates the module and makes it available in Analyze.
 
+**Sample modules.** On first start the studio copies four sample modules, a README and a
+sample doc into your (empty) modules and docs folders. They appear under *My modules* and
+*My docs*. Each one shows a different part of the API:
+
+| sample | shows |
+|---|---|
+| `example_bright_area` | params, columns, a frame overlay |
+| `example_frame_difference` | state between batches (`parallel = False`), a summary |
+| `example_background` | `begin()` with `ctx.sample()`, a parameter with choices |
+| `example_track_speed` | `requires` (builds on `motion_tracking`), an extra table |
+
+They're copied once and never overwrite your files. *Restore samples* brings back any you
+deleted.
+
 ## Docs
 Every piece of documentation is in one place:
 - the guides shipped with opngx;

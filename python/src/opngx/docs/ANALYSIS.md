@@ -234,6 +234,12 @@ A module is a `.py` file in your modules folder. Find it with
 `%APPDATA%\opngx\modules` on Windows. You can override it with
 `OPNGX_MODULES_DIR`, and add more folders with `OPNGX_MODULES_PATH`.
 
+The studio puts four working **sample modules** there on first start
+(`example_bright_area`, `example_frame_difference`, `example_background`,
+`example_track_speed`). Reading them is the quickest way in.
+`opngx.analysis.seed_examples()` copies them from Python, and
+`opngx.analysis.examples_dir()` holds the originals.
+
 ```python
 import numpy as np
 from opngx.analysis import Column, Module, Param

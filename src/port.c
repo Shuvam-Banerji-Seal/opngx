@@ -301,30 +301,110 @@ static DWORD WINAPI win_worker(LPVOID p) {
     return 0;
 }
 
+/* Full speed while an extraction runs (v2.0.3). Windows 10 1709+/11
+ * "power throttling" (EcoQoS) moves the threads of a process whose window
+ * is not in front onto low clocks / efficiency cores; on a laptop that
+ * reads as "extraction stopped using the CPU's full power". Opt the process
+ * and every worker out for the duration of the pool, keep the system from
+ * sleeping mid-run, and restore the defaults afterwards. All APIs are
+ * resolved at run time: missing on older Windows = silently skipped. */
+typedef struct { ULONG Version, ControlMask, StateMask; } opx_power_throttling;
+#define OPX_THROTTLE_EXECUTION_SPEED 0x1
+#define OPX_ProcessPowerThrottling 4
+#define OPX_ThreadPowerThrottling 3
+typedef BOOL (WINAPI *opx_set_proc_info_fn)(HANDLE, int, LPVOID, DWORD);
+typedef BOOL (WINAPI *opx_set_thread_info_fn)(HANDLE, int, LPVOID, DWORD);
+typedef DWORD (WINAPI *opx_active_cpus_fn)(WORD);
+typedef WORD (WINAPI *opx_active_groups_fn)(void);
+typedef BOOL (WINAPI *opx_set_group_aff_fn)(HANDLE, const GROUP_AFFINITY *, PGROUP_AFFINITY);
+
+static FARPROC opx_k32(const char *name) {
+    HMODULE k = GetModuleHandleW(L"kernel32.dll");
+    return k ? GetProcAddress(k, name) : NULL;
+}
+
+static void opx_throttle(HANDLE h, int is_thread, int full_speed) {
+    /* full_speed: ControlMask=EXECUTION_SPEED, StateMask=0 = "never throttle";
+     * restore: both masks 0 = "let the system decide" (the default) */
+    opx_power_throttling st = { 1, full_speed ? OPX_THROTTLE_EXECUTION_SPEED : 0, 0 };
+    if (is_thread) {
+        opx_set_thread_info_fn f = (opx_set_thread_info_fn)(void (*)(void))opx_k32("SetThreadInformation");
+        if (f) f(h, OPX_ThreadPowerThrottling, &st, sizeof st);
+    } else {
+        opx_set_proc_info_fn f = (opx_set_proc_info_fn)(void (*)(void))opx_k32("SetProcessInformation");
+        if (f) f(h, OPX_ProcessPowerThrottling, &st, sizeof st);
+    }
+}
+
+/* spread worker i over processor groups (machines with > 64 logical CPUs;
+ * Windows 10 keeps a process in ONE group unless told otherwise) */
+static void opx_place_in_group(HANDLE th, int i) {
+    opx_active_groups_fn ng = (opx_active_groups_fn)(void (*)(void))opx_k32("GetActiveProcessorGroupCount");
+    opx_active_cpus_fn nc = (opx_active_cpus_fn)(void (*)(void))opx_k32("GetActiveProcessorCount");
+    opx_set_group_aff_fn sa = (opx_set_group_aff_fn)(void (*)(void))opx_k32("SetThreadGroupAffinity");
+    if (!ng || !nc || !sa) return;
+    WORD groups = ng();
+    if (groups < 2) return;
+    DWORD total = nc(0xFFFF), slot = (DWORD)i % (total ? total : 1);
+    for (WORD g = 0; g < groups; g++) {
+        DWORD n = nc(g);
+        if (slot < n) {
+            GROUP_AFFINITY ga;
+            memset(&ga, 0, sizeof ga);
+            ga.Group = g;
+            ga.Mask = (n >= 64) ? ~(KAFFINITY)0 : (((KAFFINITY)1 << n) - 1);
+            sa(th, &ga, NULL);
+            return;
+        }
+        slot -= n;
+    }
+}
+
 void port_spawn_workers(int jobs,
                         void (*fn)(const port_worker_ctx *, void *),
                         void *shared) {
     if (jobs < 1) jobs = 1;
+    EXECUTION_STATE prev_exec = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+    opx_throttle(GetCurrentProcess(), 0, 1);
+    opx_throttle(GetCurrentThread(), 1, 1);
     if (jobs == 1) {
         port_worker_ctx ctx = { 0 };
         fn(&ctx, shared);
-        return;
+    } else {
+        HANDLE *th = (HANDLE *)calloc((size_t)jobs, sizeof(HANDLE));
+        win_job *jb = (win_job *)calloc((size_t)jobs, sizeof(win_job));
+        if (!th || !jb) {
+            free(th); free(jb);
+            port_worker_ctx ctx = { 0 };
+            fn(&ctx, shared);
+        } else {
+            long started = 0;
+            for (int i = 1; i < jobs; i++) {
+                jb[i].fn = fn; jb[i].shared = shared; jb[i].index = i;
+                /* created suspended so throttling + group are set before it runs */
+                HANDLE h = CreateThread(NULL, 0, win_worker, &jb[i], CREATE_SUSPENDED, NULL);
+                if (!h) continue;
+                opx_throttle(h, 1, 1);
+                opx_place_in_group(h, i);
+                ResumeThread(h);
+                th[started++] = h;          /* packed: no NULL holes */
+            }
+            port_worker_ctx root = { 0 };   /* main thread joins the pool */
+            fn(&root, shared);
+            /* WaitForMultipleObjects takes at most 64 handles: the old single
+             * call failed outright above 65 threads and freed `jb` while the
+             * workers still used it */
+            for (long k = 0; k < started; k += MAXIMUM_WAIT_OBJECTS) {
+                long c = started - k < MAXIMUM_WAIT_OBJECTS ? started - k : MAXIMUM_WAIT_OBJECTS;
+                WaitForMultipleObjects((DWORD)c, th + k, TRUE, INFINITE);
+            }
+            for (long k = 0; k < started; k++) CloseHandle(th[k]);
+            free(th); free(jb);
+        }
     }
-    HANDLE *th = (HANDLE *)calloc((size_t)jobs, sizeof(HANDLE));
-    win_job *jb = (win_job *)calloc((size_t)jobs, sizeof(win_job));
-    if (!th || !jb) { free(th); free(jb);
-        port_worker_ctx ctx = { 0 }; fn(&ctx, shared); return; }
-    long started = 0;
-    for (int i = 1; i < jobs; i++) {
-        jb[i].fn = fn; jb[i].shared = shared; jb[i].index = i;
-        th[i] = CreateThread(NULL, 0, win_worker, &jb[i], 0, NULL);
-        if (th[i]) started++; else th[i] = NULL;
-    }
-    port_worker_ctx root = { 0 };          /* main thread joins the pool */
-    fn(&root, shared);
-    WaitForMultipleObjects((DWORD)started, th + 1, TRUE, INFINITE);
-    for (long k = 1; k <= started; k++) CloseHandle(th[k]);
-    free(th); free(jb);
+    opx_throttle(GetCurrentThread(), 1, 0);
+    opx_throttle(GetCurrentProcess(), 0, 0);
+    SetThreadExecutionState(prev_exec ? prev_exec : ES_CONTINUOUS);
 }
 
 double port_now_s(void) {
@@ -335,6 +415,13 @@ double port_now_s(void) {
 }
 
 int port_cpu_count(void) {
+    /* every logical CPU in every processor group (GetSystemInfo reports only
+     * the calling thread's group: at most 64) */
+    opx_active_cpus_fn nc = (opx_active_cpus_fn)(void (*)(void))opx_k32("GetActiveProcessorCount");
+    if (nc) {
+        DWORD all = nc(0xFFFF);              /* ALL_PROCESSOR_GROUPS */
+        if (all > 0) return (int)all;
+    }
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     int n = (int)si.dwNumberOfProcessors;

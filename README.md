@@ -61,22 +61,22 @@ The reverse-engineered format and the proven transform are documented in
 
 ## Install
 
-**Windows:** run `opngx-setup-v2.0.2.exe` from the
+**Windows:** run `opngx-setup-v2.0.3.exe` from the
 [latest release](https://github.com/Shuvam-Banerji-Seal/opngx/releases/latest)
 (engine, studio, ffmpeg and docs, with Start-menu shortcuts), or use the portable
-`opngx-studio-portable-v2.0.2.exe`.
+`opngx-studio-portable-v2.0.3.exe`.
 
 **Python package (Linux x86_64 / Windows amd64, Python ≥ 3.9):** the release
 wheels include the compiled C engine, so there's nothing to build:
 
 ```bash
-pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.2/opngx-2.0.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
-pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.2/opngx-2.0.2-py3-none-win_amd64.whl"   # + studio
+pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.3/opngx-2.0.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.3/opngx-2.0.3-py3-none-win_amd64.whl"   # + studio
 ```
 
 The Linux wheel runs on any distro with glibc ≥ 2.17 (CentOS 7 and newer). On glibc < 2.28,
 pip picks an older NumPy that still ships wheels there. The sdist
-(`opngx-2.0.2.tar.gz`) installs anywhere, with the numpy fallback.
+(`opngx-2.0.3.tar.gz`) installs anywhere, with the numpy fallback.
 
 **From source:**
 
