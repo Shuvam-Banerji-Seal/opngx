@@ -157,8 +157,8 @@ ENGINE
                 machine (auto-detected). More threads = more speed until
                 disk/CPU limits; fewer leaves the machine responsive.
   • level       DEFLATE compression effort 1–12.
-                  1–2 fastest, larger files
-                  6     balanced default, size matches vendor exports
+                  1     default: fastest, files ~1.5% larger than 6
+                  4     smallest of the fast levels
                   9+    smallest files, much slower
 SIDEcars
   • timestamps CSV  Writes one row per frame with its camera-clock tick.
@@ -194,9 +194,9 @@ jobs (worker threads)
 
 level (DEFLATE effort)
   Compression dominates runtime. Practical table on real footage:
-    1–2  fastest (2–5× vs 6), files a few % larger
-    3    throughput sweet spot
-    6    default — file size parity with vendor exports
+    1    default: fastest (3–4× level 6), files ~1.5% larger
+    4    smallest of the fast levels (smaller than 6)
+    6    the pre-2.0.4 default
     9+   smallest files, several times slower
 
 channels = gray
@@ -593,7 +593,7 @@ GPU
         )
         maxcores = max((os.cpu_count() or 4) * 2, 8)
         self.jobs_var = tk.IntVar(value=os.cpu_count() or 4)
-        self.level_var = tk.IntVar(value=6)
+        self.level_var = tk.IntVar(value=1)
         sj = ttk.Scale(
             ef,
             from_=1,
@@ -618,7 +618,7 @@ GPU
         )
         self.jobs_lbl = ttk.Label(ef, text=str(self.jobs_var.get()), width=4)
         self.jobs_lbl.grid(row=1, column=2)
-        self.level_lbl = ttk.Label(ef, text="6", width=4)
+        self.level_lbl = ttk.Label(ef, text="1", width=4)
         self.level_lbl.grid(row=2, column=2)
         st.columnconfigure(4, weight=1)
         T(

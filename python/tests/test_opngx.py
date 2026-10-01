@@ -532,3 +532,64 @@ def test_fallback_png_samples_match_native(fixture_dir, native_available, tmp_pa
         if channels == 6:
             full = 65535 if bit_depth == 16 else 255
             assert (sa.reshape(ha[1], ha[0], 4)[..., 3] == full).all()
+
+
+def test_timestamps_captured_by_workers_full_and_cancelled(fixture_dir, native_available, tmp_path):
+    """v2.0.4: the engine no longer reads every frame header in a serial pass
+    BEFORE extracting (the click -> first-frame delay on Windows); workers
+    record each header as they go. The CSV must equal the headers exactly,
+    in frame order, and after a cancel hold exactly the extracted frames."""
+    if not native_available:
+        pytest.skip("native engine not built")
+    import csv
+
+    binp = fixture_dir / "cam_9.9" / "cam_9.9.bin"
+    m = opngx.probe(binp)
+    want = opngx.read_timestamps(m.bin_path, m, 17, 150)
+    opngx.extract(str(binp), str(tmp_path / "full"), start=17, frames=150, jobs=7,
+                  prefix="cam_", export_timestamps=True)
+    rows = list(csv.reader(open(tmp_path / "full" / "cam__timestamps.csv", encoding="utf-8")))
+    assert rows[0] == ["frame_index", "timestamp_raw", "timestamp_hex"]
+    assert [int(r[0]) for r in rows[1:]] == list(range(17, 167))
+    assert [int(r[1]) for r in rows[1:]] == [int(t) for t in want]
+    assert all(r[2] == f"0x{int(r[1]):016X}" for r in rows[1:])
+
+    # cancel part-way: rows only for frames that exist on disk
+    calls = [0]
+
+    def cancel():
+        calls[0] += 1
+        return calls[0] > 3
+
+    out = tmp_path / "cut"
+    try:
+        opngx.extract(str(binp), str(out), frames=200, jobs=1, prefix="cam_",
+                      export_timestamps=True, should_cancel=cancel)
+    except Exception:  # noqa: BLE001 - a cancelled run may report itself as such
+        pass
+    csvp = out / "cam__timestamps.csv"
+    if csvp.exists():
+        idx = [int(r[0]) for r in list(csv.reader(open(csvp, encoding="utf-8")))[1:]]
+        on_disk = sorted(int(p.stem[4:]) for p in out.glob("cam_*.Png"))
+        assert idx == sorted(idx) and set(idx) <= set(range(200))
+        assert set(on_disk) <= set(idx)
+
+
+def test_default_deflate_level_is_fast_everywhere():
+    """v2.0.4: level 1 is the default (2.8-4.3x faster than 6, files ~1.5 %
+    larger, identical pixels) in the API, the python CLI and the studio."""
+    import inspect
+
+    from opngx import cli
+    from opngx.extractor import Extractor
+
+    assert inspect.signature(Extractor.extract).parameters["level"].default == 1
+    import argparse
+
+    p = argparse.ArgumentParser()
+    cli._add_engine_args(p)          # the flags every extract-like command shares
+    assert p.parse_args(["-o", "out"]).level == 1
+    src = (REPO / "python" / "src" / "opngx" / "ui" / "qt_app.py").read_text(encoding="utf-8")
+    assert "self.level_slider.setValue(1)" in src
+    hdr = (REPO / "src" / "opngx.h").read_text(encoding="utf-8")
+    assert "#define OPNGX_DEFAULT_LEVEL 1" in hdr

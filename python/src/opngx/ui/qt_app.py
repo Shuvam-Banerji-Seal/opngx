@@ -1084,8 +1084,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._scaling.fix(self.jobs_label, "setFixedWidth", 30)
         self.level_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.level_slider.setRange(1, 12)
-        self.level_slider.setValue(6)
-        self.level_label = QtWidgets.QLabel("6")
+        self.level_slider.setValue(1)
+        self.level_label = QtWidgets.QLabel("1")
         self._scaling.fix(self.level_label, "setFixedWidth", 30)
         field_row(
             "jobs",
@@ -1098,8 +1098,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "level",
             self.level_slider,
             "Compression level",
-            "DEFLATE effort: 1–2 fast/large · 3 sweet spot · "
-            "6 default · 9+ smallest/slowest.",
+            "DEFLATE effort. 1 = default and fastest (≈3–4× level 6, files "
+            "only ≈1.5 % larger). 4 = smallest of the fast levels. 7–12 = "
+            "smallest files, much slower. Pixels are identical at every level.",
         )
         tv.addStretch(1)
 

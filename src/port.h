@@ -57,6 +57,12 @@ int port_remove_flat_dir(const char *path);
 /* Monotonic seconds for timing. */
 double port_now_s(void);
 
+/* Ask the OS to start reading [addr, addr+len) of a mapped file now
+ * (asynchronous, best effort, never fails). Windows: PrefetchVirtualMemory
+ * (8+); POSIX: madvise(MADV_WILLNEED). Mapped-file page faults alone give
+ * 4-64 KB reads, one per thread at a time - far below what an SSD can do. */
+void port_prefetch(const void *addr, size_t len);
+
 /* Number of online CPUs. */
 int port_cpu_count(void);
 

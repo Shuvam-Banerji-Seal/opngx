@@ -108,6 +108,23 @@ int port_map_file(const char *path, opngx_mapped_file *out) {
     return 0;
 }
 
+typedef struct { PVOID VirtualAddress; SIZE_T NumberOfBytes; } opx_mem_range;
+typedef BOOL (WINAPI *opx_prefetch_fn)(HANDLE, ULONG_PTR, opx_mem_range *, ULONG);
+
+void port_prefetch(const void *addr, size_t len) {
+    static opx_prefetch_fn fn = NULL;
+    static volatile LONG looked = 0;
+    if (!addr || !len) return;
+    if (!looked) {           /* benign race: every thread finds the same pointer */
+        HMODULE k = GetModuleHandleW(L"kernel32.dll");
+        fn = k ? (opx_prefetch_fn)(void (*)(void))GetProcAddress(k, "PrefetchVirtualMemory") : NULL;
+        InterlockedExchange(&looked, 1);
+    }
+    if (!fn) return;         /* Windows 7: page faults only, as before */
+    opx_mem_range r = { (PVOID)addr, (SIZE_T)len };
+    fn(GetCurrentProcess(), 1, &r, 0);
+}
+
 void port_unmap_file(opngx_mapped_file *m) {
     if (m->map) UnmapViewOfFile(m->map);
     if (m->_handle2) CloseHandle((HANDLE)m->_handle2);
@@ -118,8 +135,11 @@ void port_unmap_file(opngx_mapped_file *m) {
 int port_write_whole_file(const char *path, const void *buf, size_t n) {
     wchar_t *wp = win_wpath(path);
     if (!wp) return -1;
-    HANDLE fh = CreateFileW(wp, GENERIC_WRITE, 0, NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    /* NOT_CONTENT_INDEXED: in an indexed folder (Documents, Desktop, ...)
+     * Windows Search would otherwise index each of the tens of thousands of
+     * frames as they land, competing with the extraction for CPU and disk */
+    HANDLE fh = CreateFileW(wp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, NULL);
     free(wp);
     if (fh == INVALID_HANDLE_VALUE) return -1;
     size_t off = 0;
@@ -485,6 +505,14 @@ int port_map_file(const char *path, opngx_mapped_file *out) {
     out->len = (size_t)st.st_size;
     out->_handle = (void *)(intptr_t)fd;
     return 0;
+}
+
+void port_prefetch(const void *addr, size_t len) {
+    if (!addr || !len) return;
+    static long pg = 0;
+    if (!pg) { pg = sysconf(_SC_PAGESIZE); if (pg <= 0) pg = 4096; }
+    uintptr_t a = (uintptr_t)addr & ~(uintptr_t)(pg - 1);   /* madvise wants page alignment */
+    madvise((void *)a, len + ((uintptr_t)addr - a), MADV_WILLNEED);
 }
 
 void port_unmap_file(opngx_mapped_file *m) {

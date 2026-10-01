@@ -112,7 +112,7 @@ class Extractor:
         jpeg_quality: int = 90,
         backend: str = "auto",  # auto | libdeflate | zlib
         jobs: int = 0,
-        level: int = 6,
+        level: int = 1,
         prefix: str = "brow_",
         ext: str = ".Png",
         start: int = 0,

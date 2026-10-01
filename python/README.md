@@ -14,8 +14,8 @@ include the compiled engine: manylinux2014 x86_64 (any distro with glibc ≥ 2.1
 and Windows amd64. They work on Python 3.9 and newer.
 
 ```bash
-pip install opngx-2.0.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl          # engine + CLI + library
-pip install "opngx-2.0.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl[qt]"    # + the studio (PySide6, ffmpeg)
+pip install opngx-2.0.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl          # engine + CLI + library
+pip install "opngx-2.0.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl[qt]"    # + the studio (PySide6, ffmpeg)
 ```
 
 Without a platform wheel, installing from the sdist still works: extraction and

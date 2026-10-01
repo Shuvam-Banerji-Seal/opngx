@@ -13,6 +13,42 @@ All numbers measured on the reference machine:
 Workload: `brow_1_2.bin` — 3.84 GB, 50 000 frames, 256×300, vendor-equivalent
 RGBA output unless noted. "fps" = frames/s; "in" = input bytes consumed.
 
+## v2.0.4: default level 1 and no start-up pass
+
+The default DEFLATE level is now **1**: pixels are identical at every level,
+and on this footage level 6 bought almost nothing. Measured with 5,000 frames
+per recording, 16 jobs, libdeflate, RGBA:
+
+| recording | L1 fps / KiB per frame | L4 | L6 (old default) |
+|---|---|---|---|
+| brow_1.2 | **7379** / 55.6 | 3018 / 54.3 | 1730 / 54.7 |
+| brow_1_4 | **5366** / 55.5 | 3002 / 54.3 | 1743 / 54.6 |
+| brow_1_6 | **6317** / 55.6 | 3006 / 54.3 | 1723 / 54.6 |
+| brow_1_8 | **4958** / 55.2 | 3029 / 53.7 | 1728 / 54.3 |
+| brow_2_0 | **6312** / 55.2 | 3066 / 53.8 | 1752 / 54.2 |
+
+Level 1 is 2.8–4.3× faster for files 1.0–1.7% larger. Level 4 is smaller than 6
+and still about 1.7× faster.
+
+Full recording (`brow_1_6`, 50,000 frames, timestamps + metadata on, as the
+studio does), **cold** file cache:
+
+| engine | first PNG after | total | fps |
+|---|---:|---:|---:|
+| v2.0.0, level 6 | 1.337 s | 31.1 s | 1610 |
+| v2.0.4, level 6 | **0.024 s** | 29.8 s | 1675 |
+| v2.0.4, default (level 1) | **0.015 s** | **9.7 s** | **5179** |
+
+The start-up delay was the timestamp CSV. It was built by a single-threaded
+pass over every frame header *before* extraction, which on Windows meant
+thousands of scattered disk reads. The workers now record each header while
+they extract it, and they ask the OS to read ahead one round of chunks
+(`PrefetchVirtualMemory` on Windows, `MADV_WILLNEED` on POSIX).
+
+At level 1 the 8 physical cores already reach about 95% of the 16-thread rate
+(9.6 s vs 9.1 s). CPU time is DEFLATE: about 2.3 ms per RGBA frame, 1.0 ms
+per gray frame. File writes add 7 s of kernel time to 114 s of user time.
+
 ## Scaling with threads (RGBA, level 6, libdeflate)
 
 | jobs | fps | MiB/s in |
@@ -37,8 +73,10 @@ hash-table working sets share L3, and SMT adds ~25–35% on top.
 | libdeflate | 9 | ~266 | smallest files (~49 KB/frame) |
 | zlib | 6 | ~560 | 2.4× slower than libdeflate at same level |
 
-**Rule of thumb:** `--level 6` reproduces vendor-like sizes; drop to
-`--level 2` when speed matters more than a few % of file size.
+**Rule of thumb (v2.0.4):** the default `--level 1` is the fastest, with files
+about 1.5% larger than level 6. `--level 4` gives the smallest files of the fast
+levels, and 7–12 only pay off when disk space matters more than hours of CPU.
+(The table above is pre-v2.0.4 history; see the v2.0.4 section for current numbers.)
 
 ## Grayscale fast path (`--channels gray`, level 6, 16 jobs, 4000 frames)
 

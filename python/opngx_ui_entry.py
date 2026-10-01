@@ -432,6 +432,29 @@ def _proc_cpu_seconds(handle=None) -> float:
     return t.user + t.system
 
 
+def _first_file_watch(out_dir, t0):
+    """Background poll: seconds from t0 until the first frame file exists."""
+    import os
+    import threading
+    import time
+
+    box = {"t": None}
+
+    def run():
+        while box["t"] is None and time.perf_counter() - t0 < 900:
+            try:
+                for _r, _d, fs in os.walk(out_dir):
+                    if any(f.lower().endswith((".png", ".jpg")) for f in fs):
+                        box["t"] = time.perf_counter() - t0
+                        return
+            except OSError:
+                pass
+            time.sleep(0.002)
+
+    threading.Thread(target=run, daemon=True).start()
+    return box
+
+
 def _selftest_speed() -> int:
     """Throughput INSIDE the packaged app, the three ways a user extracts:
     the bundled engine CLI, the in-process API (ctypes -> libopngx) and the
@@ -494,21 +517,23 @@ def _selftest_speed() -> int:
         assert eng, "bundled opngx-engine CLI not found"
         out = d / "o_cli"
         t0 = time.perf_counter()
+        first = _first_file_watch(out, t0)
         p = subprocess.Popen([eng, "extract", "--bin", binp, "--footage", str(rec / "speed.footage"),
                               "--out", str(out)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         p.wait()
         dt = time.perf_counter() - t0
         cpu = _proc_cpu_seconds(getattr(p, "_handle", None) if os.name == "nt" else 0)
         assert p.returncode == 0, f"engine exit {p.returncode}"
-        res["cli"] = (n / dt, 100 * cpu / dt)
+        res["cli"] = (n / dt, 100 * cpu / dt, first["t"])
         shutil.rmtree(out, ignore_errors=True)
 
         # 2. in-process API
         out = d / "o_api"
         c0, t0 = _proc_cpu_seconds(), time.perf_counter()
-        st = opngx.extract(binp, str(out))
+        first = _first_file_watch(out, t0)
+        st = opngx.extract(binp, str(out), export_timestamps=True, export_metadata=True)
         dt = time.perf_counter() - t0
-        res["api"] = (n / dt, 100 * (_proc_cpu_seconds() - c0) / dt)
+        res["api"] = (n / dt, 100 * (_proc_cpu_seconds() - c0) / dt, first["t"])
         assert st.frames_written == n, st
         print(f"api backend={st.backend}")
         shutil.rmtree(out, ignore_errors=True)
@@ -530,6 +555,7 @@ def _selftest_speed() -> int:
         app.processEvents()
         jobs = win.jobs_slider.value()
         c0, t0 = _proc_cpu_seconds(), time.perf_counter()
+        first = _first_file_watch(out, t0)
         win._start()
         while True:
             app.processEvents()
@@ -539,19 +565,26 @@ def _selftest_speed() -> int:
             if time.perf_counter() - t0 > 900:
                 raise RuntimeError("studio extraction did not finish in 15 min")
         dt = time.perf_counter() - t0
-        res["studio"] = (n / dt, 100 * (_proc_cpu_seconds() - c0) / dt)
+        res["studio"] = (n / dt, 100 * (_proc_cpu_seconds() - c0) / dt, first["t"])
         files = sum(len(fs) for _, _, fs in os.walk(out))
         assert files >= n, f"studio wrote {files} files"
         print(f"studio jobs slider={jobs}")
         win.close()
         shutil.rmtree(d, ignore_errors=True)
 
-        for k, (fps, cpu) in res.items():
-            print(f"  {k:7} {fps:8.0f} frames/s   CPU {cpu:5.0f}% of {100 * cores}%")
+        for k, (fps, cpu, first_s) in res.items():
+            fs = f"{first_s:.3f}s" if first_s is not None else "n/a"
+            print(f"  {k:7} {fps:8.0f} frames/s   CPU {cpu:5.0f}% of {100 * cores}%   first frame after {fs}")
         ref = res["cli"][0]
         bad = [k for k in ("api", "studio") if res[k][0] < 0.6 * ref]
         if bad:
             print(f"SELFTEST-SPEED FAIL: {bad} under 60% of the CLI's throughput")
+            return 1
+        # v2.0.4: the click -> first-frame delay (a serial timestamp pass
+        # used to run first). The studio exports timestamps by default.
+        slow = [k for k, v in res.items() if v[2] is None or v[2] > 2.0]
+        if slow:
+            print(f"SELFTEST-SPEED FAIL: {slow} took over 2 s to write the first frame")
             return 1
         print(f"SELFTEST-SPEED PASS (studio {res['studio'][0]:.0f} fps = "
               f"{100 * res['studio'][0] / ref:.0f}% of the bundled CLI)")

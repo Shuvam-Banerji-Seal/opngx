@@ -60,7 +60,7 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "-j", "--jobs", type=int, default=0, help="worker threads (0 = all cores)"
     )
-    p.add_argument("-l", "--level", type=int, default=6, help="deflate level")
+    p.add_argument("-l", "--level", type=int, default=1, help="deflate level 1-12 (1 = fastest, files ~1.5%% larger than 6)")
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--frames", type=int, default=None)
     p.add_argument(

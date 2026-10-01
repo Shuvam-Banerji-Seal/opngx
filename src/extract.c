@@ -54,6 +54,14 @@ struct opngx_job {
     _Atomic long long last_ms;      /* progress throttle (monotonic ms)   */
     _Atomic long long cb_last_ms;   /* push-callback throttle             */
 
+    /* v2.0.4: frame-header timestamps captured by the workers while they
+     * extract (NULL unless export_timestamps). The CSV used to be built by
+     * a single-threaded pass over all N headers BEFORE extraction started:
+     * on Windows (little read-ahead for mapped files) that was 50 000
+     * scattered disk reads between clicking Extract and the first frame. */
+    uint64_t *ts_buf;
+    uint8_t  *ts_have;
+
     opngx_stats stats;
     char err[512];
 };
@@ -209,24 +217,32 @@ fail:
     if (err && err_cap) { strncpy(err, j->err, err_cap - 1); err[err_cap-1] = '\0'; }
     if (j->mf.map || j->mf._handle) port_unmap_file(&j->mf);
     free(j->bin_path); free(j->out_dir); free(j->prefix); free(j->ext); free(j->footage_path);
+    free(j->ts_buf); free(j->ts_have);
     free(j);
     return NULL;
 }
 
 /* ---- timestamps pre-pass: read u64 LE headers sequentially ---- */
+/* Rows for every frame the workers captured (all of them on success; the
+ * extracted ones after a cancel or failure), in frame order. */
 static int write_timestamps(opngx_job *j) {
     char path[1200];
     snprintf(path, sizeof path, "%s/%s_timestamps.csv", j->out_dir, j->prefix);
     FILE *fp = port_fopen_u8(path, "w");
     if (!fp) { snprintf(j->err, sizeof j->err, "open %.380s: %s", path, strerror(errno)); return -1; }
+    char *buf = malloc(1 << 16);           /* per call: jobs may run concurrently */
+    if (buf) setvbuf(fp, buf, _IOFBF, 1 << 16);
     fprintf(fp, "frame_index,timestamp_raw,timestamp_hex\n");
     for (int64_t i = 0; i < j->frames_total; i++) {
-        uint64_t ts = 0;
-        memcpy(&ts, j->map + (size_t)(j->start_index + i) * (size_t)j->stride, 8); /* LE on LE hosts */
+        if (!j->ts_have[i]) continue;
+        uint64_t ts = j->ts_buf[i];
         fprintf(fp, "%lld,%llu,0x%016llX\n", (long long)(j->start_index + i),
                 (unsigned long long)ts, (unsigned long long)ts);
     }
-    fclose(fp);
+    int bad = ferror(fp);
+    bad |= fclose(fp);
+    free(buf);                             /* after fclose: the stream used it */
+    if (bad) { snprintf(j->err, sizeof j->err, "write %.380s failed", path); return -1; }
     return 0;
 }
 
@@ -284,6 +300,7 @@ typedef struct {
     _Atomic int64_t cursor;   /* dynamic chunk claimer */
     _Atomic int     hard;
     long long       start_ms;
+    int64_t         ahead;    /* read-ahead distance in frames (one round of chunks) */
 } extract_shared_t;
 
 static void extract_worker(const port_worker_ctx *w, void *ud) {
@@ -330,6 +347,14 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
                                                   memory_order_relaxed);
             if (i >= N) break;
             int64_t end = i + G < N ? i + G : N;
+            /* read-ahead: start the OS reading the chunk that will be claimed
+             * one round from now, so storage sees big, deep requests instead
+             * of one 4 KB page fault per thread at a time */
+            if (i + sh->ahead < N) {
+                int64_t pa = i + sh->ahead, pe = pa + G < N ? pa + G : N;
+                port_prefetch(j->map + (size_t)(base + pa) * (size_t)stride,
+                              (size_t)(pe - pa) * (size_t)stride);
+            }
             for (; i < end; i++) {
                 if (atomic_load_explicit(&j->cancel, memory_order_relaxed))
                     continue;
@@ -338,6 +363,10 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
 
                 const uint8_t *frame = j->map +
                     (size_t)(base + i) * (size_t)stride + 8;
+                if (j->ts_buf) {      /* the header is already in hand: free */
+                    memcpy(&j->ts_buf[i], frame - 8, 8);   /* LE on LE hosts */
+                    j->ts_have[i] = 1;
+                }
 
                 if (cropped) {
                     /* gather the crop window row-major; no resampling, so
@@ -451,8 +480,17 @@ int opngx_job_run(opngx_job *j) {
     if (!j) return -1;
     if (port_mkdir_p(j->out_dir)) { snprintf(j->err, sizeof j->err, "mkdir %.300s failed", j->out_dir); return -1; }
 
-    /* optional sidecars first (cheap) */
-    if (j->p.export_timestamps && write_timestamps(j)) return -1;
+    /* timestamps: captured by the workers, written after the pool */
+    free(j->ts_buf); free(j->ts_have);
+    j->ts_buf = NULL; j->ts_have = NULL;
+    if (j->p.export_timestamps && j->frames_total > 0) {
+        j->ts_buf = malloc((size_t)j->frames_total * sizeof *j->ts_buf);
+        j->ts_have = calloc((size_t)j->frames_total, 1);
+        if (!j->ts_buf || !j->ts_have) {
+            snprintf(j->err, sizeof j->err, "out of memory for %lld timestamps", (long long)j->frames_total);
+            return -1;
+        }
+    }
 
 
     /* geometry sanity for mmap reads */
@@ -476,6 +514,14 @@ int opngx_job_run(opngx_job *j) {
     sh.cursor = 0;
     sh.hard = 0;
     sh.start_ms = (long long)(t0 * 1000.0);
+    sh.ahead = (int64_t)jobs_effective * 32;   /* G chunks, one per worker */
+    /* the first round has nobody "behind" it to prefetch: do it here */
+    {
+        int64_t first = sh.ahead < N ? sh.ahead : N;
+        if (first > 0)
+            port_prefetch(j->map + (size_t)j->start_index * (size_t)stride,
+                          (size_t)first * (size_t)stride);
+    }
 
     port_spawn_workers(jobs_effective, extract_worker, &sh);
     if (j->p.verbose)
@@ -483,6 +529,8 @@ int opngx_job_run(opngx_job *j) {
 
     int hard_fail = atomic_load(&sh.hard);
     double dt = port_now_s() - t0;
+    /* written even after a cancel / failure: rows for what was extracted */
+    int ts_fail = j->ts_buf ? write_timestamps(j) : 0;
     snprintf(j->stats.backend_used, sizeof j->stats.backend_used, "%s",
              atomic_load(&j->backend_seen) == C_BACKEND_ZLIB ? "zlib" :
              "libdeflate");
@@ -517,6 +565,7 @@ int opngx_job_run(opngx_job *j) {
                  j->out_dir ? j->out_dir : "");
         return -1;
     }
+    if (ts_fail) return -1;
     if (atomic_load(&j->cancel)) return 2; /* cancelled */
 
     /* metadata last (needs backend name) */
@@ -531,6 +580,7 @@ void opngx_job_free(opngx_job *j) {
     if (!j) return;
     if (j->mf.map || j->mf._handle) port_unmap_file(&j->mf);
     free(j->bin_path); free(j->out_dir); free(j->prefix); free(j->ext); free(j->footage_path);
+    free(j->ts_buf); free(j->ts_have);
     free(j);
 }
 

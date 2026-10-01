@@ -59,7 +59,7 @@ static void usage(void) {
 "      --prefix S         output filename prefix       (default: brow_)\n"
 "      --ext S            output extension             (default: .Png)\n"
 "  -j, --jobs N           worker threads               (default: all cores)\n"
-"  -l, --level N          deflate level                (default: 6)\n"
+"  -l, --level N          deflate level 1-12           (default: 1)\n"
 "      --backend B        auto | libdeflate | zlib\n"
 "      --width N --height N  override geometry (else from footage)\n"
 "      --start N          first frame index            (default 0)\n"
@@ -131,7 +131,7 @@ static void print_stats(const opngx_stats *st) {
 static int cmd_extract(int argc, char **argv) {
     opngx_params p; memset(&p, 0, sizeof p);
     p.num_frames = -1; p.frame_stride = -1; p.mode = OPNGX_MODE_REFERENCE;
-    p.jobs = opngx_cpu_count(); p.level = 6; p.backend = OPNGX_BACKEND_AUTO;
+    p.jobs = opngx_cpu_count(); p.level = OPNGX_DEFAULT_LEVEL; p.backend = OPNGX_BACKEND_AUTO;
     p.bit_depth = 8; p.gamma = 1.0;
     p.channels = 6;
     /* FIX-1: in reference mode each of B/C/G defaults to the sidecar value;
@@ -256,7 +256,7 @@ static int cmd_extract(int argc, char **argv) {
 static int cmd_batch(int argc, char **argv) {
     const char *indir = NULL, *outroot = NULL, *prefix = NULL;
     const char *ext = NULL;
-    int jobs = opngx_cpu_count(), level = 6;
+    int jobs = opngx_cpu_count(), level = OPNGX_DEFAULT_LEVEL;
     int timestamps = 0, metadata = 0, verbose = 0;
     int channels = 6, jpeg_quality = 90;
     int ext_given = 0;
@@ -645,7 +645,7 @@ static int cmd_info(int argc, char **argv) {
 static int cmd_bench(int argc, char **argv) {
     const char *bin = NULL, *backend_s = "auto";
     int64_t frames = 2000;
-    int jobs = opngx_cpu_count(), level = 6, repeat = 1;
+    int jobs = opngx_cpu_count(), level = OPNGX_DEFAULT_LEVEL, repeat = 1;
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--bin")) bin = argv[++i];
