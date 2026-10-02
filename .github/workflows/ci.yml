@@ -314,6 +314,9 @@ jobs:
           foreach ($f in "opngx-engine.exe", "opngx-studio.exe", "uninstall.exe") {
             if (-not (Test-Path (Join-Path $inst $f))) { throw "missing $f" }
           }
+          $docs = @(Get-ChildItem (Join-Path $inst "docs") -Filter *.md -ErrorAction SilentlyContinue)
+          "installed docs: $($docs.Count) ($($docs.Name -join ', '))"
+          if ($docs.Count -lt 1) { throw "the installer unpacked no docs" }
           $path = [Environment]::GetEnvironmentVariable("Path", "User")
           if (-not $path.StartsWith($sentinel)) { throw "user PATH was damaged: $path" }
           if (-not (($path -split ";") -contains $inst)) { throw "install dir not on PATH: $path" }
