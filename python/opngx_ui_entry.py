@@ -655,10 +655,14 @@ def _selftest_speed() -> int:
             fs = f"{first_s:.3f}s" if first_s is not None else "n/a"
             print(f"  {k:7} {fps:8.0f} frames/s   CPU {cpu:5.0f}% of {100 * cores}%   first frame after {fs}")
         shutil.rmtree(d, ignore_errors=True)
-        ref = max(res["cli"][0], res["cli#2"][0])
-        bad = [k for k in ("api", "studio") if res[k][0] < 0.6 * ref]
+        # the gate catches the Python/Qt layer starving the engine (a several-
+        # fold slowdown), not shared-runner noise: the CLI alone varied by
+        # 70 % between two runs on a CI machine, so compare with its SLOWER
+        # run and allow half of it
+        ref = min(res["cli"][0], res["cli#2"][0])
+        bad = [k for k in ("api", "studio") if res[k][0] < 0.5 * ref]
         if bad:
-            print(f"SELFTEST-SPEED FAIL: {bad} under 60% of the CLI's throughput")
+            print(f"SELFTEST-SPEED FAIL: {bad} under 50% of the CLI's throughput")
             return 1
         # v2.0.4: the click -> first-frame delay (a serial timestamp pass
         # used to run first). The studio exports timestamps by default.
