@@ -1,48 +1,25 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">opngx — pixel-exact high-speed footage extractor</title>
-  <desc id="desc">Rounded square app icon: pristine-black with 8-blade white shutter and coffee-green center, opngx wordmark below</desc>
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0d0f0d"/>
-      <stop offset="100%" stop-color="#050505"/>
-    </linearGradient>
-    <!-- subtle outer glow for dark mode depth -->
-    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000" flood-opacity="0.55"/>
-    </filter>
-  </defs>
-
-  <!-- Outer rounded square — the app shape -->
-  <rect x="12" y="12" width="1000" height="1000" rx="228" ry="228" fill="url(#bg)" stroke="#1f261f" stroke-width="14" filter="url(#glow)"/>
-
-  <!-- Inner housing circle for shutter -->
-  <circle cx="512" cy="420" r="236" fill="#070807" stroke="#1f261f" stroke-width="3" opacity="0.98"/>
-
-  <!-- Shutter blades -->
-  <g id="shutter">
-    <path d="M 491.34 370.11 L 435.46 235.22 L 588.54 235.22 L 532.66 370.11 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
-    <path d="M 532.66 370.11 L 588.54 235.22 L 696.78 343.46 L 561.89 399.34 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
-    <path d="M 561.89 399.34 L 696.78 343.46 L 696.78 496.54 L 561.89 440.66 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
-    <path d="M 561.89 440.66 L 696.78 496.54 L 588.54 604.78 L 532.66 469.89 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
-    <path d="M 532.66 469.89 L 588.54 604.78 L 435.46 604.78 L 491.34 469.89 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
-    <path d="M 491.34 469.89 L 435.46 604.78 L 327.22 496.54 L 462.11 440.66 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
-    <path d="M 462.11 440.66 L 327.22 496.54 L 327.22 343.46 L 462.11 399.34 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
-    <path d="M 462.11 399.34 L 327.22 343.46 L 435.46 235.22 L 491.34 370.11 Z" fill="white" stroke="#050505" stroke-width="3" stroke-linejoin="round"/>
-    <circle cx="512" cy="420" r="54" fill="#4d8248" stroke="white" stroke-width="7"/>
-    <circle cx="512" cy="420" r="20.5" fill="white" opacity="0.92"/>
-  </g>
-
-  <!-- Wordmark -->
-  <text x="512" y="760" text-anchor="middle" font-family="'Inter','Segoe UI','Ubuntu','DejaVu Sans',sans-serif" font-size="176" font-weight="800" letter-spacing="-7" fill="white">opn<tspan fill="#7fb069">gx</tspan></text>
-
-  <!-- Tagline -->
-  <text x="512" y="822" text-anchor="middle" font-family="'Inter','Segoe UI',sans-serif" font-size="36" font-weight="600" letter-spacing="13" fill="#7d8a7d">PIXEL — EXACT</text>
-
-  <!-- Speed accent — 3 short ticks at top-right of housing -->
-  <g opacity="0.95">
-    <rect x="742" y="248" width="48" height="8" rx="4" fill="#7fb069"/>
-    <rect x="742" y="268" width="32" height="8" rx="4" fill="#7fb069" opacity="0.72"/>
-    <rect x="742" y="288" width="20" height="8" rx="4" fill="#7fb069" opacity="0.45"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="opngx logo">
+<title>opngx</title>
+<defs>
+<linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#121a12"/><stop offset="1" stop-color="#050705"/></linearGradient>
+<linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a6e08f"/><stop offset="1" stop-color="#2f6b33"/></linearGradient>
+<radialGradient id="glow"><stop offset="0" stop-color="#a6e08f" stop-opacity="0.55"/><stop offset="1" stop-color="#a6e08f" stop-opacity="0"/></radialGradient>
+</defs>
+<rect x="14.0" y="14.0" width="996.0" height="996.0" rx="230.0" fill="url(#tile)" stroke="#24331f" stroke-width="10.0"/>
+<circle cx="512.0" cy="512.0" r="352.0" fill="none" stroke="url(#ring)" stroke-width="20.0"/>
+<polygon points="654.7,465.6 623.5,612.4 567.2,825.2 810.8,620.8" fill="#4d9a4a" stroke="#050805" stroke-width="6.0" stroke-linejoin="round"/>
+<polygon points="623.5,612.4 480.8,658.7 268.4,716.4 567.2,825.2" fill="#2f6b33" stroke="#050805" stroke-width="6.0" stroke-linejoin="round"/>
+<polygon points="480.8,658.7 369.3,558.4 213.2,403.2 268.4,716.4" fill="#4d9a4a" stroke="#050805" stroke-width="6.0" stroke-linejoin="round"/>
+<polygon points="369.3,558.4 400.5,411.6 456.8,198.8 213.2,403.2" fill="#2f6b33" stroke="#050805" stroke-width="6.0" stroke-linejoin="round"/>
+<polygon points="400.5,411.6 543.2,365.3 755.6,307.6 456.8,198.8" fill="#4d9a4a" stroke="#050805" stroke-width="6.0" stroke-linejoin="round"/>
+<polygon points="543.2,365.3 654.7,465.6 810.8,620.8 755.6,307.6" fill="#2f6b33" stroke="#050805" stroke-width="6.0" stroke-linejoin="round"/>
+<circle cx="512.0" cy="512.0" r="139.5" fill="#050805"/>
+<circle cx="512.0" cy="512.0" r="93.0" fill="none" stroke="#6fbf5f" stroke-opacity="0.55" stroke-width="5.0" stroke-dasharray="6.0 14.0"/>
+<circle cx="539.2" cy="423.1" r="26.0" fill="#d8ffcb" fill-opacity="0.45"/>
+<circle cx="518.5" cy="419.2" r="22.0" fill="#d8ffcb" fill-opacity="0.35"/>
+<circle cx="497.5" cy="420.1" r="18.0" fill="#d8ffcb" fill-opacity="0.25"/>
+<circle cx="477.2" cy="425.8" r="14.0" fill="#d8ffcb" fill-opacity="0.15"/>
+<circle cx="458.7" cy="435.8" r="10.0" fill="#d8ffcb" fill-opacity="0.08"/>
+<circle cx="558.5" cy="431.5" r="74.8" fill="url(#glow)"/>
+<circle cx="558.5" cy="431.5" r="34.0" fill="#ffffff"/>
 </svg>

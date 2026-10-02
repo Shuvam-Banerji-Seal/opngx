@@ -44,6 +44,8 @@ try:
     from PySide6 import QtCore, QtGui, QtWidgets
     from PySide6.QtCore import Qt, Signal
 
+    from opngx.ui import icons as _icons
+
     _QT = True
 except Exception:  # pragma: no cover
     _QT = False
@@ -393,7 +395,8 @@ else:
             bsave = QtWidgets.QPushButton("Save…")
             bsave.setObjectName("compact")
             bsave.clicked.connect(self._save_preset)
-            bdel = QtWidgets.QPushButton("✕")
+            bdel = QtWidgets.QPushButton("")
+            _icons.set_icon(bdel, "x", "text")
             bdel.setObjectName("icon")
             bdel.setToolTip("delete this preset")
             bdel.clicked.connect(self._del_preset)
@@ -1041,10 +1044,12 @@ else:
             tb.setObjectName("batchtoolbar")
             tb.setMovable(False)
             self.addToolBar(Qt.TopToolBarArea, tb)
-            self.go = QtWidgets.QPushButton("▶  Extract all")
+            self.go = QtWidgets.QPushButton("Extract all")
+            _icons.set_icon(self.go, "play", "on_accent")
             self.go.setObjectName("accent")
             self.go.clicked.connect(self.start)
-            self.stop = QtWidgets.QPushButton("■  Cancel")
+            self.stop = QtWidgets.QPushButton("Cancel")
+            _icons.set_icon(self.stop, "stop", "on_danger")
             self.stop.setObjectName("danger")
             self.stop.setEnabled(False)
             self.stop.clicked.connect(self.cancel)
@@ -1289,6 +1294,16 @@ else:
                 self._compare_timer.start()
 
         def closeEvent(self, ev) -> None:  # noqa: N802
+            # v2.1: closing used to only hide the window while its worker kept
+            # extracting unseen (and a second batch could start beside it)
+            if getattr(self, "_running", False):
+                r = QtWidgets.QMessageBox.question(
+                    self, "opngx", "This batch is still running.\n\nStop it and close the window?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+                if r != QtWidgets.QMessageBox.Yes:
+                    ev.ignore()
+                    return
+                self.cancel()
             for p_ in self.panes():
                 p_.leave_fullscreen()
             try:
@@ -1716,6 +1731,7 @@ else:
                         channels=s["channels"],
                         fmt=s["fmt"],
                         jpeg_quality=s.get("jpeg_quality", 90),
+                        webp_quality=s.get("webp_quality", 100),
                         crop=it.crop,
                         jobs=s["jobs"],
                         level=s["level"],

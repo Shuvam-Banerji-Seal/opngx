@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+import numpy as np
+
 from ._engine import (
     OpngxParams,
     OpngxStats,
@@ -108,8 +110,9 @@ class Extractor:
         gamma: Optional[float] = None,
         bit_depth: int = 8,
         channels: int = 6,  # 6 RGBA or 0 grayscale fast path
-        fmt: str = "png",  # png | bmp | tif | jpg
+        fmt: str = "png",  # see opngx.formats.FORMATS: png tif pgm bmp jpg webp jp2 npy
         jpeg_quality: int = 90,
+        webp_quality: int = 100,  # 100 = lossless WebP (default); below = lossy
         backend: str = "auto",  # auto | libdeflate | zlib
         jobs: int = 0,
         level: int = 1,
@@ -152,6 +155,17 @@ class Extractor:
             brightness = self.meta.brightness if brightness is None else brightness
             contrast = self.meta.contrast if contrast is None else contrast
             gamma = self.meta.gamma if gamma is None else gamma
+
+        from . import formats as _formats
+
+        finfo = _formats.get(fmt)  # ValueError for an unknown format
+        fmt = finfo.key
+        if finfo.engine == "python":
+            return self._run_python_format(
+                finfo, out_dir, mode, brightness, contrast, gamma, bit_depth,
+                webp_quality, jobs, prefix, ext, start, frames,
+                export_timestamps, export_metadata, progress, should_cancel, crop,
+            )
 
         lib = load_library()
         if lib is not None:
@@ -257,12 +271,12 @@ class Extractor:
         p.bit_depth = bit_depth
         p.channels = channels
         p.crop_x, p.crop_y, p.crop_w, p.crop_h = crop
-        p.format = {"png": 0, "bmp": 1, "tif": 2, "tiff": 2, "jpg": 3, "jpeg": 3}.get(
-            str(fmt).lower(), 0
-        )
+        from . import formats as _formats
+
+        p.format = _formats.native_code(fmt)
         p.jpeg_quality = jpeg_quality
-        if p.format != 0:
-            p.bit_depth = min(p.bit_depth, 8)  # 16-bit container is PNG-only
+        if 16 not in _formats.get(fmt).bit_depths:
+            p.bit_depth = min(p.bit_depth, 8)  # BMP / JPEG are 8-bit containers
         p.out_dir = str(out_dir).encode()
         p.prefix = prefix.encode()
         # b"" (not "") — a str here raised TypeError for every non-PNG
@@ -360,6 +374,56 @@ class Extractor:
             lib.opngx_job_free(job)
 
     # ------------------------------------------------------------------ #
+    def _run_python_format(
+        self, finfo, out_dir, mode, brightness, contrast, gamma, bit_depth,
+        quality, jobs, prefix, ext, start, frames, export_timestamps,
+        export_metadata, progress, should_cancel, crop,
+    ) -> ExtractStats:
+        """WebP / JPEG 2000 / NumPy stack: same pixels, Pillow or numpy
+        writes them (v2.1)."""
+        from . import formats as _formats
+        from .quality import build_lut
+
+        lut = np.asarray(build_lut(brightness, contrast, gamma), dtype=np.uint8)
+        n = frames if frames is not None else self.meta.capacity_frames - start
+        n = max(0, min(n, self.meta.capacity_frames - start))
+        quality = max(1, min(100, int(quality)))
+        res = _formats.extract_python_format(
+            self.meta.bin_path, str(out_dir), fmt=finfo.key,
+            width=self.meta.width, height=self.meta.height,
+            stride=self.meta.frame_stride, start=start, count=n, lut8=lut,
+            bit_depth=bit_depth if 16 in finfo.bit_depths else 8,
+            quality=quality if finfo.key == "webp" else 100, crop=crop,
+            prefix=prefix, ext=None if ext in ("", ".Png") else ext, jobs=jobs,
+            progress=progress, should_cancel=should_cancel,
+        )
+        written = res["frames_written"]
+        dt = res["seconds"]
+        if export_timestamps:
+            ts = read_timestamps(self.meta.bin_path, self.meta, start, written)
+            import csv
+
+            with open(Path(out_dir) / f"{prefix}_timestamps.csv", "w", newline="", encoding="utf-8") as f:
+                wcsv = csv.writer(f)
+                wcsv.writerow(["frame_index", "timestamp_raw", "timestamp_hex"])
+                for i, t_ in enumerate(ts):
+                    wcsv.writerow([start + i, int(t_), f"0x{int(t_):016X}"])
+        if export_metadata:
+            meta = dict(self.meta.to_dict())
+            meta.update(engine=f"python ({finfo.label})", format=finfo.key, lossless=finfo.lossless,
+                        frames_extracted=written, output_width=crop[2], output_height=crop[3],
+                        crop={"x": crop[0], "y": crop[1], "w": crop[2], "h": crop[3]},
+                        transform={"brightness": brightness, "contrast": contrast, "gamma": gamma})
+            with open(Path(out_dir) / "metadata.json", "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+        inb = written * (8 + self.meta.pixels_per_frame)
+        return ExtractStats(
+            frames_written=written, frames_total=n, bytes_written=inb, seconds=dt,
+            mib_per_s_in=inb / 1048576 / max(dt, 1e-9), frames_per_s=written / max(dt, 1e-9),
+            backend=f"python-{finfo.key}", cancelled=bool(res["cancelled"]),
+        )
+
+    # ------------------------------------------------------------------ #
     def _run_fallback(
         self,
         out_dir,
@@ -442,7 +506,10 @@ class Extractor:
             ts = read_timestamps(self.meta.bin_path, self.meta, start, written)
             import csv
 
-            with open(Path(out_dir) / f"{prefix}timestamps.csv", "w", newline="", encoding="utf-8") as f:
+            # same name as the engine writes ("<prefix>_timestamps.csv"); the
+            # fallback used to drop the underscore, so the file name depended
+            # on which path ran
+            with open(Path(out_dir) / f"{prefix}_timestamps.csv", "w", newline="", encoding="utf-8") as f:
                 wcsv = csv.writer(f)
                 wcsv.writerow(["frame_index", "timestamp_raw", "timestamp_hex"])
                 for i, t in enumerate(ts):

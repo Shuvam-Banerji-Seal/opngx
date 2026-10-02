@@ -52,3 +52,20 @@ def percentile(h: np.ndarray, q: float) -> np.ndarray:
 def fraction_at_or_above(h: np.ndarray, level: int) -> np.ndarray:
     level = int(np.clip(level, 0, 256))
     return h[:, level:].sum(1) / h.sum(1)
+
+
+def otsu(h: np.ndarray) -> int:
+    """Otsu's threshold of a 256-bin histogram: the level that best separates
+    two classes (maximum between-class variance). Pixels > level are 'on'."""
+    h = np.asarray(h, np.float64)
+    tot = h.sum()
+    if tot <= 0:
+        return 128
+    p = h / tot
+    omega = np.cumsum(p)
+    mu = np.cumsum(p * np.arange(256))
+    mu_t = mu[-1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sb = (mu_t * omega - mu) ** 2 / (omega * (1 - omega))
+    sb[~np.isfinite(sb)] = -1
+    return int(np.argmax(sb))

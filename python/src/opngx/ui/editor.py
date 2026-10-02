@@ -19,6 +19,7 @@ import re
 from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from opngx.ui import icons as _icons
 from PySide6.QtCore import Qt, Signal
 
 from opngx.ui import themes
@@ -598,8 +599,10 @@ class FindBar(QtWidgets.QFrame):
         self.cb_regex.setToolTip("regular expression")
         self.count = QtWidgets.QLabel("")
         self.count.setObjectName("hint")
-        prev = QtWidgets.QPushButton("↑")
-        nxt = QtWidgets.QPushButton("↓")
+        prev = QtWidgets.QPushButton("")
+        _icons.set_icon(prev, "chev-up", "text")
+        nxt = QtWidgets.QPushButton("")
+        _icons.set_icon(nxt, "chev-down", "text")
         rep1 = QtWidgets.QPushButton("Replace")
         repa = QtWidgets.QPushButton("Replace all")
         close = QtWidgets.QToolButton()

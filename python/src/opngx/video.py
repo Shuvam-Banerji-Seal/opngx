@@ -1,8 +1,10 @@
 """Video rendering — stream LUT-mapped frames straight into ffmpeg.
 
 No intermediate files: decoded+transformed grayscale frames are piped to
-ffmpeg's rawvideo input and encoded to H.264 MP4. Requires an ffmpeg
-binary on PATH (checked once).
+ffmpeg's rawvideo input and encoded with one of the codecs in `CODECS`
+(H.264, H.265, VP9, AV1, lossless FFV1, ProRes, MJPEG, GIF, or a GPU
+H.264 encoder). The ffmpeg used is the one bundled with the studio, else
+one on PATH.
 """
 
 from __future__ import annotations
@@ -105,6 +107,126 @@ def resolve_ffmpeg() -> Optional[str]:
 
 def ffmpeg_available() -> bool:
     return resolve_ffmpeg() is not None
+
+
+def _popen_kwargs() -> dict:
+    """No console window for ffmpeg when started from the windowed studio."""
+    from ._proc import no_window
+
+    return no_window()
+
+
+# --------------------------------------------------------------------------
+# Codecs (v2.1). Each entry: container, encoder, whether it is lossless for
+# 8-bit grey input, the quality knob (name, default, range, better-is) and a
+# function building the encoder arguments for a quality value.
+# --------------------------------------------------------------------------
+def _even_pad(cw: int, ch: int) -> list:
+    # 4:2:0 codecs need even sizes: pad ONE black row/column, never trim
+    return ["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:black"] if (cw % 2 or ch % 2) else []
+
+
+CODECS: dict[str, dict[str, Any]] = {
+    "h264": dict(label="H.264 MP4 (plays everywhere)", ext=".mp4", encoder="libx264", lossless=False,
+                 knob=("CRF", 18, 0, 51, "lower"),
+                 args=lambda q, cw, ch, preset: _even_pad(cw, ch) + ["-c:v", "libx264", "-preset", preset, "-crf", str(q),
+                                                                     "-pix_fmt", "yuv420p", "-movflags", "+faststart"]),
+    "h265": dict(label="H.265/HEVC MP4 (about half the size of H.264)", ext=".mp4", encoder="libx265", lossless=False,
+                 knob=("CRF", 22, 0, 51, "lower"),
+                 args=lambda q, cw, ch, preset: _even_pad(cw, ch) + ["-c:v", "libx265", "-preset", preset, "-crf", str(q),
+                                                                     "-pix_fmt", "yuv420p", "-tag:v", "hvc1",
+                                                                     "-x265-params", "log-level=error", "-movflags", "+faststart"]),
+    "vp9": dict(label="VP9 WebM (open, for the web)", ext=".webm", encoder="libvpx-vp9", lossless=False,
+                knob=("CRF", 30, 0, 63, "lower"),
+                args=lambda q, cw, ch, preset: _even_pad(cw, ch) + ["-c:v", "libvpx-vp9", "-crf", str(q), "-b:v", "0",
+                                                                    "-row-mt", "1", "-deadline", "good", "-cpu-used", "2",
+                                                                    "-pix_fmt", "yuv420p"]),
+    "av1": dict(label="AV1 MKV (smallest, slow to encode)", ext=".mkv", encoder="libaom-av1", lossless=False,
+                knob=("CRF", 30, 0, 63, "lower"),
+                args=lambda q, cw, ch, preset: _even_pad(cw, ch) + ["-c:v", "libaom-av1", "-crf", str(q), "-b:v", "0",
+                                                                    "-cpu-used", "6", "-row-mt", "1", "-pix_fmt", "yuv420p"]),
+    "ffv1": dict(label="FFV1 MKV (lossless, bit-exact archive)", ext=".mkv", encoder="ffv1", lossless=True,
+                 knob=None,
+                 args=lambda q, cw, ch, preset: ["-c:v", "ffv1", "-level", "3", "-g", "1", "-slices", "16",
+                                                 "-slicecrc", "1", "-pix_fmt", "gray"]),
+    "prores": dict(label="ProRes 422 HQ MOV (video editors)", ext=".mov", encoder="prores_ks", lossless=False,
+                   knob=None,
+                   args=lambda q, cw, ch, preset: _even_pad(cw, ch) + ["-c:v", "prores_ks", "-profile:v", "3",
+                                                                       "-pix_fmt", "yuv422p10le", "-vendor", "apl0"]),
+    "mjpeg": dict(label="Motion-JPEG AVI (frame-accurate, old software)", ext=".avi", encoder="mjpeg", lossless=False,
+                  knob=("q", 2, 2, 31, "lower"),
+                  args=lambda q, cw, ch, preset: ["-c:v", "mjpeg", "-q:v", str(q), "-pix_fmt", "yuvj444p"]),
+    "gif": dict(label="Animated GIF (slides, chat; 256 greys)", ext=".gif", encoder="gif", lossless=True,
+                knob=None,
+                args=lambda q, cw, ch, preset: ["-c:v", "gif", "-pix_fmt", "gray", "-loop", "0"]),
+    "h264_gpu": dict(label="H.264 MP4 on the GPU (NVIDIA / Intel / AMD)", ext=".mp4", encoder=None, lossless=False,
+                     knob=("QP", 20, 0, 51, "lower"), args=None),
+}
+
+_GPU_ENCODERS = ("h264_nvenc", "h264_qsv", "h264_amf", "h264_mf")
+_ENC_CACHE: dict = {}
+
+
+def _encoder_works(enc: str) -> bool:
+    """Encode 8 tiny frames with `enc` to /dev/null: listed encoders can
+    still fail (no GPU, no driver), so test them for real, once."""
+    if enc in _ENC_CACHE:
+        return _ENC_CACHE[enc]
+    ff = resolve_ffmpeg()
+    ok = False
+    if ff:
+        try:
+            r = subprocess.run([ff, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                                "color=gray:s=256x256:d=0.3", "-frames:v", "8", "-c:v", enc, "-f", "null", "-"],
+                               capture_output=True, timeout=30, **_popen_kwargs())
+            ok = r.returncode == 0
+        except Exception:  # noqa: BLE001
+            ok = False
+    _ENC_CACHE[enc] = ok
+    return ok
+
+
+def gpu_encoder() -> Optional[str]:
+    """The first working hardware H.264 encoder, or None."""
+    for enc in _GPU_ENCODERS:
+        if _encoder_works(enc):
+            return enc
+    return None
+
+
+def available_codecs() -> dict[str, bool]:
+    """{codec key: usable with this ffmpeg}. Encoders are probed once."""
+    out = {}
+    for key, c in CODECS.items():
+        out[key] = gpu_encoder() is not None if key == "h264_gpu" else _encoder_works(c["encoder"])
+    return out
+
+
+def codec_args(codec: str, quality: Optional[int], cw: int, ch: int, preset: str = "medium") -> list:
+    c = CODECS[codec]
+    if codec == "h264_gpu":
+        enc = gpu_encoder()
+        if not enc:
+            raise RuntimeError("no working GPU H.264 encoder (NVENC / Quick Sync / AMF / MediaFoundation)")
+        q = c["knob"][1] if quality is None else int(quality)
+        rc = {"h264_nvenc": ["-rc", "constqp", "-qp", str(q)], "h264_qsv": ["-global_quality", str(q)],
+              "h264_amf": ["-rc", "cqp", "-qp_i", str(q), "-qp_p", str(q)], "h264_mf": ["-quality", "100"]}[enc]
+        return _even_pad(cw, ch) + ["-c:v", enc] + rc + ["-pix_fmt", "yuv420p" if enc != "h264_qsv" else "nv12",
+                                                       "-movflags", "+faststart"]
+    q = None if c["knob"] is None else (c["knob"][1] if quality is None else int(quality))
+    return c["args"](q, cw, ch, preset)
+
+
+def decode_video_gray(path: str, width: int, height: int) -> "Any":
+    """Decode a video back to (frames, height, width) uint8 grey with the
+    same ffmpeg - used to prove the lossless codecs are bit-exact."""
+    import numpy as np
+
+    ff = resolve_ffmpeg()
+    r = subprocess.run([ff, "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                       capture_output=True, check=True, **_popen_kwargs())
+    a = np.frombuffer(r.stdout, np.uint8)
+    return a.reshape(-1, height, width)
 
 
 def resolve_transform(
@@ -221,15 +343,20 @@ def render_video(
     start: int = 0,
     count: Optional[int] = None,
     fps: int = 30,
-    crf: int = 18,
+    crf: Optional[int] = None,
     preset: str = "medium",
+    codec: str = "h264",
     crop: Optional[tuple[int, int, int, int]] = None,
     progress: Optional[Callable[[int, int], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
     footage: Optional[str] = None,
 ) -> dict:
-    """Render a range of frames into an H.264 MP4 using the same verified
-    transform as PNG extraction. Returns stats."""
+    """Render a range of frames into a video with the same verified
+    transform as image extraction. `codec` is a key of CODECS (default
+    H.264); `crf` is that codec's quality value (CRF, q or QP - see the
+    codec's knob), None = its default. Returns stats."""
+    if codec not in CODECS:
+        raise ValueError(f"unknown codec '{codec}' (choose from {', '.join(CODECS)})")
     if not ffmpeg_available():
         raise RuntimeError(
             "ffmpeg was not found on PATH — required for video rendering.\n"
@@ -301,25 +428,16 @@ def render_video(
         "-i",
         "-",
     ]
-    # H.264 4:2:0 needs even dimensions; a hand-dragged crop is odd half the
-    # time and ffmpeg refused it outright (cycle 23). Pad ONE black
-    # column/row rather than trimming, so every selected pixel is kept.
-    if cw % 2 or ch % 2:
-        cmd += ["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:black"]
-    cmd += [
-        "-c:v",
-        "libx264",
-        "-preset",
-        preset,
-        "-crf",
-        str(crf),
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
-        str(out),
-    ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    # 4:2:0 codecs need even dimensions; a hand-dragged crop is odd half the
+    # time and ffmpeg refused it outright (cycle 23): codec_args pads ONE
+    # black column/row rather than trimming, so every selected pixel is kept.
+    cmd += codec_args(codec, crf, cw, ch, preset) + [str(out)]
+    # stderr goes to a temp file: a PIPE nobody reads until the end blocks
+    # ffmpeg (and so this writer) once it holds ~64 KB of messages
+    import tempfile as _tf
+
+    errf = _tf.TemporaryFile()
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=errf, **_popen_kwargs())
 
     import os
     from collections import deque
@@ -361,6 +479,7 @@ def render_video(
         inflight = deque()
         next_chunk = 0
         cancelled = False
+        pipe_broken = False
         with ThreadPoolExecutor(max_workers=nth) as ex:
             while next_chunk < n_chunks and len(inflight) < max_inflight:
                 inflight.append(ex.submit(work, next_chunk))
@@ -374,9 +493,18 @@ def render_video(
                     cancelled = True
                     break
                 if proc.stdin and not proc.stdin.closed:
-                    for blob in pieces:
-                        proc.stdin.write(blob)
-                        written += 1
+                    try:
+                        for blob in pieces:
+                            proc.stdin.write(blob)
+                            written += 1
+                    except (BrokenPipeError, OSError):
+                        # ffmpeg exited early (bad output path/container,
+                        # read-only folder...): stop feeding and report ITS
+                        # message below instead of "Broken pipe" /
+                        # "[Errno 22] Invalid argument"
+                        pipe_broken = True
+                if pipe_broken:
+                    break
                 if progress:
                     progress(min(written, n), n)
                 if should_cancel is not None and should_cancel():
@@ -385,9 +513,11 @@ def render_video(
     finally:
         try:
             proc.stdin.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 - the pipe may already be broken
             pass
-        rc = proc.wait(timeout=60)
+        # no timeout: slow codecs (AV1, VP9) legitimately need minutes to
+        # flush after the last frame; the old 60 s limit raised mid-flush
+        rc = proc.wait()
 
     dt = time.perf_counter() - t0
     out_path = Path(out)
@@ -397,9 +527,8 @@ def render_video(
         or not out_path.exists()
         or (out_path.stat().st_size == 0 and not cancelled)
     ):
-        err = ""
-        if proc.stderr:
-            err = proc.stderr.read().decode(errors="replace")[-800:]
+        errf.seek(0)
+        err = errf.read().decode(errors="replace")[-800:]
         raise RuntimeError(
             f"ffmpeg failed (rc={rc}, frames={written}): {err or 'no output produced'}"
         )
@@ -409,4 +538,6 @@ def render_video(
         "output": str(out),
         "cancelled": cancelled,
         "fps_effective": written / max(dt, 1e-9),
+        "codec": codec,
+        "lossless": bool(CODECS[codec]["lossless"]),
     }

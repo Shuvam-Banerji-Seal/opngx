@@ -1,12 +1,49 @@
-# opngx studio — user guide (v2.0)
+# opngx studio — user guide (v2.1)
 
-The studio has four tabs. Press **F1** for the field guide of every control.
+The studio has seven tabs: **Start · Extract · Video · Analyze · Editor · Docs ·
+System** (Ctrl+1…Ctrl+7). Press **F1** for the field guide of every control.
+
+| shortcut | does |
+|---|---|
+| Ctrl+O | open a recording |
+| Ctrl+E | extract |
+| Esc | cancel what is running (extraction, video, …) |
+| Ctrl+1 … Ctrl+7 | switch tab |
+| F11 | full screen |
+
+The logo in the top-left corner animates while work is running.
+
+## Start
+What opngx does, the three steps of a session, a table of which output format to
+choose (and what each one keeps), your recent recordings (double-click to open)
+and the shortcuts. The first start opens here; later starts open the tab you
+used last.
 
 ## Extract
-This tab turns a recording into images and video. Choose one `.bin` or a batch
+This tab turns a recording into one image per frame. Choose one `.bin` or a batch
 mother folder, set the quality mode (reference = each recording's own `.footage`
 curve, raw, or custom), the format, and optionally a **crop**. Then click Extract.
-*Render video…* writes an MP4, and *Verify* proves that the output is pixel-exact.
+*Verify* proves that the output is pixel-exact.
+
+**Formats** (see the *Output formats* guide for measurements): PNG (default,
+TimeViewer-identical), TIFF and PGM (8 or 16 bit), BMP, lossless WebP, JPEG 2000,
+a single-file **NumPy stack**, and lossy JPEG. The *quality* slider applies to
+JPEG (40–100) and WebP (100 = lossless, lower = lossy); the other formats are
+lossless and have no quality setting. The *level* slider is the PNG compression
+effort: 1 (default) is the fastest, and every level gives the same pixels.
+
+## Video
+One video file from the loaded recording, with the bundled ffmpeg:
+- **Codecs:** H.264 (plays everywhere), H.265, VP9, AV1, **FFV1 (lossless,
+  bit-exact)**, ProRes 422 HQ, Motion-JPEG, GIF (lossless for this footage), and
+  H.264 on the graphics card when one is available. Codecs that do not work on this
+  computer are greyed out.
+- **Settings:** the quality control follows the codec (CRF, q or QP); *real time*
+  sets the frame rate from the camera's timestamps.
+- **Crop and curve:** the crop and the transform come from the Extract tab.
+- **Proof:** after an FFV1 or GIF render, *Check the last video is bit-exact* decodes
+  every frame and compares it with the extracted pixels.
+- **Stopping:** the main Cancel (Esc) and this tab's Stop both stop a render.
 
 The frame viewer is pixel-exact: **wheel** zooms, **right- or middle-drag** pans, and a
 **right double-click** fits the frame again. From 6× up a pixel grid appears.
@@ -90,10 +127,24 @@ Every piece of documentation is in one place:
 
 The search box searches all of them.
 
+## System
+- **The computer:** processor, cores, memory, graphics, and every screen with its
+  scaling.
+- **The engine:** the library and CLI the studio loaded, and whether analysis runs in C.
+- **ffmpeg:** the build and version, and which codecs work.
+- **Your folders.**
+- **Copy report:** puts it all on the clipboard for a bug report.
+- **Speed test:** extracts a synthetic recording and shows frames/s, CPU use and the
+  time to the first frame.
+- **Format check:** writes the loaded recording in every image format, reads each
+  file back and reports whether it is bit-exact.
+
 ## Look & feel
 - **View → Theme:** Midnight, Catppuccin Latte / Frappé / Macchiato / Mocha, Tokyo Night,
   Tokyo Day, Cappuccino, or a **custom accent colour**.
-- **View → Interface scale:** 90–200%, or Auto, which fits the monitor from 720p to 4K.
+- **View → Interface scale:** 80–200%, or Auto. Auto fits the monitor from 720p to 4K
+  and respects Windows' own display scaling (125/150/175 %): it never enlarges
+  what Windows already enlarged.
 - **View → Full screen** (F11).
 
 Your choices are remembered.

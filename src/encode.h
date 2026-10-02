@@ -17,6 +17,12 @@ size_t opngx_encode_tiff(const uint8_t *pixels, uint32_t w, uint32_t h,
 
 /* Baseline JPEG from 8-bit gray (expanded internally to RGB).
  * quality 1..100. Returns bytes written or 0. */
+/* 16-bit grey TIFF (uncompressed, little-endian). */
+size_t opngx_encode_tiff16_gray(const uint16_t *px, uint32_t w, uint32_t h,
+                                uint8_t *out, size_t cap);
+/* Binary PGM (P5): pass px8 for 8-bit, or px16 (and px8 = NULL) for 16-bit. */
+size_t opngx_encode_pgm(const uint8_t *px8, const uint16_t *px16,
+                        uint32_t w, uint32_t h, uint8_t *out, size_t cap);
 size_t opngx_encode_jpg(const uint8_t *gray, uint32_t w, uint32_t h,
                         int quality, uint8_t *out, size_t cap);
 

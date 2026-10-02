@@ -259,5 +259,11 @@ def apply(app, name: Optional[str] = None, accent: Optional[str] = "keep", base_
     if sc is not None:
         sc.base_qss = recolor(getattr(sc, "raw_qss", sc.base_qss))
         sc.apply(force=True)
+    try:  # v2.1: vector icons take the new theme's colours too
+        from opngx.ui import icons
+
+        icons.refresh(app)
+    except Exception:  # noqa: BLE001 - icons are cosmetic; never block a theme switch
+        pass
     for w in app.allWidgets():
         w.update()

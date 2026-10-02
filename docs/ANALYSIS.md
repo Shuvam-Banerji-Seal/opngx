@@ -1,4 +1,4 @@
-# Analysis modules (v2.0)
+# Analysis modules (v2.1)
 
 opngx can turn a recording into **time-series data** as well as images.
 An *analysis module* reads frames and produces one row per frame; the
@@ -204,6 +204,83 @@ Per frame:
   dominate.
 - RMS: std/mean.
 - Weber: (Imax − Imean)/Imean.
+
+### `focus`: sharpness over time
+
+Three focus measures per frame, each larger when the image is sharper:
+- `laplacian_var`: variance of the Laplacian (fine detail);
+- `tenengrad`: mean squared Sobel gradient (robust to noise);
+- `norm_variance`: pixel variance / mean.
+
+`relative` is the Laplacian variance divided by its median over the run, so 1.0
+is "as sharp as usual". The summary counts frames more than `drop_warn_pct`
+(default 30 %) less sharp than usual and warns about them. Use it to catch
+z-drift (the sample leaving the focal plane), vibration blur or a refocus.
+Validated: all three measures fall monotonically as Gaussian blur grows (AN-24).
+
+### `drift`: whole-image drift (stage / chamber)
+
+Registers every frame to a reference, the average of the first
+`reference_frames` frames, by phase correlation:
+- **Precision:** refined to 1/`precision` pixel with the matrix-multiply DFT
+  upsampling of Guizar-Sicairos, Thurman & Fienup (Opt. Lett. 33, 156, 2008).
+  The default 10 gave 0.045 px rms on synthetic drift; 20 gives 0.030 px rms
+  at half the speed. Drift is the slowest module (about 200 frames/s on
+  256×300 frames, ~4 minutes for 50,000): for long recordings analyse every
+  Nth frame (the `stride` / "every" setting) - drift changes slowly.
+- **Window:** a flat-top (Tukey) window keeps the frame edges from dominating
+  without biasing the estimate towards zero.
+- **What it measures:** static structure (debris, edges, background) dominates
+  the correlation, so the result is the drift of the stage or chamber. Subtract
+  it from a tracked particle's motion.
+
+Columns are `dx`, `dy` (pixels; positive = right / down), `dx_um`, `dy_um` (with
+`pixel_size_um`) and `match` (correlation peak, 0–1, the registration quality).
+The summary gives the net drift, drift speed and the frame-to-frame jitter.
+
+On synthetic drift (crops of a larger moving scene, sensor-like noise, shifts
+up to 8.5 px) the error stays well under 0.1 px at the default precision (AN-24).
+
+### `particles`: count and size the blobs
+
+A pixel is "on" when it is brighter than `threshold` (or darker, with `dark`).
+Touching on-pixels form one blob (`connectivity` 8 or 4), and blobs smaller than
+`min_area` are ignored.
+
+Per frame:
+- `count`;
+- `total_area`, `mean_area` and `max_area`;
+- `largest_x`, `largest_y`: the centroid of the largest blob, in full-frame
+  pixels, drawn on the frame;
+- `threshold_used`.
+
+`threshold` 0 picks a level automatically (Otsu's method on frames sampled across
+the run). The labelling is a C kernel (`opngx_blobs`, two-pass union-find). An
+identical numpy version runs without the engine, and the two give identical
+results (AN-24).
+
+### `flicker`: illumination spectrum
+
+The mean brightness of every frame, timed by the frame timestamps, and its power
+spectrum (Welch, `segments`). This finds the lines that lamps and LED drivers put
+into the illumination:
+- mains-powered lamps flicker at twice the mains frequency, aliased if the
+  camera is slower;
+- LED drivers flicker at their PWM frequency.
+
+Columns: `mean`, `deviation_pct`. Extra table `spectrum` (`freq_hz`, `power`;
+plotted log-log). Summary: rms %, and each line's frequency, strength
+(× local median) and amplitude in % of the mean. A 37 Hz, 2.0 % modulation
+is recovered as 37.0 Hz, 1.99 % (AN-24).
+
+### `roi_stats`: statistics in your own rectangles
+
+`regions` holds one or more rectangles in full-frame pixels, as
+`x,y,w,h; x,y,w,h; ...` (up to 16). Per region and frame: `rN_mean`, `rN_std`,
+`rN_min`, `rN_max`.
+
+Use a reference region next to the particle for background or illumination, or
+cover several wells or channels at once.
 
 ---
 

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-label="opngx"><rect width="1200" height="360" rx="40" fill="#070a07"/><g transform="translate(30 30)"><title>opngx</title>
+<defs>
+<linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#121a12"/><stop offset="1" stop-color="#050705"/></linearGradient>
+<linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a6e08f"/><stop offset="1" stop-color="#2f6b33"/></linearGradient>
+<radialGradient id="glow"><stop offset="0" stop-color="#a6e08f" stop-opacity="0.55"/><stop offset="1" stop-color="#a6e08f" stop-opacity="0"/></radialGradient>
+</defs>
+<rect x="4.1" y="4.1" width="291.8" height="291.8" rx="67.4" fill="url(#tile)" stroke="#24331f" stroke-width="2.9"/>
+<circle cx="150.0" cy="150.0" r="103.1" fill="none" stroke="url(#ring)" stroke-width="5.9"/>
+<polygon points="191.8,136.4 182.7,179.4 166.2,241.7 237.5,181.9" fill="#4d9a4a" stroke="#050805" stroke-width="1.8" stroke-linejoin="round"/>
+<polygon points="182.7,179.4 140.9,193.0 78.6,209.9 166.2,241.7" fill="#2f6b33" stroke="#050805" stroke-width="1.8" stroke-linejoin="round"/>
+<polygon points="140.9,193.0 108.2,163.6 62.5,118.1 78.6,209.9" fill="#4d9a4a" stroke="#050805" stroke-width="1.8" stroke-linejoin="round"/>
+<polygon points="108.2,163.6 117.3,120.6 133.8,58.3 62.5,118.1" fill="#2f6b33" stroke="#050805" stroke-width="1.8" stroke-linejoin="round"/>
+<polygon points="117.3,120.6 159.1,107.0 221.4,90.1 133.8,58.3" fill="#4d9a4a" stroke="#050805" stroke-width="1.8" stroke-linejoin="round"/>
+<polygon points="159.1,107.0 191.8,136.4 237.5,181.9 221.4,90.1" fill="#2f6b33" stroke="#050805" stroke-width="1.8" stroke-linejoin="round"/>
+<circle cx="150.0" cy="150.0" r="40.9" fill="#050805"/>
+<circle cx="150.0" cy="150.0" r="27.2" fill="none" stroke="#6fbf5f" stroke-opacity="0.55" stroke-width="1.5" stroke-dasharray="1.8 4.1"/>
+<circle cx="158.0" cy="123.9" r="7.6" fill="#d8ffcb" fill-opacity="0.45"/>
+<circle cx="151.9" cy="122.8" r="6.4" fill="#d8ffcb" fill-opacity="0.35"/>
+<circle cx="145.7" cy="123.1" r="5.3" fill="#d8ffcb" fill-opacity="0.25"/>
+<circle cx="139.8" cy="124.7" r="4.1" fill="#d8ffcb" fill-opacity="0.15"/>
+<circle cx="134.4" cy="127.7" r="2.9" fill="#d8ffcb" fill-opacity="0.08"/>
+<circle cx="163.6" cy="126.4" r="21.9" fill="url(#glow)"/>
+<circle cx="163.6" cy="126.4" r="10.0" fill="#ffffff"/>
+</g><text x="370" y="205" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="170" font-weight="700" letter-spacing="-4" fill="#eef4ec">opn<tspan fill="#6fbf5f">gx</tspan></text><text x="376" y="275" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif" font-size="40" fill="#8fa98a">high-speed footage · pixel-exact · analysis</text></svg>

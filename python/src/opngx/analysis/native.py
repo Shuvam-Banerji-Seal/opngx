@@ -118,3 +118,50 @@ def track(frames: np.ndarray, method: str, p: dict, origin=(0, 0)) -> Optional[d
             raise RuntimeError(f"opngx_track failed (rc={rc})")
     out["found"] = found.astype(bool)
     return out
+
+
+def blobs(frames: np.ndarray, thr: int, dark: bool, min_area: int, conn8: bool) -> Optional[dict]:
+    """Native connected-component statistics per frame (v2.1); None when the
+    library is missing or predates opngx_blobs."""
+    lib = _lib()
+    if lib is None or not hasattr(lib, "opngx_blobs"):
+        return None
+    if not getattr(lib, "_blobs_wired", False):
+        P = ctypes.POINTER
+        d = P(ctypes.c_double)
+        lib.opngx_blobs.argtypes = [P(ctypes.c_uint8), ctypes.c_int64, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                    P(ctypes.c_int32), d, d, d, d, d]
+        lib.opngx_blobs.restype = ctypes.c_int
+        lib._blobs_wired = True
+    f = np.ascontiguousarray(frames, dtype=np.uint8)
+    k, h, w = f.shape
+    out = {n: np.empty(k, np.float64) for n in ("total_area", "mean_area", "max_area", "cx", "cy")}
+    count = np.empty(k, np.int32)
+    rc = lib.opngx_blobs(_ptr(f, ctypes.c_uint8), k, h, w, int(thr), int(bool(dark)), int(min_area),
+                         int(bool(conn8)), _ptr(count, ctypes.c_int32),
+                         *[_ptr(out[n], ctypes.c_double) for n in ("total_area", "mean_area", "max_area", "cx", "cy")])
+    if rc != 0:
+        raise RuntimeError(f"opngx_blobs failed ({rc})")
+    out["count"] = count
+    return out
+
+
+def focus(frames: np.ndarray) -> Optional[dict]:
+    """Native focus measures (v2.1); None without a library that has them."""
+    lib = _lib()
+    if lib is None or not hasattr(lib, "opngx_focus"):
+        return None
+    if not getattr(lib, "_focus_wired", False):
+        P = ctypes.POINTER
+        d = P(ctypes.c_double)
+        lib.opngx_focus.argtypes = [P(ctypes.c_uint8), ctypes.c_int64, ctypes.c_int, ctypes.c_int, d, d, d]
+        lib.opngx_focus.restype = ctypes.c_int
+        lib._focus_wired = True
+    f = np.ascontiguousarray(frames, dtype=np.uint8)
+    k, h, w = f.shape
+    out = {n: np.empty(k, np.float64) for n in ("laplacian_var", "tenengrad", "norm_variance")}
+    if k and lib.opngx_focus(_ptr(f, ctypes.c_uint8), k, h, w, *[_ptr(out[n], ctypes.c_double)
+                             for n in ("laplacian_var", "tenengrad", "norm_variance")]) != 0:
+        raise RuntimeError("opngx_focus failed")
+    return out

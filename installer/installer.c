@@ -1,422 +1,475 @@
-/* installer.c — one-click Windows setup for opngx.
+/* installer.c — one-click Windows setup for opngx (v2.1: rewritten).
  *
- * Flow: welcome → (optional desktop shortcut) → extract payload →
- *       registry (uninstall entry + user PATH) → Start-Menu shortcut → done.
+ * Installs per user (%LOCALAPPDATA%\opngx, no admin rights): the studio
+ * (opngx-studio.exe), the command-line engine (opngx-engine.exe), the docs
+ * and an uninstaller (a copy of this program). Adds the folder to the user
+ * PATH, registers an "Apps & features" entry, creates Start-menu (and
+ * optionally desktop) shortcuts to the studio.
  *
- * The engine binary is embedded as RCDATA resource #101 by windres.
- * Everything is per-user (%LOCALAPDATA%), so no admin rights are needed.
+ *   opngx-setup.exe              interactive
+ *   opngx-setup.exe /S           silent install (exit code 0 = ok)
+ *   uninstall.exe --uninstall    remove (what Apps & features runs)
+ *   uninstall.exe --uninstall /S silent removal
+ *
+ * Everything uses the wide-character (UTF-16) Windows API so profile
+ * folders such as C:\Users\José or C:\Users\李 work.
+ *
+ * v2.1 fixes (all found by a bug hunt and reproduced under Wine):
+ *  - the user PATH was read with RRF_RT_REG_EXPAND_SZ but without
+ *    RRF_NOEXPAND, which RegGetValue rejects (ERROR_INVALID_PARAMETER);
+ *    the failure was taken for "no PATH" and PATH was REPLACED by the
+ *    install folder, deleting every other entry. Now: RRF_NOEXPAND, type
+ *    preserved, and any read failure other than "value not found" leaves
+ *    PATH untouched;
+ *  - "is it already on PATH" / "remove from PATH" matched any entry that
+ *    merely CONTAINED "\opngx" (e.g. D:\opngx-dev\build); now exact,
+ *    case-insensitive entry comparison with the install folder;
+ *  - Uninstall ran "opngx-engine.exe --uninstall", an option the engine
+ *    does not have: uninstalling did nothing. The setup now copies itself
+ *    as uninstall.exe and registers that;
+ *  - shortcuts launched the console CLI instead of the studio;
+ *  - uninstall looked for the docs in <install>\docs\docs and left both
+ *    folders behind;
+ *  - ANSI paths (SHGetFolderPathA) converted as UTF-8 broke non-ASCII
+ *    profile names;
+ *  - installing while opngx ran failed with "Payload extraction failed".
  *
  * Build (MinGW):
- *   x86_64-w64-mingw32-windres app.rc apprc.o
- *   x86_64-w64-mingw32-gcc -O2 -mwindows installer.c apprc.o -o opngx-setup.exe \
+ *   windres app.rc -O coff -o apprc.o
+ *   gcc -O2 -mwindows -municode installer.c apprc.o -o opngx-setup.exe \
  *       -lole32 -luuid -lshell32 -ladvapi32 -static
  */
 #define WIN32_LEAN_AND_MEAN
+#ifndef UNICODE
+#define UNICODE
+#endif
+#ifndef _UNICODE
+#define _UNICODE
+#endif
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #define RES_ENGINE 101
 #define RES_STUDIO 102
 #define RES_DOCS   103
-#define APP_VERSION "2.0.4"
-#define APP_NAME    "opngx"
-#define PUBLISHER   "opngx contributors"
+#define APP_VERSION "2.1.0"
+#define APP_VERSION_W L"2.1.0"
+#define APP_NAME_W  L"opngx"
+#define PUBLISHER_W L"opngx contributors"
+#define UNINST_KEY  L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\opngx"
 
-static char g_install[MAX_PATH];      /* e.g. C:\Users\x\AppData\Local\opngx */
-static char g_engine_path[MAX_PATH];
-static char g_studio_path[MAX_PATH];
-static char g_docs_dir[MAX_PATH];
+#define PATHMAX 1024
+static wchar_t g_install[PATHMAX];   /* %LOCALAPPDATA%\opngx */
+static wchar_t g_engine[PATHMAX];
+static wchar_t g_studio[PATHMAX];
+static wchar_t g_uninst[PATHMAX];
+static wchar_t g_docs[PATHMAX];
+static int g_silent = 0;
 
 static void build_paths(void) {
-    char base[MAX_PATH];
-    if (!SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, base)))
-        strcpy(base, "C:\\");
-    snprintf(g_install, sizeof g_install, "%s\\%s", base, APP_NAME);
-    snprintf(g_engine_path, sizeof g_engine_path, "%s\\opngx-engine.exe",
-             g_install);
-    snprintf(g_studio_path, sizeof g_studio_path, "%s\\opngx-studio.exe",
-             g_install);
-    snprintf(g_docs_dir, sizeof g_docs_dir, "%s\\docs", g_install);
+    wchar_t base[MAX_PATH];
+    if (FAILED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, base)))
+        wcscpy(base, L"C:\\");
+    _snwprintf(g_install, PATHMAX, L"%ls\\%ls", base, APP_NAME_W);
+    _snwprintf(g_engine, PATHMAX, L"%ls\\opngx-engine.exe", g_install);
+    _snwprintf(g_studio, PATHMAX, L"%ls\\opngx-studio.exe", g_install);
+    _snwprintf(g_uninst, PATHMAX, L"%ls\\uninstall.exe", g_install);
+    _snwprintf(g_docs, PATHMAX, L"%ls\\docs", g_install);
 }
 
-/* Extract RCDATA resource `res_id` to `dest_path`. Returns 0 on success. */
-static int extract_rc(int res_id, const char *dest_path) {
-    HRSRC hr = FindResourceA(NULL, MAKEINTRESOURCEA(res_id), RT_RCDATA);
+static int ask(const wchar_t *text, const wchar_t *title, UINT flags) {
+    return g_silent ? IDOK : MessageBoxW(NULL, text, title, flags);
+}
+
+/* ------------------------------------------------------------- files -- */
+/* Write RCDATA resource `id` to `dest`. 0 ok, -1 no resource, -2 cannot
+ * create (in use?), -3 write failed. */
+static int extract_rc(int id, const wchar_t *dest) {
+    HRSRC hr = FindResourceW(NULL, MAKEINTRESOURCEW(id), (LPCWSTR)RT_RCDATA);
     if (!hr) return -1;
     HGLOBAL hg = LoadResource(NULL, hr);
-    if (!hg) return -1;
-    const void *data = LockResource(hg);
+    const void *data = hg ? LockResource(hg) : NULL;
     DWORD size = SizeofResource(NULL, hr);
     if (!data || !size) return -1;
-    HANDLE fh = CreateFileA(dest_path, GENERIC_WRITE, 0, NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE fh = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (fh == INVALID_HANDLE_VALUE) return -2;
     DWORD off = 0;
     while (off < size) {
-        DWORD written = 0;
-        if (!WriteFile(fh, (const char *)data + off, size - off, &written,
-                       NULL) || !written) { CloseHandle(fh); return -3; }
-        off += written;
+        DWORD w = 0;
+        if (!WriteFile(fh, (const char *)data + off, size - off, &w, NULL) || !w) {
+            CloseHandle(fh);
+            return -3;
+        }
+        off += w;
     }
     CloseHandle(fh);
     return 0;
 }
 
-static int write_payload(void) {
-    HRSRC hr = FindResourceA(NULL, MAKEINTRESOURCEA(RES_ENGINE), RT_RCDATA);
-    if (!hr) return -1;
-    HGLOBAL hg = LoadResource(NULL, hr);
-    if (!hg) return -1;
-    const void *data = LockResource(hg);
-    DWORD size = SizeofResource(NULL, hr);
-    if (!data || !size) return -1;
-
-    CreateDirectoryA(g_install, NULL);
-    HANDLE fh = CreateFileA(g_engine_path, GENERIC_WRITE, 0, NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (fh == INVALID_HANDLE_VALUE) return -2;
-    DWORD off = 0;
-    while (off < size) {
-        DWORD written = 0;
-        if (!WriteFile(fh, (const char *)data + off, size - off, &written,
-                       NULL) || !written) { CloseHandle(fh); return -3; }
-        off += written;
-    }
-    CloseHandle(fh);
+/* A running exe cannot be opened for exclusive write. */
+static int file_in_use(const wchar_t *path) {
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return 0;
+    HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_SHARING_VIOLATION;
+    CloseHandle(h);
     return 0;
 }
 
-/* ------------------------- registry helpers ------------------------ */
-static void set_reg(HKEY root, const char *key, const char *name,
-                    const char *value) {
+/* Wait until neither program is running (or the user gives up). */
+static int ensure_not_running(const wchar_t *what) {
+    while (file_in_use(g_studio) || file_in_use(g_engine)) {
+        if (g_silent) return 0;
+        wchar_t msg[512];
+        _snwprintf(msg, 512, L"opngx is running.\n\nClose the opngx studio (and any opngx-engine "
+                             L"window), then click Retry to %ls.", what);
+        if (MessageBoxW(NULL, msg, L"opngx", MB_RETRYCANCEL | MB_ICONWARNING) != IDRETRY) return 0;
+    }
+    return 1;
+}
+
+/* Recursive delete of a folder (no UI). */
+static void delete_tree(const wchar_t *dir) {
+    size_t n = wcslen(dir);
+    wchar_t *from = (wchar_t *)calloc(n + 2, sizeof(wchar_t)); /* double-NUL terminated */
+    if (!from) return;
+    wcscpy(from, dir);
+    SHFILEOPSTRUCTW op;
+    ZeroMemory(&op, sizeof op);
+    op.wFunc = FO_DELETE;
+    op.pFrom = from;
+    op.fFlags = FOF_NO_UI;
+    SHFileOperationW(&op);
+    free(from);
+}
+
+/* ---------------------------------------------------------- registry -- */
+static void set_sz(const wchar_t *name, const wchar_t *value) {
     HKEY h;
-    if (RegCreateKeyExA(root, key, 0, NULL, 0, KEY_SET_VALUE, NULL,
-                        &h, NULL) != ERROR_SUCCESS) return;
-    RegSetValueExA(h, name, 0, REG_SZ, (const BYTE *)value,
-                   (DWORD)(strlen(value) + 1));
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, UNINST_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &h, NULL) != ERROR_SUCCESS)
+        return;
+    RegSetValueExW(h, name, 0, REG_SZ, (const BYTE *)value, (DWORD)((wcslen(value) + 1) * sizeof(wchar_t)));
     RegCloseKey(h);
 }
 
-static void register_uninstall(void) {
-    char key[512];
-    snprintf(key, sizeof key,
-             "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\%s",
-             APP_NAME);
-
-    char uninstall[1200];
-    snprintf(uninstall, sizeof uninstall,
-             "\"%s\" --uninstall", g_engine_path);
-
-    set_reg(HKEY_CURRENT_USER, key, "DisplayName", APP_NAME);
-    set_reg(HKEY_CURRENT_USER, key, "DisplayVersion", APP_VERSION);
-    set_reg(HKEY_CURRENT_USER, key, "Publisher", PUBLISHER);
-    set_reg(HKEY_CURRENT_USER, key, "InstallLocation", g_install);
-    set_reg(HKEY_CURRENT_USER, key, "DisplayIcon", g_engine_path);
-    set_reg(HKEY_CURRENT_USER, key, "UninstallString", uninstall);
-    set_reg(HKEY_CURRENT_USER, key, "NoModify", "1");
-    set_reg(HKEY_CURRENT_USER, key, "NoRepair", "1");
-    set_reg(HKEY_CURRENT_USER, key, "HelpLink",
-            "https://github.com/Shuvam-Banerji-Seal/opngx");
-
-    /* EstimatedSize in KiB */
-    HANDLE fh = CreateFileA(g_engine_path, GENERIC_READ, FILE_SHARE_READ,
-                            NULL, OPEN_EXISTING, 0, NULL);
-    if (fh != INVALID_HANDLE_VALUE) {
-        LARGE_INTEGER sz;
-        if (GetFileSizeEx(fh, &sz)) {
-            char kib[32];
-            DWORD v = (DWORD)(sz.QuadPart / 1024);
-            snprintf(kib, sizeof kib, "%lu", (unsigned long)v);
-            HKEY h;
-            if (RegCreateKeyExA(HKEY_CURRENT_USER, key, 0, NULL, 0,
-                                KEY_SET_VALUE, NULL, &h, NULL) == ERROR_SUCCESS) {
-                RegSetValueExA(h, "EstimatedSize", 0, REG_DWORD,
-                               (const BYTE *)&v, sizeof v);
-                RegCloseKey(h);
-            }
-        }
-        CloseHandle(fh);
-    }
+static void set_dword(const wchar_t *name, DWORD v) {
+    HKEY h;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, UNINST_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &h, NULL) != ERROR_SUCCESS)
+        return;
+    RegSetValueExW(h, name, 0, REG_DWORD, (const BYTE *)&v, sizeof v);
+    RegCloseKey(h);
 }
 
-/* User PATH can legitimately exceed 4 KiB; the old fixed-size query then
- * wrote the TRUNCATED value back, silently destroying the user's PATH.
- * Query the real size, refuse to touch anything we cannot hold whole. */
-#define OPNGX_PATH_MAX 32768
+static DWORD file_kib(const wchar_t *p) {
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    if (!GetFileAttributesExW(p, GetFileExInfoStandard, &a)) return 0;
+    ULONGLONG s = ((ULONGLONG)a.nFileSizeHigh << 32) | a.nFileSizeLow;
+    return (DWORD)(s / 1024);
+}
 
-static int read_user_path(char **out) {
-    DWORD sz = 0;
-    if (RegGetValueA(HKEY_CURRENT_USER, "Environment", "Path",
-                     RRF_RT_REG_EXPAND_SZ | RRF_RT_REG_SZ,
-                     NULL, NULL, &sz) != ERROR_SUCCESS || sz == 0)
-        return 0;
-    if (sz > OPNGX_PATH_MAX) return -1;            /* refuse, protect user */
-    char *buf = (char *)calloc(1, sz + 1);
+static void register_uninstall(void) {
+    wchar_t cmd[PATHMAX + 32];
+    _snwprintf(cmd, PATHMAX + 32, L"\"%ls\" --uninstall", g_uninst);
+    wchar_t quiet[PATHMAX + 40];
+    _snwprintf(quiet, PATHMAX + 40, L"\"%ls\" --uninstall /S", g_uninst);
+    set_sz(L"DisplayName", L"opngx studio");
+    set_sz(L"DisplayVersion", APP_VERSION_W);
+    set_sz(L"Publisher", PUBLISHER_W);
+    set_sz(L"InstallLocation", g_install);
+    set_sz(L"DisplayIcon", g_studio);
+    set_sz(L"UninstallString", cmd);
+    set_sz(L"QuietUninstallString", quiet);
+    set_sz(L"HelpLink", L"https://github.com/Shuvam-Banerji-Seal/opngx");
+    set_dword(L"NoModify", 1);
+    set_dword(L"NoRepair", 1);
+    set_dword(L"EstimatedSize", file_kib(g_studio) + file_kib(g_engine) + file_kib(g_uninst));
+}
+
+/* --------------------------------------------------------------- PATH -- */
+#define PATH_LIMIT 32767
+
+/* 1 = read into *out (type in *type), 0 = no PATH value, -1 = error:
+ * the caller must then leave PATH alone. */
+static int read_user_path(wchar_t **out, DWORD *type) {
+    DWORD bytes = 0, t = 0;
+    const DWORD fl = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
+    LONG rc = RegGetValueW(HKEY_CURRENT_USER, L"Environment", L"Path", fl, &t, NULL, &bytes);
+    if (rc == ERROR_FILE_NOT_FOUND) return 0;
+    if (rc != ERROR_SUCCESS || bytes == 0) return -1;
+    if (bytes / sizeof(wchar_t) > PATH_LIMIT) return -1;
+    wchar_t *buf = (wchar_t *)calloc(bytes / sizeof(wchar_t) + 2, sizeof(wchar_t));
     if (!buf) return -1;
-    DWORD got = sz;
-    if (RegGetValueA(HKEY_CURRENT_USER, "Environment", "Path",
-                     RRF_RT_REG_EXPAND_SZ | RRF_RT_REG_SZ,
-                     NULL, buf, &got) != ERROR_SUCCESS) {
+    DWORD got = bytes;
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Environment", L"Path", fl, &t, buf, &got) != ERROR_SUCCESS) {
         free(buf);
         return -1;
     }
     *out = buf;
+    *type = t;
     return 1;
 }
 
-static void set_user_path(const char *value) {
-    RegSetKeyValueA(HKEY_CURRENT_USER, "Environment", "Path",
-                    REG_EXPAND_SZ, value, (DWORD)(strlen(value) + 1));
-    SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
-                        (LPARAM) "Environment", SMTO_ABORTIFHUNG, 2000, NULL);
+static void write_user_path(const wchar_t *v, DWORD type) {
+    RegSetKeyValueW(HKEY_CURRENT_USER, L"Environment", L"Path", type ? type : REG_EXPAND_SZ, v,
+                    (DWORD)((wcslen(v) + 1) * sizeof(wchar_t)));
+    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"Environment", SMTO_ABORTIFHUNG, 2000, NULL);
+}
+
+/* exact entry comparison: case-insensitive, trailing backslash ignored */
+static int same_dir(const wchar_t *entry, size_t n, const wchar_t *dir) {
+    while (n && (entry[0] == L' ')) { entry++; n--; }
+    while (n && (entry[n - 1] == L'\\' || entry[n - 1] == L' ')) n--;
+    size_t m = wcslen(dir);
+    return n == m && _wcsnicmp(entry, dir, n) == 0;
+}
+
+static int path_has(const wchar_t *path, const wchar_t *dir) {
+    const wchar_t *p = path;
+    while (*p) {
+        const wchar_t *e = wcschr(p, L';');
+        size_t n = e ? (size_t)(e - p) : wcslen(p);
+        if (same_dir(p, n, dir)) return 1;
+        if (!e) break;
+        p = e + 1;
+    }
+    return 0;
 }
 
 static void add_to_user_path(void) {
-    char *cur = NULL;
-    int rc = read_user_path(&cur);
-    if (rc < 0) return;                            /* too large: leave it */
-    if (rc == 1 && strstr(cur, "\\opngx")) { free(cur); return; }
-    size_t need = (rc == 1 ? strlen(cur) : 0) + strlen(g_install) + 2;
-    if (need > OPNGX_PATH_MAX) { free(cur); return; }
-    char *next = (char *)calloc(1, need);
+    wchar_t *cur = NULL;
+    DWORD type = REG_EXPAND_SZ;
+    int rc = read_user_path(&cur, &type);
+    if (rc < 0) return; /* could not read it whole: never risk overwriting */
+    if (rc == 1 && path_has(cur, g_install)) { free(cur); return; }
+    size_t need = (rc == 1 ? wcslen(cur) : 0) + wcslen(g_install) + 2;
+    if (need > PATH_LIMIT) { free(cur); return; }
+    wchar_t *next = (wchar_t *)calloc(need + 1, sizeof(wchar_t));
     if (!next) { free(cur); return; }
-    if (rc == 1 && cur[0]) snprintf(next, need, "%s;%s", cur, g_install);
-    else                    snprintf(next, need, "%s", g_install);
-    set_user_path(next);
+    if (rc == 1 && cur[0]) {
+        size_t L = wcslen(cur);
+        _snwprintf(next, need + 1, (L && cur[L - 1] == L';') ? L"%ls%ls" : L"%ls;%ls", cur, g_install);
+    } else {
+        wcscpy(next, g_install);
+    }
+    write_user_path(next, type);
     free(next);
     free(cur);
 }
 
-/* --------------------------- shortcuts ----------------------------- */
-static void make_shortcut(const wchar_t *link_path) {
-    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+static void remove_from_user_path(void) {
+    wchar_t *cur = NULL;
+    DWORD type = REG_EXPAND_SZ;
+    if (read_user_path(&cur, &type) != 1) return;
+    wchar_t *next = (wchar_t *)calloc(wcslen(cur) + 2, sizeof(wchar_t));
+    if (!next) { free(cur); return; }
+    int removed = 0;
+    const wchar_t *p = cur;
+    while (1) {
+        const wchar_t *e = wcschr(p, L';');
+        size_t n = e ? (size_t)(e - p) : wcslen(p);
+        if (same_dir(p, n, g_install)) {
+            removed = 1;
+        } else if (n) {
+            if (next[0]) wcscat(next, L";");
+            wcsncat(next, p, n);
+        }
+        if (!e) break;
+        p = e + 1;
+    }
+    if (removed) write_user_path(next, type);
+    free(next);
+    free(cur);
+}
+
+/* ---------------------------------------------------------- shortcuts -- */
+static void make_link(const wchar_t *lnk, const wchar_t *target, const wchar_t *args,
+                      const wchar_t *workdir, const wchar_t *desc, const wchar_t *icon) {
     IShellLinkW *sl = NULL;
-    if (FAILED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER,
-                                &IID_IShellLinkW, (void **)&sl))) return;
-    wchar_t wpath[MAX_PATH];
-    MultiByteToWideChar(CP_UTF8, 0, g_engine_path, -1, wpath, MAX_PATH);
-    sl->lpVtbl->SetPath(sl, wpath);
-    sl->lpVtbl->SetDescription(sl, L"Optronis .bin footage extractor");
+    if (FAILED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkW, (void **)&sl)))
+        return;
+    sl->lpVtbl->SetPath(sl, target);
+    if (args) sl->lpVtbl->SetArguments(sl, args);
+    if (workdir) sl->lpVtbl->SetWorkingDirectory(sl, workdir);
+    if (desc) sl->lpVtbl->SetDescription(sl, desc);
+    if (icon) sl->lpVtbl->SetIconLocation(sl, icon, 0);
     IPersistFile *pf = NULL;
-    if (SUCCEEDED(sl->lpVtbl->QueryInterface(sl, &IID_IPersistFile,
-                                             (void **)&pf))) {
-        pf->lpVtbl->Save(pf, link_path, TRUE);
+    if (SUCCEEDED(sl->lpVtbl->QueryInterface(sl, &IID_IPersistFile, (void **)&pf))) {
+        pf->lpVtbl->Save(pf, lnk, TRUE);
         pf->lpVtbl->Release(pf);
     }
     sl->lpVtbl->Release(sl);
-    CoUninitialize();
 }
 
-static void start_menu_shortcut(void) {
+static int folder_link(int csidl, const wchar_t *name, wchar_t *out) {
     wchar_t dir[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_PROGRAMS, NULL, 0, dir))) return;
-    wcscat(dir, L"\\opngx.lnk");
-    make_shortcut(dir);
+    if (FAILED(SHGetFolderPathW(NULL, csidl, NULL, 0, dir))) return 0;
+    _snwprintf(out, PATHMAX, L"%ls\\%ls", dir, name);
+    return 1;
 }
 
-static void desktop_shortcut(void) {
-    wchar_t dir[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_DESKTOPDIRECTORY, NULL, 0, dir)))
-        return;
-    wcscat(dir, L"\\opngx.lnk");
-    make_shortcut(dir);
+static void create_shortcuts(int desktop) {
+    wchar_t lnk[PATHMAX];
+    /* "opngx.lnk" was the CLI in v2.0.x; overwriting it fixes old installs */
+    if (folder_link(CSIDL_PROGRAMS, L"opngx.lnk", lnk))
+        make_link(lnk, g_studio, NULL, g_install, L"opngx studio - Optronis footage extraction and analysis", g_studio);
+    if (folder_link(CSIDL_PROGRAMS, L"opngx engine (command line).lnk", lnk))
+        make_link(lnk, L"cmd.exe", L"/K opngx-engine --help", g_install, L"opngx command-line engine", g_engine);
+    if (desktop && folder_link(CSIDL_DESKTOPDIRECTORY, L"opngx.lnk", lnk))
+        make_link(lnk, g_studio, NULL, g_install, L"opngx studio", g_studio);
 }
 
-/* ---------------------------- uninstall ---------------------------- */
+static void delete_shortcuts(void) {
+    wchar_t lnk[PATHMAX];
+    if (folder_link(CSIDL_PROGRAMS, L"opngx.lnk", lnk)) DeleteFileW(lnk);
+    if (folder_link(CSIDL_PROGRAMS, L"opngx engine (command line).lnk", lnk)) DeleteFileW(lnk);
+    if (folder_link(CSIDL_DESKTOPDIRECTORY, L"opngx.lnk", lnk)) DeleteFileW(lnk);
+}
+
+/* --------------------------------------------------------------- docs -- */
+static void install_docs(void) {
+    CreateDirectoryW(g_docs, NULL);
+    wchar_t zip[PATHMAX];
+    _snwprintf(zip, PATHMAX, L"%ls\\docs.zip", g_docs);
+    if (extract_rc(RES_DOCS, zip)) return;
+    /* PowerShell single-quoted literals: a ' in a path is written as '' */
+    wchar_t qz[2 * PATHMAX], qd[2 * PATHMAX];
+    size_t a = 0, b = 0;
+    for (const wchar_t *s = zip; *s && a < 2 * PATHMAX - 2; s++) { if (*s == L'\'') qz[a++] = L'\''; qz[a++] = *s; }
+    qz[a] = 0;
+    for (const wchar_t *s = g_docs; *s && b < 2 * PATHMAX - 2; s++) { if (*s == L'\'') qd[b++] = L'\''; qd[b++] = *s; }
+    qd[b] = 0;
+    wchar_t cmd[6 * PATHMAX];
+    _snwprintf(cmd, 6 * PATHMAX,
+               L"powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "
+               L"\"Expand-Archive -Force -LiteralPath '%ls' -DestinationPath '%ls'\"", qz, qd);
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof si);
+    ZeroMemory(&pi, sizeof pi);
+    si.cb = sizeof si;
+    if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, g_install, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 120000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    DeleteFileW(zip);
+}
+
+/* ---------------------------------------------------------- uninstall -- */
 static int run_uninstall(void) {
-    /* best effort: remove files, shortcuts, PATH entry, registry */
-    DeleteFileA(g_engine_path);
-    DeleteFileA(g_studio_path);
-    /* docs tree */
-    {
-        char pattern[1200], full[1300];
-        snprintf(pattern, sizeof pattern, "%s\\docs\\*", g_docs_dir);
-        WIN32_FIND_DATAA fd;
-        HANDLE h = FindFirstFileA(pattern, &fd);
-        if (h != INVALID_HANDLE_VALUE) {
-            do {
-                if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, ".."))
-                    continue;
-                snprintf(full, sizeof full, "%s\\docs\\%s", g_docs_dir,
-                         fd.cFileName);
-                DeleteFileA(full);
-            } while (FindNextFileA(h, &fd));
-            FindClose(h);
+    if (!g_silent &&
+        MessageBoxW(NULL, L"Remove opngx (studio, engine, docs and shortcuts) from this computer?\n\n"
+                          L"Your extracted frames, analysis results and your own modules/docs "
+                          L"(in %APPDATA%\\opngx) are kept.",
+                    L"Uninstall opngx", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+        return 1;
+    if (!ensure_not_running(L"uninstall")) return 3;
+    delete_shortcuts();
+    remove_from_user_path();
+    RegDeleteTreeW(HKEY_CURRENT_USER, UNINST_KEY);
+    DeleteFileW(g_studio);
+    DeleteFileW(g_engine);
+    delete_tree(g_docs);
+
+    /* we may BE g_uninst: a running exe cannot delete itself, so a hidden
+     * cmd waits for us to exit, then removes uninstall.exe and the folder */
+    wchar_t self[PATHMAX];
+    GetModuleFileNameW(NULL, self, PATHMAX);
+    if (_wcsicmp(self, g_uninst) == 0) {
+        wchar_t cmd[3 * PATHMAX];
+        _snwprintf(cmd, 3 * PATHMAX,
+                   L"cmd.exe /C ping -n 3 127.0.0.1 >NUL & del /F /Q \"%ls\" & rmdir /S /Q \"%ls\"",
+                   g_uninst, g_install);
+        STARTUPINFOW si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof si);
+        ZeroMemory(&pi, sizeof pi);
+        si.cb = sizeof si;
+        if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
         }
-        RemoveDirectoryA(g_docs_dir);
+    } else {
+        DeleteFileW(g_uninst);
+        delete_tree(g_install);
     }
-    RemoveDirectoryA(g_install);
-
-    wchar_t dir[MAX_PATH];
-    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PROGRAMS, NULL, 0, dir))) {
-        wcscat(dir, L"\\opngx.lnk"); DeleteFileW(dir);
-    }
-    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_DESKTOPDIRECTORY, NULL, 0, dir))) {
-        wcscat(dir, L"\\opngx.lnk"); DeleteFileW(dir);
-    }
-
-    char key[512];
-    snprintf(key, sizeof key,
-             "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\%s",
-             APP_NAME);
-    RegDeleteTreeA(HKEY_CURRENT_USER, key);
-
-    /* strip ourselves from PATH (size-safe: never rewrite a huge PATH) */
-    char *cur = NULL;
-    int prc = read_user_path(&cur);
-    if (prc == 1) {
-        char *next = (char *)calloc(1, strlen(cur) + 2);
-        if (next) {
-            char *tok = strtok(cur, ";");
-            int first = 1, removed = 0;
-            while (tok) {
-                if (!strstr(tok, "\\opngx")) {
-                    if (!first) strcat(next, ";");
-                    strcat(next, tok);   /* next holds strlen(cur)+2 bytes */
-                    first = 0;
-                } else {
-                    removed = 1;
-                }
-                tok = strtok(NULL, ";");
-            }
-            /* v1.7: rewrote PATH only when some OTHER entry survived, so an
-             * opngx-only PATH kept its opngx entry after uninstall */
-            if (removed) set_user_path(next);
-            free(next);
-        }
-        free(cur);
-    }
-    /* if the engine exe is still there it was locked by a running app */
-    char note[160] = "";
-    /* INVALID_FILE_ATTRIBUTES, not INVALID_HANDLE_VALUE: the old pointer
-     * comparison was never equal on 64-bit, so EVERY uninstall claimed the
-     * engine was still running */
-    if (GetFileAttributesA(g_engine_path) != INVALID_FILE_ATTRIBUTES)
-        snprintf(note, sizeof note,
-                 "\n\nNOTE: %s could not be deleted because it is running.\n"
-                 "Close opngx and delete the folder manually.",
-                 g_engine_path);
-    char msg[320];
-    snprintf(msg, sizeof msg, "opngx has been removed.%s", note);
-    MessageBoxA(NULL, msg, "Uninstall", MB_OK | MB_ICONINFORMATION);
+    ask(L"opngx has been removed.", L"Uninstall opngx", MB_OK | MB_ICONINFORMATION);
     return 0;
 }
 
-/* ------------------------------- main ------------------------------ */
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
-    (void)hInst; (void)hPrev; (void)cmd; (void)show;
-    build_paths();
-
-    int silent = GetCommandLineA() &&
-                 (strstr(GetCommandLineA(), "/S") ||
-                  strstr(GetCommandLineA(), "/silent"));
-
-    if (GetCommandLineA() && strstr(GetCommandLineA(), "--uninstall"))
-        return run_uninstall();
-
-    if (silent) {
-        int rcs = write_payload();
-        if (rcs) return 1;
-        extract_rc(RES_STUDIO, g_studio_path);
-        register_uninstall();
-        add_to_user_path();
-        start_menu_shortcut();
-        return 0;
-    }
-
-    if (MessageBoxA(NULL,
-        "opngx " APP_VERSION "\n\n"
-        "Fast, pixel-exact Optronis .bin -> PNG extractor.\n\n"
-        "This will:\n"
-        "  1. Install the command-line engine to your user folder\n"
-        "     (no admin rights needed)\n"
-        "  2. Add it to your PATH so 'opngx-engine' works anywhere\n"
-        "  3. Create a Start Menu shortcut\n\n"
-        "Also create a desktop shortcut?",
-        "Install opngx", MB_YESNO | MB_ICONINFORMATION) != IDYES)
-        return 0;
-
-    int want_desktop =
-        (MessageBoxA(NULL, "Create a desktop shortcut too?", "opngx",
-                     MB_YESNO | MB_ICONQUESTION) == IDYES);
-
-    /* extract: engine + studio GUI + docs bundle */
-    int rc = write_payload();
-    if (!rc) rc = extract_rc(RES_STUDIO, g_studio_path);
-    if (!rc) {
-        CreateDirectoryA(g_docs_dir, NULL);
-        char docs_zip[MAX_PATH];
-        snprintf(docs_zip, sizeof docs_zip, "%s\\docs.zip", g_docs_dir);
-        rc = extract_rc(RES_DOCS, docs_zip);
-        if (!rc) {
-            /* expand docs.zip in place via embedded PowerShell one-liner */
-            char cmd[1600];
-            snprintf(cmd, sizeof cmd,
-                "powershell -NoProfile -WindowStyle Hidden -Command \""
-                "Expand-Archive -Force '%s' '%s'\"",
-                docs_zip, g_docs_dir);
-            STARTUPINFOA si; PROCESS_INFORMATION pi;
-            ZeroMemory(&si, sizeof si); ZeroMemory(&pi, sizeof pi);
-            si.cb = sizeof si;
-            if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE,
-                               CREATE_NO_WINDOW, NULL, g_install, &si, &pi)) {
-                WaitForSingleObject(pi.hProcess, 60000);
-                CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-            }
-            DeleteFileA(docs_zip);
-        }
-    }
+/* --------------------------------------------------------------- main -- */
+static int install(int desktop) {
+    if (!ensure_not_running(L"install")) return 3;
+    CreateDirectoryW(g_install, NULL);
+    int rc = extract_rc(RES_ENGINE, g_engine);
+    if (!rc) rc = extract_rc(RES_STUDIO, g_studio);
     if (rc) {
-        char msg[128];
-        snprintf(msg, sizeof msg, "Payload extraction failed (code %d).", rc);
-        MessageBoxA(NULL, msg, "opngx installer", MB_OK | MB_ICONERROR);
+        wchar_t msg[256];
+        _snwprintf(msg, 256, L"Could not write the program files (code %d).\n\n%ls", rc,
+                   rc == -2 ? L"Is opngx still running, or is the folder read-only?" : L"");
+        ask(msg, L"opngx setup", MB_OK | MB_ICONERROR);
         return 1;
     }
-
+    /* the uninstaller is this very program */
+    wchar_t self[PATHMAX];
+    GetModuleFileNameW(NULL, self, PATHMAX);
+    if (_wcsicmp(self, g_uninst) != 0) CopyFileW(self, g_uninst, FALSE);
+    install_docs();
     register_uninstall();
     add_to_user_path();
-    start_menu_shortcut();
-    if (want_desktop) desktop_shortcut();
-    /* CLI helper shortcut keeps a console open around --help */
-    {
-        wchar_t dir[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PROGRAMS, NULL, 0, dir))) {
-            wchar_t lnk[MAX_PATH];
-            wcscpy(lnk, dir); wcscat(lnk, L"\\opngx engine (command line).lnk");
-            CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-            IShellLinkW *sl = NULL;
-            if (SUCCEEDED(CoCreateInstance(&CLSID_ShellLink, NULL,
-                    CLSCTX_INPROC_SERVER, &IID_IShellLinkW, (void **)&sl))) {
-                wchar_t weng[MAX_PATH], wargs[64], wdir[MAX_PATH];
-                MultiByteToWideChar(CP_UTF8, 0, g_engine_path, -1, weng, MAX_PATH);
-                MultiByteToWideChar(CP_UTF8, 0, g_install, -1, wdir, MAX_PATH);
-                sl->lpVtbl->SetPath(sl, L"cmd.exe");
-                sl->lpVtbl->SetArguments(sl, L"/K opngx-engine --help");
-                sl->lpVtbl->SetWorkingDirectory(sl, wdir);
-                IPersistFile *pf = NULL;
-                if (SUCCEEDED(sl->lpVtbl->QueryInterface(sl, &IID_IPersistFile,
-                                                         (void **)&pf))) {
-                    pf->lpVtbl->Save(pf, lnk, TRUE);
-                    pf->lpVtbl->Release(pf);
-                }
-                sl->lpVtbl->Release(sl);
-                CoUninitialize();
-            }
+    create_shortcuts(desktop);
+    return 0;
+}
+
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmdline, int show) {
+    (void)hInst; (void)hPrev; (void)cmdline; (void)show;
+    build_paths();
+    int argc = 0, uninstall = 0;
+    LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    for (int i = 1; argv && i < argc; i++) {
+        if (!_wcsicmp(argv[i], L"/S") || !_wcsicmp(argv[i], L"/silent") || !_wcsicmp(argv[i], L"--silent"))
+            g_silent = 1;
+        else if (!_wcsicmp(argv[i], L"--uninstall") || !_wcsicmp(argv[i], L"/uninstall"))
+            uninstall = 1;
+    }
+    if (argv) LocalFree(argv);
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    int rc;
+    if (uninstall) {
+        rc = run_uninstall();
+    } else if (g_silent) {
+        rc = install(0);
+    } else {
+        if (MessageBoxW(NULL,
+                        L"opngx " APP_VERSION_W L"\n\n"
+                        L"Pixel-exact extraction, video export and analysis for Optronis "
+                        L"high-speed-camera recordings.\n\n"
+                        L"This installs, for your user only (no admin rights needed):\n"
+                        L"  - the opngx studio (Start-menu shortcut)\n"
+                        L"  - the opngx-engine command-line tool (added to your PATH)\n"
+                        L"  - the documentation and an uninstaller\n\n"
+                        L"Continue?",
+                        L"Install opngx", MB_OKCANCEL | MB_ICONINFORMATION) != IDOK) {
+            CoUninitialize();
+            return 0;
+        }
+        int desktop = MessageBoxW(NULL, L"Create a desktop shortcut too?", L"opngx", MB_YESNO | MB_ICONQUESTION) == IDYES;
+        rc = install(desktop);
+        if (!rc) {
+            wchar_t done[2 * PATHMAX];
+            _snwprintf(done, 2 * PATHMAX,
+                       L"opngx " APP_VERSION_W L" is installed.\n\n"
+                       L"Start it from the Start menu: opngx.\n\n"
+                       L"Command line (in a NEW terminal): opngx-engine --help\n\n"
+                       L"Installed to:\n  %ls\n\nRemove it any time from Settings > Apps.",
+                       g_install);
+            MessageBoxW(NULL, done, L"opngx setup", MB_OK | MB_ICONINFORMATION);
         }
     }
-
-    char done[1024];
-    snprintf(done, sizeof done,
-        "opngx " APP_VERSION " installed successfully!\n\n"
-        "Installed to:\n  %s\n\n"
-        "Try it in a NEW terminal window:\n"
-        "  opngx-engine info\n"
-        "  opngx-engine batch D:\\footage -o D:\\frames -j 0\n\n"
-        "(GUI + Python tools ship separately via 'pip install ./python')",
-        g_install);
-    MessageBoxA(NULL, done, "opngx installer", MB_OK | MB_ICONINFORMATION);
-    return 0;
+    CoUninitialize();
+    return rc;
 }

@@ -1581,18 +1581,29 @@ def test_ar32_ui_scale_follows_the_monitor():
     from opngx.ui import scaling
 
     class Scr:
-        def __init__(self, w, h):
+        def __init__(self, w, h, dpr=1.0):
             self._g = QRect(0, 0, w, h)
+            self._dpr = dpr
 
         def geometry(self):
             return self._g
+
+        def devicePixelRatio(self):
+            return self._dpr
 
         availableGeometry = geometry
 
     got = {h: scaling.auto_scale(Scr(w, h)) for w, h in
            ((1280, 720), (1366, 768), (1920, 1080), (2560, 1440), (3840, 2160))}
-    assert got[1080] == 1.0 and got[720] == 0.9 and got[768] == 0.9
+    # v2.1: short logical screens shrink to 0.8 (0.9 overflowed a 1280x672
+    # work area: 1080p laptop at 150 % minus the taskbar)
+    assert got[1080] == 1.0 and got[720] == 0.8 and got[768] == 0.8
     assert got[1440] == 1.35 and got[2160] == 2.0
+    # v2.1: when Windows already scales (DPR >= 1.25) never enlarge again:
+    # 4K at 150 % (2560x1440 logical) stays 1.0, it used to become 1.35
+    assert scaling.auto_scale(Scr(2560, 1440, 1.5)) == 1.0
+    assert scaling.auto_scale(Scr(1920, 1080, 2.0)) == 1.0
+    assert scaling.auto_scale(Scr(1280, 720, 1.5)) == 0.8
     assert scaling.scale_qss("a { padding: 7px 10px; border: 1px; }", 2.0) == (
         "a { padding: 14px 20px; border: 2px; }"
     )

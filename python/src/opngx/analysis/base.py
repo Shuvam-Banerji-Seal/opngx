@@ -35,6 +35,7 @@ Rules the runner relies on:
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence
@@ -76,9 +77,15 @@ class Param:
                 else:
                     out = bool(value)
             elif self.type is int:
-                out = int(float(value)) if isinstance(value, str) else int(value)
+                f = float(str(value).replace(",", ".")) if isinstance(value, str) else float(value)
+                # "47.9" used to become 47 without a word (v2.1)
+                if not math.isfinite(f) or f != int(f):
+                    raise ValueError(value)
+                out = int(f)
             elif self.type is float:
                 out = float(str(value).replace(",", ".")) if isinstance(value, str) else float(value)
+                if not math.isfinite(out):  # NaN passed every range check (v2.1)
+                    raise ValueError(value)
             else:
                 out = str(value)
         except (TypeError, ValueError):
@@ -126,6 +133,7 @@ class Context:
     tables: dict[str, dict] = field(default_factory=dict)
     table_units: dict[str, dict] = field(default_factory=dict)  # {table: {col: unit}}
     _sampler: Optional[Callable[[int], np.ndarray]] = None
+    _first: Optional[Callable[[int], np.ndarray]] = None
     log: Callable[[str], None] = print
 
     @property
@@ -133,6 +141,14 @@ class Context:
         """Full-frame coordinates of the analysed window's top-left pixel;
         add it to window coordinates to report full-frame positions."""
         return self.crop[0], self.crop[1]
+
+    def first(self, n: int = 16) -> np.ndarray:
+        """(n, h, w): the FIRST n frames of the analysed range (same crop and
+        source as process()) - e.g. a reference image at the start of the
+        run (v2.1). sample() spreads over the whole run instead."""
+        if self._first is None:
+            raise RuntimeError("first() is not available in this context")
+        return self._first(int(n))
 
     def sample(self, n: int = 64) -> np.ndarray:
         """(n, h, w) frames spread evenly over the analysed range (same

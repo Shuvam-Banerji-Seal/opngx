@@ -25,18 +25,35 @@ from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-CHOICES = (0.0, 0.9, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0)  # 0.0 == auto
+CHOICES = (0.0, 0.8, 0.9, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0)  # 0.0 == auto
 _PX = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)px")
 
 
 def auto_scale(screen: Optional["QtGui.QScreen"]) -> float:
-    """Scale factor for a screen: logical height / 1080, clamped, 0.05 steps."""
+    """Scale factor for a screen, in 0.05 steps.
+
+    The studio is designed for a 1080-pixel-high logical screen. When the
+    operating system already scales the display (Windows 125/150/175 %,
+    i.e. device-pixel ratio >= 1.25) that choice is respected: the factor
+    only shrinks the UI to fit a short logical screen and never enlarges it
+    again. v2.0 used logical height / 1080 everywhere, so a 4K monitor at
+    150 % (2560x1440 logical) was enlarged a second time to ~200 %, and a
+    1080p laptop at 150 % ended up at 135 % instead of 150 %. At 100 %
+    scaling a big screen is still scaled up as before.
+    """
     if screen is None:
         return 1.0
     # full (logical) height, not the available area: a taskbar must not
     # push a 1080p screen off 1.0
     h = screen.geometry().height()
-    s = max(0.9, min(2.0, h / 1080.0))
+    try:
+        dpr = float(screen.devicePixelRatio())
+    except Exception:  # noqa: BLE001
+        dpr = 1.0
+    if dpr >= 1.24:
+        s = max(0.8, min(1.0, h / 1080.0))
+    else:
+        s = max(0.8, min(2.0, h / 1080.0))
     return round(s * 20) / 20.0
 
 

@@ -175,15 +175,16 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     if (j->frames_total <= 0) { snprintf(j->err, sizeof j->err, "no frames to extract"); goto fail; }
 
     /* --- buffers sizing --- */
-    if (j->p.format < 0 || j->p.format > 3) j->p.format = OPNGX_FMT_PNG;
+    if (j->p.format < 0 || j->p.format > 4) j->p.format = OPNGX_FMT_PNG;
     if (j->p.jpeg_quality <= 0) j->p.jpeg_quality = 90;
-    if (j->p.format != OPNGX_FMT_PNG && j->p.bit_depth == 16) {
-        fprintf(stderr, "opngx: note: 16-bit container requires PNG; using 8-bit.\n");
+    /* 16-bit containers: PNG, TIFF and PGM (v2.1); BMP/JPEG are 8-bit only */
+    if ((j->p.format == OPNGX_FMT_BMP || j->p.format == OPNGX_FMT_JPG) && j->p.bit_depth == 16) {
+        fprintf(stderr, "opngx: note: BMP/JPEG are 8-bit containers; using 8-bit.\n");
         j->p.bit_depth = 8;
     }
     /* default extension per format unless caller set one explicitly */
     if (!pin->ext || !pin->ext[0]) {
-        static const char *defs[] = { ".Png", ".bmp", ".tif", ".jpg" };
+        static const char *defs[] = { ".Png", ".bmp", ".tif", ".jpg", ".pgm" };
         free(j->ext);
         j->ext = strdup(defs[j->p.format]);
         j->p.ext = j->ext;
@@ -203,7 +204,7 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
      * mask 0x10 (cycle 23). */
     j->file_cap = j->idat_cap + 128;
     if (j->p.format != OPNGX_FMT_PNG)
-        j->file_cap += (size_t)(j->out_w + 4) * j->out_h + 4096;
+        j->file_cap += (size_t)(j->out_w + 4) * j->out_h * (j->p.bit_depth == 16 ? 2 : 1) + 4096;
 
     fill_luts(j);
     atomic_store(&j->done, 0);
@@ -378,10 +379,21 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
                 }
 
                 if (fmt != OPNGX_FMT_PNG) {
+                    size_t flen2 = 0;
+                    if (bits16) {
+                        /* 16-bit TIFF / PGM: the same lut16 as 16-bit PNG.
+                         * scan holds >= H*(2W+1) bytes whenever bits16 */
+                        uint16_t *s16 = (uint16_t *)(void *)scan;
+                        for (uint32_t k = 0; k < W * H; k++)
+                            s16[k] = j->lut16[frame[k]];
+                        flen2 = (fmt == OPNGX_FMT_TIF)
+                            ? opngx_encode_tiff16_gray(s16, W, H, filebuf, j->file_cap)
+                            : opngx_encode_pgm(NULL, s16, W, H, filebuf, j->file_cap);
+                        goto encoded;
+                    }
                     /* map then hand to the non-PNG encoder */
                     for (uint32_t k = 0; k < W * H; k++)
                         scan[k] = lut8[frame[k]];
-                    size_t flen2 = 0;
                     switch (fmt) {
                     case OPNGX_FMT_BMP:
                         flen2 = opngx_encode_bmp_gray(scan, W, H,
@@ -396,7 +408,12 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
                                                  j->p.jpeg_quality,
                                                  filebuf, j->file_cap);
                         break;
+                    case OPNGX_FMT_PGM:
+                        flen2 = opngx_encode_pgm(scan, NULL, W, H,
+                                                 filebuf, j->file_cap);
+                        break;
                     }
+encoded:
                     if (flen2 == 0) { atomic_fetch_add(&sh->hard, 16); continue; }
                     snprintf(path, sizeof path, "%s/%s%05lld%s", j->out_dir,
                              j->prefix, (long long)(base + i), j->ext);

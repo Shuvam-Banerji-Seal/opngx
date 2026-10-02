@@ -593,3 +593,115 @@ def test_default_deflate_level_is_fast_everywhere():
     assert "self.level_slider.setValue(1)" in src
     hdr = (REPO / "src" / "opngx.h").read_text(encoding="utf-8")
     assert "#define OPNGX_DEFAULT_LEVEL 1" in hdr
+
+
+@pytest.mark.parametrize("force_fallback", [False, True])
+def test_every_format_is_what_it_claims(fixture_dir, native_available, tmp_path, force_fallback, monkeypatch):
+    """v2.1: every image format, every bit depth, engine and fallback: the
+    files decode (independently) to exactly the expected pixels when the
+    format is documented lossless."""
+    from opngx import formats
+    from opngx.quality import build_lut
+
+    if not force_fallback and not native_available:
+        pytest.skip("native engine not built")
+    if force_fallback:
+        import opngx.extractor as ex_mod
+
+        monkeypatch.setattr(ex_mod, "load_library", lambda: None)
+    binp = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    m = opngx.probe(binp)
+    lut = np.asarray(build_lut(m.brightness, m.contrast, m.gamma), np.uint8)
+    raw = np.fromfile(binp, np.uint8)
+    crop = (3, 5, 41, 27)  # odd sizes on purpose
+    x, y, w, h = crop
+    for key, f in formats.FORMATS.items():
+        if force_fallback and f.engine != "native":
+            continue
+        for bits in f.bit_depths:
+            out = tmp_path / f"{key}{bits}{int(force_fallback)}"
+            opngx.extract(binp, str(out), fmt=key, bit_depth=bits, frames=6, start=2, crop=crop,
+                          prefix="cam_", channels=0 if key == "png" else 6)
+            files = sorted(p for p in out.iterdir() if p.suffix not in (".csv", ".json"))
+            dec = list(formats.read_frame(str(files[0]))) if key == "npy" else [formats.read_frame(str(p)) for p in files]
+            assert len(dec) == 6, (key, bits, len(dec))
+            for i, a in enumerate(dec):
+                o = (2 + i) * m.frame_stride + 8
+                e = lut[raw[o : o + m.width * m.height].reshape(m.height, m.width)[y : y + h, x : x + w]]
+                if bits == 16:
+                    e = e.astype(np.uint16) * 257
+                r = formats.quality_report(e, np.asarray(a))
+                if f.lossless:
+                    assert r.get("exact"), (key, bits, force_fallback, r)
+                else:
+                    assert r.get("psnr_db", 0) > 30, (key, r)
+
+
+def test_video_codecs_lossless_are_bit_exact_and_errors_surface(fixture_dir, tmp_path):
+    """v2.1: FFV1 and GIF decode to exactly the extracted pixels; a bad
+    output name reports ffmpeg's own message, not 'Broken pipe'."""
+    from opngx import video
+    from opngx.quality import build_lut
+
+    if not video.ffmpeg_available():
+        pytest.skip("no ffmpeg")
+    binp = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    m = opngx.probe(binp)
+    lut = np.asarray(build_lut(m.brightness, m.contrast, m.gamma), np.uint8)
+    raw = np.fromfile(binp, np.uint8)
+    crop = (1, 2, 33, 21)
+    x, y, w, h = crop
+    exp = np.stack([lut[raw[i * m.frame_stride + 8 : i * m.frame_stride + 8 + m.width * m.height]
+                        .reshape(m.height, m.width)[y : y + h, x : x + w]] for i in range(20)])
+    for codec in ("ffv1", "gif"):
+        out = tmp_path / f"v{video.CODECS[codec]['ext']}"
+        st = video.render_video(binp, str(out), count=20, crop=crop, codec=codec, fps=25)
+        assert st["lossless"] and st["frames_written"] == 20
+        dec = video.decode_video_gray(str(out), w, h)
+        assert np.array_equal(dec, exp), codec
+    st = video.render_video(binp, str(tmp_path / "v.mp4"), count=20, crop=crop, codec="h264")
+    assert st["frames_written"] == 20 and not st["lossless"]
+    with pytest.raises(RuntimeError) as ei:
+        video.render_video(binp, str(tmp_path / "bad.notacontainer"), count=200)
+    assert "Broken pipe" not in str(ei.value) and "ffmpeg failed" in str(ei.value)
+
+
+def test_studio_v21_tabs_icons_and_no_hang(tmp_path, monkeypatch):
+    """v2.1 studio: seven tabs in order, every new tab builds, icons render,
+    the logo icon is drawn (no file lookup), and a JPEG 2000 export from a
+    program without an importable __main__ falls back to threads instead of
+    hanging forever."""
+    try:
+        from PySide6 import QtWidgets
+    except ImportError:
+        pytest.skip("PySide6 not installed")
+    import os as _os
+
+    _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("OPNGX_MODULES_DIR", str(tmp_path / "mods"))
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from opngx.ui import icons, logo, qt_app
+
+    assert not logo.qicon().isNull()
+    for name in icons.names():
+        assert not icons.icon(name).isNull(), name
+    w = qt_app.MainWindow()
+    try:
+        assert [w.tabs.tabText(i) for i in range(w.tabs.count())] == \
+            ["Start", "Extract", "Video", "Analyze", "Editor", "Docs", "System"]
+        for i in range(w.tabs.count()):
+            assert not w.tabs.tabIcon(i).isNull()
+        assert w.extract_btn.text() == "Extract" and not w.extract_btn.icon().isNull()
+    finally:
+        w.close()
+    from opngx import formats
+
+    monkeypatch.setattr(formats, "_processes_usable", lambda: False)
+    binp = str(tmp_path / "x.bin")
+    with open(binp, "wb") as fh:
+        for i in range(10):
+            fh.write(struct.pack("<Q", i) + np.full(32 * 24, i * 20, np.uint8).tobytes())
+    (tmp_path / "x.footage").write_text("<x><ResolutionX>32</ResolutionX><ResolutionY>24</ResolutionY>"
+                                        "<NumberOfImages>10</NumberOfImages></x>", encoding="utf-8")
+    st = opngx.extract(binp, str(tmp_path / "j"), fmt="jp2", mode="raw")
+    assert st.frames_written == 10

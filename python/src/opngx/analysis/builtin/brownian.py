@@ -88,7 +88,13 @@ def _welch(v: np.ndarray, fs: float, segments: int):
         acc = p if acc is None else acc + p
         count += 1
     psd = acc / count
-    psd[1:-1] *= 2  # one-sided
+    # one-sided: double every bin except DC, and except the Nyquist bin,
+    # which only exists for an even segment length (v2.1: an odd length -
+    # the default, 50000 // 16 = 3125 - left its last bin at half level)
+    if seg % 2 == 0:
+        psd[1:-1] *= 2
+    else:
+        psd[1:] *= 2
     f = np.fft.rfftfreq(seg, 1.0 / fs)
     return f, psd
 
@@ -174,7 +180,13 @@ def _fit_psd_ou(f, p, dt, fmin, fmax, exclude=None):
     if sel.sum() < 6 or dt <= 0:
         return np.nan, np.nan, np.nan, None
     fs_, ps_ = f[sel], p[sel]
-    w = 1.0 / ps_**2  # relative error
+    # Relative-error weights must come from the MODEL, not the measured
+    # spectrum: bins that happen to come out low get the largest 1/P^2
+    # weight, which biased A (so D) low and the PSD stiffness high - by
+    # 7.5 % at the default 16 segments, 30 % at 4 (v2.1 fix, verified on
+    # simulated sampled-OU data). Iteratively reweighted: start from the
+    # measured spectrum, then reweight with the fitted curve.
+    w = 1.0 / ps_**2
 
     def model(tau):
         a = np.exp(-dt / tau)
@@ -183,9 +195,16 @@ def _fit_psd_ou(f, p, dt, fmin, fmax, exclude=None):
         return sse, (A, B, a)
 
     taus = np.logspace(np.log10(dt / 4), np.log10(dt * len(f) * 2), 80)
-    tau, ex = _search_tau(model, taus)
-    if ex is None or not np.isfinite(tau):
-        return np.nan, np.nan, np.nan, None
+    tau, ex = np.nan, None
+    for _ in range(4):
+        tau, ex = _search_tau(model, taus)
+        if ex is None or not np.isfinite(tau):
+            return np.nan, np.nan, np.nan, None
+        A_, B_, a_ = ex
+        fit = A_ / (1 + a_ * a_ - 2 * a_ * np.cos(2 * np.pi * fs_ * dt)) + B_
+        if not np.all(fit > 0):
+            break
+        w = 1.0 / fit**2
     A, B, a = ex
     q = A / (2 * dt)  # AR(1) innovation variance
     s2 = q / (1 - a * a) if a < 1 else np.nan

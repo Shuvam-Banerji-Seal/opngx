@@ -1,232 +1,164 @@
-# opngx
+<p align="center"><img src="assets/logo/wordmark.png" alt="opngx" width="420"></p>
 
-<img src="assets/logo/wordmark.png" alt="opngx" width="360">
-
-**Ultra-fast, pixel-exact extraction of Optronis TimeViewer `.bin` high-speed-camera footage to PNG — all CPU cores by default, GPU-aware, CLI + GUI + Python library.**
+<p align="center"><b>Pixel-exact extraction, video export and analysis of Optronis TimeViewer high-speed-camera recordings.</b><br>
+C engine on every core · Windows studio · Python package · Linux &amp; Windows</p>
 
 ```
-3.84 GB .bin ──▶ 50 000 PNGs in ~50 s  (16 threads, RGBA)
-                 every frame verified pixel-exact against vendor exports
+3.6 GB .bin (50,000 frames) ──▶ 50,000 PNGs in ~10 s, pixel-identical to TimeViewer's export
+                            ──▶ one lossless FFV1 video, bit-exact
+                            ──▶ sub-pixel trajectory, trap stiffness, focus, drift, particles … as CSV
 ```
 
-## Why opngx
+<p align="center"><img src="docs/img/studio-analyze.png" alt="opngx studio: motion tracking of a trapped bead" width="900"></p>
 
-| | vendor exporter | naive Python | **opngx** |
-|---|---|---|---|
-| throughput (RGBA) | slow, GUI-only | ~30 fps | **880–1400 fps** |
-| raw/lossless mode (no highlight clipping) | ✗ | ✗ | ✓ |
-| grayscale fast path (2.5× faster) | ✗ | ✗ | ✓ |
-| direct MP4 render from .bin | ✗ | manual | ✓ |
-| region-of-interest crop (pixel-exact) | ✗ | manual | ✓ |
-| batch window with a preview per recording | ✗ | ✗ | ✓ |
-| in-app frame viewer + verification | ✗ | ✗ | ✓ |
-| per-frame timestamps + metadata JSON | ✗ | ✗ | ✓ |
-| **motion tracking → trajectory data file** (sub-pixel, C kernel) | ✗ | manual | ✓ |
-| **Brownian / optical-trap analysis** (MSD, PSD, stiffness) | ✗ | manual | ✓ |
-| **write your own analysis modules in the app** (editor + docs) | ✗ | ✗ | ✓ |
-| pixel-exact verification tool | ✗ | manual | built-in |
-| runs anywhere (Intel/AMD/ARM, any OS) | ✗ | ✓ | ✓ |
+## What it does
 
+**Extract** a recording (`.bin` + its `.footage` sidecar) to images:
+- **Pixel-identical to TimeViewer.** Every one of the 250,000 frames of this
+  project's recordings is verified against the vendor's own exports.
+- **Formats:** PNG, TIFF and PGM (8 or 16 bit), BMP, lossless WebP, JPEG 2000, a
+  single-file NumPy stack, or JPEG. Every lossless one is checked bit-exact.
+- **Curve:** `reference` (the recording's own brightness/contrast/gamma), `raw`
+  sensor values, or your own curve. Add a pixel-exact crop, and work on one
+  recording or a whole folder of them.
 
-## New in 2.0 — analysis modules
+**Render video** with the bundled ffmpeg:
+- H.264, H.265, VP9, AV1, ProRes, Motion-JPEG, GIF, or H.264 on the GPU.
+- **FFV1**, a lossless video whose every frame decodes to exactly the extracted
+  pixels.
 
-opngx turns recordings into **time-series data** as well as images, through
-switchable **analysis modules** (plain Python, with C kernels on the hot path):
+**Analyse** with switchable modules:
+- **motion tracking:** a sub-pixel trajectory, 0.044 px rms on a ring;
+- **Brownian motion and optical-trap analysis:** MSD, PSD with corner frequency,
+  stiffness;
+- **focus / sharpness**;
+- **stage drift** (0.06 px rms);
+- **particle counting** (C kernel);
+- **illumination flicker:** it finds the 50/100 Hz mains lines;
+- **luminosity**, **contrast** and **ROI statistics**;
+- **your own Python modules**, written and tested in the studio.
 
-* **motion tracking** — the bright spot or ring's sub-pixel trajectory per frame
-  (0.044 px RMS on a ring, 0.049 px on a spot, vs synthetic ground truth), ring
-  radius, velocity, timed by the camera's frame clock; a 50 000-frame recording in ~7 s;
-* **Brownian motion & trap analysis** — drift, MSD (D, α, localisation noise),
-  power spectrum with corner frequency, trap stiffness, step statistics, and
-  explicit warnings when the data is *not* a thermally driven trapped bead
-  (it finds the 38.8 / 98 / 103 Hz lines in this project's recordings);
-* **luminosity** and **contrast** over time;
-* **your own** — the studio's **Editor** tab (tabs, find/replace, completion,
-  validate, test on a recording) and the `Module` API
-  ([`docs/ANALYSIS.md`](docs/ANALYSIS.md)); docs of every module are generated.
-
-```bash
-opngx analyze recording.bin -m motion_tracking -o trajectory.csv
-opngx analyze Footages/ --batch -m brownian_motion -p brownian_motion.pixel_size_um=0.1 -o Results/
-```
-
-The studio has four tabs — **Extract · Analyze · Editor · Docs** — eight themes
-(Midnight, Catppuccin Latte/Frappé/Macchiato/Mocha, Tokyo Night/Day,
-Cappuccino, plus a custom accent), a zoomable pixel-exact viewer, a full crop editor,
-and scales itself from 720p to 4K. See [`docs/STUDIO.md`](docs/STUDIO.md).
-
-The reverse-engineered format and the proven transform are documented in
-[`docs/FORMAT.md`](docs/FORMAT.md); measured performance in
-[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+| | |
+|---|---|
+| <img src="docs/img/studio-start.png" alt="Start tab" width="440"> | <img src="docs/img/studio-video.png" alt="Video tab" width="440"> |
+| **Start**: the workflow, which format to choose, recent recordings | **Video**: every codec, with a bit-exactness check for FFV1/GIF |
+| <img src="docs/img/studio-extract.png" alt="Extract tab" width="440"> | <img src="docs/img/studio-system.png" alt="System tab" width="440"> |
+| **Extract**: formats, curve, crop, batch, verify | **System**: diagnostics, speed test, format check |
 
 ## Install
 
-**Windows:** run `opngx-setup-v2.0.4.exe` from the
-[latest release](https://github.com/Shuvam-Banerji-Seal/opngx/releases/latest)
-(engine, studio, ffmpeg and docs, with Start-menu shortcuts), or use the portable
-`opngx-studio-portable-v2.0.4.exe`.
+**Windows:** download `opngx-setup-v2.1.0.exe` from the
+[latest release](https://github.com/Shuvam-Banerji-Seal/opngx/releases/latest) and run it.
+- **What you get:** the studio, the `opngx-engine` command-line tool, ffmpeg, the
+  docs and the sample modules.
+- **Where it goes:** your user only, so no admin rights are needed. It adds a
+  Start-menu entry and is removable from *Settings → Apps*.
+- **No install:** run `opngx-studio-portable-v2.1.0.exe` instead.
 
-**Python package (Linux x86_64 / Windows amd64, Python ≥ 3.9):** the release
-wheels include the compiled C engine, so there's nothing to build:
+**Python (Linux x86_64 / Windows amd64, Python ≥ 3.9):** the wheels contain the compiled engine:
 
 ```bash
-pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.4/opngx-2.0.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
-pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.0.4/opngx-2.0.4-py3-none-win_amd64.whl"   # + studio
+pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.1.0/opngx-2.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.1.0/opngx-2.1.0-py3-none-win_amd64.whl"   # + the studio
 ```
 
-The Linux wheel runs on any distro with glibc ≥ 2.17 (CentOS 7 and newer). On glibc < 2.28,
-pip picks an older NumPy that still ships wheels there. The sdist
-(`opngx-2.0.4.tar.gz`) installs anywhere, with the numpy fallback.
+The Linux wheel runs on any distro with glibc ≥ 2.17. The sdist
+(`opngx-2.1.0.tar.gz`) installs anywhere and runs on numpy, producing the same
+pixels more slowly.
 
 **From source:**
 
 ```bash
-# engine (C17 + OpenMP; libdeflate recommended, zlib fallback)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-
-# python package (wraps the C engine via ctypes; numpy fallback included)
-cd python && uv sync --all-extras      # adds `opngx` and `opngx-ui` commands
-source .venv/bin/activate              # or prefix with `uv run`
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j   # engine
+cd python && uv sync --all-extras && uv run opngx-ui                       # package + studio
 ```
 
-No `-march=native` is used: one binary runs on any x86-64 (Intel or AMD, any
-generation) and ARM64, and automatically upgrades its SIMD kernels
-(AVX-512 → AVX2 → baseline) at runtime.
+## Use it
 
-## Quick start
+The studio (`opngx-ui`, or the Start-menu entry on Windows) has seven tabs:
+**Start · Extract · Video · Analyze · Editor · Docs · System**. Its guide is in
+the Docs tab and in [`docs/STUDIO.md`](docs/STUDIO.md).
+
+Command line:
 
 ```bash
-# CLI (python front-end)
-opngx info   recording.bin                      # metadata, GPUs, CPUs
-opngx extract recording.bin -o frames/          # vendor-identical PNGs
-opngx extract recording.bin -o frames/ \
-    --mode raw --bit-depth 16 --timestamps --metadata -j $(nproc)
-opngx verify reference_dir/ frames/ --subset    # pixel-exact proof
-opngx verifybin --bin recording.bin frames/     # prove vs source, no refs needed
-opngx verify ref_dir/ frames/ --json            # machine-readable report
-
-# batch: mother folder → structured output tree
-# input mother folder layout (one sub-folder per recording):
-#   Footages/
-#     SQ_100_s1/  SQ_100_s1.bin  SQ_100_s1.footage
-#     SQ_100_s2/  SQ_100_s2.bin  SQ_100_s2.footage
-opngx batch Footages/ -o FramesOut/ --layout format --format png -j 16
-# → FramesOut/SQ_100_s1/PNG/*.Png
-# → FramesOut/SQ_100_s2/PNG/*.Png
-# Every quality flag `extract` accepts works here too, and applies to the
-# WHOLE batch:
-opngx batch Footages/ -o FramesOut/ --mode custom \
-    --brightness 20 --contrast 30 --gamma 2.0 --channels gray
-# …and so does a crop, for every recording at once:
-opngx batch Footages/ -o FramesOut/ --crop 100,80,512,384
-
-# standalone C binary (no python needed)
-./build/opngx-engine batch --in-dir sbs/bin/ --out-root out_root/ \
-    --layout format -j 16 --mode custom --gamma 2.0 --crop 0,0,256,256
-
-# GUI — opngx studio (Qt)
-opngx-ui          # black / coffee-green theme, frame viewer,
-                   # video rendering, drag & drop, live progress
-                   # Batch: click "Batch folder" → Browse now opens a
-                   # FOLDER picker (select the mother folder above).
-                   # Output mirrors it: <out>/<recording>/PNG|JPG|BMP|TIF|MP4/
-                   # Also: drag & drop a folder → Batch, a .bin → Single.
-                   # "Batch window…" is a multi-pane window: a card per
-                   # recording, a large Preview of the selected one (own
-                   # scrubber, crop overlay, pixel readout), Compare (every
-                   # recording side by side at the same point in time) and
-                   # Progress & log. Each pane collapses (▾), pops out into
-                   # its own window (⧉), goes full screen (⛶, Esc to return)
-                   # or hides (✕, back via View). F11 = whole window full
-                   # screen, F10 = Preview full screen. Layout is remembered.
-                   # The settings above apply to every recording.
-                   # The UI scales itself to the monitor (720p .. 4K);
-                   # override in View → Interface scale.
-                   # "Crop…" opens a picker: drag to draw, drag inside to
-                   # move, drag an edge/corner to resize (or type x/y/w/h),
-                   # then apply it to this recording or every one it fits.
-                   # Cropping selects pixels, never resamples, so it is
-                   # pixel-exact and verifybin agrees.
-                   # Reference mode: each recording uses the B/C/G from
-                   # its OWN .footage (shown on its batch card). Editing a
-                   # value switches to custom = one curve for all.
-
-# Region of interest — pure pixel selection, no resampling
-opngx extract recording.bin -o frames/ --crop 100,80,512,384
-# output is 512x384; pixel (x,y) == LUT(source[crop_x+x, crop_y+y])
-# W or H of 0 means "to the frame edge": --crop 100,80,0,0
-
-Requires PySide6 for the Qt edition ('pip install "opngx[qt]"');
-falls back to a Tkinter UI when absent.
-
-# Video — straight from a .bin, no intermediate files
-opngx video recording.bin -o clip.mp4 --fps 30 --crf 18 \
-    --start 0 --frames 500 -m reference
-# v1.8: same curve and crop options as extract (odd crop sizes are padded
-# by one black row/column, since H.264 needs even dimensions)
-opngx video recording.bin -o roi.mp4 -m custom --gamma 1.6 --crop 17,23,151,201
+opngx info recording.bin                                   # geometry, frame rate, settings, clock
+opngx extract recording.bin -o frames/                     # TimeViewer-identical PNGs
+opngx extract recording.bin -o frames/ -F npy              # one lossless (frames, h, w) array
+opngx extract recording.bin -o frames/ -F tif --bit-depth 16 --crop 100,80,512,384
+opngx batch Footages/ -o Out/                              # a folder of recordings
+opngx video recording.bin -o clip.mp4                      # H.264
+opngx video recording.bin -o archive.mkv -c ffv1           # lossless, bit-exact
+opngx formats                                              # every format and codec, and what it keeps
+opngx analyze recording.bin -m motion_tracking -o trajectory.csv
+opngx analyze Footages/ --batch -m brownian_motion -p brownian_motion.pixel_size_um=0.1 -o Results/
+opngx verifybin --bin recording.bin frames/                # prove the files equal the source
 ```
 
-Python API:
+Python:
 
 ```python
-import opngx
+import opngx, opngx.analysis as oa
 
-meta = opngx.probe("recording.bin")             # geometry, fps, settings
-st = opngx.extract("recording.bin", "frames/", mode="raw", jobs=0,
-                   timestamps=True, progress=lambda d,t: print(f"{d}/{t}"))
-
-# v1.7: crop a region, and/or override the vendor transform
-st = opngx.extract("recording.bin", "roi/", mode="custom",
-                   brightness=20, contrast=30, gamma=2.0,
-                   crop=(100, 80, 512, 384))
-
-rep = opngx.verify("reference_dir/", "frames/") # pixel-exact check
-rep = opngx.verify_against_bin("recording.bin", "roi/", crop=(100,80,512,384))
-print(st, rep, sep="\n")
+opngx.extract("recording.bin", "frames/", fmt="png")
+opngx.render_video("recording.bin", "archive.mkv", codec="ffv1")
+run = oa.analyze("recording.bin", ["motion_tracking", "brownian_motion", "drift"])
+run["motion_tracking"].save("trajectory.csv")
+print(run["brownian_motion"].summary)
 ```
 
-## Quality modes
+## Speed
 
-| mode | what you get |
+All 16 threads of a Ryzen 7 250 (8 cores), 256×300 frames:
+
+| task | throughput |
 |---|---|
-| `reference` *(default)* | byte-for-byte the vendor display transform — verified pixel-exact against sample exports. Brightness/contrast/gamma come from **each recording's own `.footage`** (decimal commas such as `1,5` are understood) |
-| `raw` | identity LUT — sensor-faithful; preserves highlights the vendor export clips at raw ≥ 139 |
-| `custom` | your brightness/contrast/gamma |
+| PNG extraction (default) | **~5,200 frames/s**: 50,000 frames in 9.7 s, first file after 0.015 s |
+| TIFF / PGM / BMP | 12,000 – 55,000 frames/s |
+| FFV1 lossless video | ~2,000 frames/s |
+| motion tracking (C kernel) | ~47,000 frames/s |
+| focus, luminosity, flicker, ROI statistics | 3,000 – 59,000 frames/s |
 
-Add `--bit-depth 16` for a 16-bit container (values ×257) and
-`--channels gray` for the colortype-0 fast path (identical pixels, 2.5× faster,
-36% smaller). Optional upscaling is deliberately **not** silently applied:
-resampling creates no new information and would break verifiability.
+The engine streams the file with read-ahead, keeps every core busy, and on
+Windows opts out of power throttling while it works. Numbers and method:
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
-## How it uses your hardware
+## Exactness
 
-* **All cores, always on**: an OpenMP pool consumes frames dynamically
-  (`OMP_PROC_BIND=close` set automatically when unset).
-* **GPU**: detected and reported (`opngx info`). Compression — the actual
-  bottleneck — has no production ROCm library (hipCOMP is an unoptimized
-  preview; nvCOMP is CUDA-only), so the hot path stays on the SIMD-dispatched
-  CPU where it is measurably fastest for 76 KB frames. See
-  [benchmarks](docs/BENCHMARKS.md#why-not-gpu).
+- **Lossless outputs** are written and then decoded with an independent reader
+  and compared pixel by pixel:
+  - the format check in the System tab;
+  - `scripts/format_quality.py`;
+  - the test suite.
+- **Lossy outputs** are listed with their measured error in
+  [`docs/OUTPUTS.md`](docs/OUTPUTS.md).
+- **Proof against the source:** `opngx verifybin` checks extracted files against
+  the `.bin` itself.
+- **Analysis modules** are validated against synthetic ground truth (see
+  [`docs/ANALYSIS.md`](docs/ANALYSIS.md)).
 
-## Verification guarantee
+## Documentation
 
-`opngx verify` decodes both directories' PNG streams, reconstructs rows through
-the full PNG filter pipeline (None/Sub/Up/Average/Paeth) and compares decoded
-pixels — proving equality independent of encoder, zlib build, or container
-layout. The full 50 000-frame reference set passes with zero mismatches.
+| guide | contents |
+|---|---|
+| [STUDIO.md](docs/STUDIO.md) | the studio, tab by tab, shortcuts, settings |
+| [OUTPUTS.md](docs/OUTPUTS.md) | every image format and video codec, measured |
+| [ANALYSIS.md](docs/ANALYSIS.md) | the analysis modules, the data files, writing your own |
+| [FORMAT.md](docs/FORMAT.md) | the reverse-engineered `.bin` / `.footage` format and the transform |
+| [BENCHMARKS.md](docs/BENCHMARKS.md) | performance measurements |
+| [Release notes](https://github.com/Shuvam-Banerji-Seal/opngx/releases) | what changed, version by version |
 
 ## Development
 
 ```bash
-bash tests/test_engine.sh            # 16 end-to-end + edge-case gates
+bash tests/test_engine.sh                                  # engine: 46 end-to-end gates
 (cd python && uv sync --all-extras && uv run pytest tests -q)
-./build/opngx-engine bench --bin X.bin --frames 4000 -j 16
+python scripts/format_quality.py REC.bin --frames 1000     # what every format keeps
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the wiki for format internals,
-ABI notes, and tuning guides.
+CI builds and tests Linux and Windows, including the packaged studio's selftests
+on real Windows (UI, engine, analysis, batch, every video codec, speed) and an
+install/uninstall test of the installer.
 
 ## License
 

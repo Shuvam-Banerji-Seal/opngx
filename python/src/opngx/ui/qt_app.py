@@ -30,9 +30,13 @@ try:
     from PySide6 import QtCore, QtGui, QtWidgets
     from PySide6.QtCore import Qt, Signal
 
+    from opngx.ui import icons as _icons
+
     _QT = True
-except Exception:  # pragma: no cover
+    _QT_ERROR = ""
+except Exception as _exc:  # pragma: no cover
     _QT = False
+    _QT_ERROR = f"{type(_exc).__name__}: {_exc}"  # shown if no UI can start (v2.1)
 
 
 QSS = """
@@ -465,35 +469,16 @@ def _detect_gpus() -> list[str]:
 
 
 def _app_icon() -> "QtGui.QIcon":
-    """Window icon from the shipped logo suite (A-54).
+    """Window / taskbar icon, drawn from the logo geometry at every size
+    (v2.1). v2.0 looked for <_MEIPASS>/icon.png while the spec bundled
+    assets/logo/icon.png, so the packaged studio never had its icon; a
+    drawn icon cannot go missing."""
+    try:
+        from opngx.ui import logo
 
-    Resolution order mirrors the engine discovery: PyInstaller _MEIPASS
-    first, then the source tree, then next to the installed exe. A missing
-    or unreadable file yields a null icon, which Qt renders as the default
-    — never a crash, because the studio must start on any machine.
-    """
-    import sys
-
-    here = os.path.dirname(os.path.abspath(__file__))
-    roots = []
-    mei = getattr(sys, "_MEIPASS", None)
-    if mei:
-        roots.append(mei)
-    roots += [
-        os.path.abspath(os.path.join(here, "..", "..", "..", "..", "assets", "logo")),
-        os.path.abspath(
-            os.path.join(here, "..", "..", "..", "..", "..", "assets", "logo")
-        ),
-        os.path.join(os.path.dirname(sys.executable), "assets", "logo"),
-        os.path.join(os.path.dirname(sys.executable), "assets_logo"),
-    ]
-    for r in roots:
-        p = os.path.join(r, "icon.png")
-        if os.path.isfile(p):
-            icon = QtGui.QIcon(p)
-            if not icon.isNull():
-                return icon
-    return QtGui.QIcon()
+        return logo.qicon()
+    except Exception:  # noqa: BLE001 - never block start-up over an icon
+        return QtGui.QIcon()
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -531,6 +516,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build()
         self._on_scope_changed(False)  # set initial browse labels
         self._restore_layout()
+        self._install_shortcuts()
+        try:  # first start: the Start tab; afterwards the last tab used
+            last = self._settings.value("ui/last_tab", None)
+            self.tabs.setCurrentIndex(int(last) if last is not None else 0)
+        except Exception:  # noqa: BLE001
+            self.tabs.setCurrentIndex(0)
 
     # ------------------------------------------------------------- helpers
     def _card(self, title: str) -> tuple["QtWidgets.QFrame", "QtWidgets.QVBoxLayout"]:
@@ -754,10 +745,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---------------- header ----------------
         head = QtWidgets.QHBoxLayout()
+        from opngx.ui.logo import LogoMark
+
+        # animated while extracting / rendering / analysing (see _set_state)
+        self.logo_mark = LogoMark(self._scaling.px(46), animated=False, period_ms=1800)
+        self.logo_mark.setToolTip("opngx — the logo animates while work is running")
+        head.addWidget(self.logo_mark)
+        head.addSpacing(self._scaling.px(6))
         logo_box = QtWidgets.QVBoxLayout()
         t = QtWidgets.QLabel("opngx studio")
         t.setObjectName("title")
-        s = QtWidgets.QLabel("Optronis footage → images · pixel-exact · all cores")
+        s = QtWidgets.QLabel("Optronis high-speed footage → images · video · measurements — pixel-exact, all cores")
         s.setObjectName("subtitle")
         logo_box.addWidget(t)
         logo_box.addWidget(s)
@@ -815,7 +813,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ext_lay = QtWidgets.QVBoxLayout(extract_page)
         ext_lay.setContentsMargins(0, 8, 0, 0)
         ext_lay.setSpacing(10)
-        self.tabs.addTab(extract_page, "⬇  Extract")
+        self.tabs.addTab(extract_page, "Extract")
 
         # ---------------- splitter body ----------------
         self.split = QtWidgets.QSplitter(Qt.Horizontal)
@@ -836,10 +834,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bin_edit.setPlaceholderText(
             "path to .bin … or just drag a file onto this window"
         )
-        self._browse_btn = browse = QtWidgets.QPushButton(" Open…")
-        self.probe_btn = probe = QtWidgets.QPushButton(" Read info")
-        browse.setIcon(self._std_icon(QtWidgets.QStyle.SP_DirOpenIcon))
-        probe.setIcon(self._std_icon(QtWidgets.QStyle.SP_FileDialogInfoView))
+        self._browse_btn = browse = QtWidgets.QPushButton("Open…")
+        _icons.set_icon(browse, "folder-open", "text")
+        self.probe_btn = probe = QtWidgets.QPushButton("Read info")
+        _icons.set_icon(probe, "info", "text")
         row.addWidget(self.bin_edit, 1)
         row.addWidget(browse)
         row.addWidget(probe)
@@ -1031,7 +1029,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.chan_combo = QtWidgets.QComboBox()
         self.chan_combo.addItems(["rgba", "gray"])
         self.fmt_combo = QtWidgets.QComboBox()
-        self.fmt_combo.addItems(["png", "jpg", "bmp", "tif"])
+        from opngx import formats as _formats
+
+        for _k, _f in _formats.FORMATS.items():
+            self.fmt_combo.addItem(_k)
+            self.fmt_combo.setItemData(self.fmt_combo.count() - 1,
+                                       f"{_f.label}: {'lossless' if _f.lossless else 'LOSSY'}. {_f.summary}",
+                                       Qt.ToolTipRole)
         self.jpg_slider = QtWidgets.QSlider(Qt.Horizontal)
         self.jpg_slider.setRange(40, 100)
         self.jpg_slider.setValue(90)
@@ -1059,7 +1063,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "Extension follows automatically.",
         )
         jrow = QtWidgets.QHBoxLayout()
-        jlab = QtWidgets.QLabel("jpeg q")
+        jlab = self.jpg_qlabel = QtWidgets.QLabel("quality")
         jlab.setObjectName("fieldlabel")
         self._scaling.fix(jlab, "setFixedWidth", 78)
         jrow.addWidget(jlab)
@@ -1068,8 +1072,10 @@ class MainWindow(QtWidgets.QMainWindow):
         tv.addLayout(jrow)
         self._tip(
             self.jpg_slider,
-            "JPEG quality",
-            "40–100. Higher = better fidelity, bigger files.",
+            "Quality (JPEG, WebP)",
+            "JPEG: 40–100, higher = better fidelity, bigger files (always lossy). "
+            "WebP: 100 = LOSSLESS (default), lower = lossy and much smaller. "
+            "Other formats are lossless and have no quality setting.",
         )
         self.jpg_slider.valueChanged.connect(
             lambda v_: self.jpg_label.setText(str(int(v_)))
@@ -1150,8 +1156,8 @@ class MainWindow(QtWidgets.QMainWindow):
         out_card, ov = self._card("output")
         orow = QtWidgets.QHBoxLayout()
         self.out_edit = QtWidgets.QLineEdit()
-        obrowse = QtWidgets.QPushButton(" Choose…")
-        obrowse.setIcon(self._std_icon(QtWidgets.QStyle.SP_DialogSaveButton))
+        obrowse = QtWidgets.QPushButton("Choose…")
+        _icons.set_icon(obrowse, "folder", "text")
         orow.addWidget(self.out_edit, 1)
         orow.addWidget(obrowse)
         ov.addLayout(orow)
@@ -1179,6 +1185,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._tip(obrowse, "Choose…", "Select the output directory.")
         self.fmt_combo.currentTextChanged.connect(self._fmt_changed)
+        self._fmt_changed(self.fmt_combo.currentText())  # slider state for the initial format
 
         # ---- resizable left column (v1.6) ----
         # settings scroll when space is tight, and the OUTPUT pane is a
@@ -1277,10 +1284,12 @@ class MainWindow(QtWidgets.QMainWindow):
         vtools.addWidget(self.frame_lbl)
         wv.addLayout(vtools)
         vrow = QtWidgets.QHBoxLayout()
-        self.prev_btn = QtWidgets.QPushButton("◀")
+        self.prev_btn = QtWidgets.QPushButton("")
+        _icons.set_icon(self.prev_btn, "chev-left", "text")
         self.prev_btn.setObjectName("icon")
         self._scaling.fix(self.prev_btn, "setFixedWidth", 44)
-        self.next_btn = QtWidgets.QPushButton("▶")
+        self.next_btn = QtWidgets.QPushButton("")
+        _icons.set_icon(self.next_btn, "chev-right", "text")
         self.next_btn.setObjectName("icon")
         self._scaling.fix(self.next_btn, "setFixedWidth", 44)
         self.frame_slider = QtWidgets.QSlider(Qt.Horizontal)
@@ -1341,7 +1350,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---------------- action bar ----------------
         bar = QtWidgets.QHBoxLayout()
-        self.extract_btn = QtWidgets.QPushButton("▶  Extract")
+        self.extract_btn = QtWidgets.QPushButton("Extract")
+        _icons.set_icon(self.extract_btn, "play", "on_accent")
         self.extract_btn.setObjectName("accent")
         self.extract_btn.setToolTip(
             "<b>Extract frames</b><br>Decode the recording with the quality "
@@ -1349,28 +1359,30 @@ class MainWindow(QtWidgets.QMainWindow):
             "&lt;output&gt;/&lt;recording&gt;/&lt;FMT&gt;/ (e.g. "
             "out\\SQ_100_s1\\PNG\\). Progress bar + CPU chip show it working."
         )
-        self.cancel_btn = QtWidgets.QPushButton("■  Cancel")
+        self.cancel_btn = QtWidgets.QPushButton("Cancel")
+        _icons.set_icon(self.cancel_btn, "stop", "on_danger")
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.setToolTip(
             "<b>Stop the current job</b><br>Works for both extraction and "
             "MP4 rendering; finishes the frame in flight, then stops."
         )
         self.cancel_btn.setEnabled(False)
-        video_btn = QtWidgets.QPushButton("🎬  Render video…")
+        video_btn = QtWidgets.QPushButton("Video…")
+        _icons.set_icon(video_btn, "film", "text")
         video_btn.setToolTip(
             "<b>Render MP4</b><br>Encode a frame range straight to H.264 "
             "with ffmpeg. A progress bar opens in this dialog and mirrors "
             "on the main bar below."
         )
-        verify = QtWidgets.QPushButton("✓  Verify…")
-        verify.setIcon(self._std_icon(QtWidgets.QStyle.SP_DialogApplyButton))
+        verify = QtWidgets.QPushButton("Verify…")
+        _icons.set_icon(verify, "check", "text")
         verify.setToolTip(
             "<b>Verify pixel-exactness</b><br>Pick a reference folder (or use "
             "the source bin via the button next to this) — every frame is "
             "decoded and compared."
         )
-        verify_bin = QtWidgets.QPushButton("✓  Verify vs source bin")
-        verify_bin.setIcon(self._std_icon(QtWidgets.QStyle.SP_BrowserReload))
+        verify_bin = QtWidgets.QPushButton("Verify vs source bin")
+        _icons.set_icon(verify_bin, "shield", "text")
         verify_bin.setToolTip(
             "<b>Verify against the recording itself</b><br>No vendor "
             "reference folder needed: every extracted frame is re-derived "
@@ -1382,7 +1394,8 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.addWidget(video_btn)
         bar.addWidget(verify)
         bar.addWidget(verify_bin)
-        self.batch_btn = QtWidgets.QPushButton("▦  Batch window…")
+        self.batch_btn = QtWidgets.QPushButton("Batch window…")
+        _icons.set_icon(self.batch_btn, "layers", "text")
         self.batch_btn.setToolTip(
             "<b>Batch window</b><br>One card per recording with a real decoded "
             "frame, its geometry, frame count and crop. Set brightness / "
@@ -1391,7 +1404,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.batch_btn.clicked.connect(self._open_batch_window)
         bar.addWidget(self.batch_btn)
-        self.crop_btn = QtWidgets.QPushButton("✂  Crop…")
+        self.crop_btn = QtWidgets.QPushButton("Crop…")
+        _icons.set_icon(self.crop_btn, "crop", "text")
         self.crop_btn.setToolTip(
             "<b>Region of interest</b><br>Drag a rectangle over the frame to "
             "extract only that part of every frame. Pixels are selected, never "
@@ -1422,11 +1436,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.docs_view = DocsView(self)
         self.module_editor.modulesChanged.connect(self._on_modules_changed)
         self.module_editor.docsChanged.connect(self.docs_view.refresh)
+        from opngx.ui.home_ui import HomeView
+        from opngx.ui.system_ui import SystemView
+        from opngx.ui.video_ui import VideoView
+
+        self.home_view = HomeView(self)
+        self.video_view = VideoView(self)
+        self.system_view = SystemView(self)
         self._hosts = {}
         for page, title in (
-            (self.analyze_view, "◎  Analyze"),
-            (self.module_editor, "✎  Editor"),
-            (self.docs_view, "📖  Docs"),
+            (self.video_view, "Video"),
+            (self.analyze_view, "Analyze"),
+            (self.module_editor, "Editor"),
+            (self.docs_view, "Docs"),
+            (self.system_view, "System"),
         ):
             host = QtWidgets.QWidget()
             hl = QtWidgets.QVBoxLayout(host)
@@ -1434,13 +1457,27 @@ class MainWindow(QtWidgets.QMainWindow):
             hl.addWidget(page)
             self.tabs.addTab(host, title)
             self._hosts[id(page)] = host
-        self.tabs.setTabToolTip(0, "Extract frames, render video, verify — the classic studio")
-        self.tabs.setTabToolTip(
-            1, "Run analysis modules (motion tracking, luminosity, contrast, yours) "
-            "and export their data files"
-        )
-        self.tabs.setTabToolTip(2, "Write, validate and test analysis modules (Python) and docs (Markdown)")
-        self.tabs.setTabToolTip(3, "Guides, the generated API reference, every module's reference, your docs")
+        home_host = QtWidgets.QWidget()
+        hhl = QtWidgets.QVBoxLayout(home_host)
+        hhl.setContentsMargins(0, 8, 0, 0)
+        hhl.addWidget(self.home_view)
+        self.tabs.insertTab(0, home_host, "Start")
+        # name -> index; v2.1 order: Start Extract Video Analyze Editor Docs System
+        self._tab_index = {"start": 0, "extract": 1, "video": 2, "analyze": 3, "editor": 4, "docs": 5, "system": 6}
+        for name, icon, tip in (
+            ("start", "home", "What opngx does, the three steps of a session, which output to choose, recent recordings"),
+            ("extract", "download", "One image per frame: PNG, TIFF, PGM, BMP, WebP, JPEG 2000, NumPy stack, JPEG; crop; batch; verify"),
+            ("video", "film", "One video file: H.264, H.265, VP9, AV1, lossless FFV1, ProRes, MJPEG, GIF, GPU H.264"),
+            ("analyze", "chart", "Analysis modules (motion tracking, Brownian/trap, focus, drift, particles, flicker, "
+                                 "ROI statistics, yours) and their data files"),
+            ("editor", "code", "Write, validate and test analysis modules (Python) and docs (Markdown)"),
+            ("docs", "book", "Guides, the generated API reference, every module's reference, your docs"),
+            ("system", "cpu", "This computer, the engine, ffmpeg and your folders; speed test and format check"),
+        ):
+            i = self._tab_index[name]
+            _icons.set_tab_icon(self.tabs, i, icon)
+            self.tabs.setTabToolTip(i, tip)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         # wiring
         browse.clicked.connect(self._pick_source)
@@ -1448,7 +1485,7 @@ class MainWindow(QtWidgets.QMainWindow):
         obrowse.clicked.connect(self._pick_out)
         self.extract_btn.clicked.connect(self._start)
         self.cancel_btn.clicked.connect(self._cancel)
-        video_btn.clicked.connect(self._render_video_dialog)
+        video_btn.clicked.connect(lambda: self.goto_tab("video"))
         verify.clicked.connect(self._verify)
         verify_bin.clicked.connect(self._verify_bin)
 
@@ -1491,7 +1528,56 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
 
+    def goto_tab(self, name: str) -> None:
+        i = getattr(self, "_tab_index", {}).get(name)
+        if i is not None:
+            self.tabs.setCurrentIndex(i)
+
+    def _on_tab_changed(self, i: int) -> None:
+        try:
+            self._settings.setValue("ui/last_tab", int(i))
+        except Exception:  # noqa: BLE001
+            pass
+        if i == self._tab_index.get("video") and hasattr(self, "video_view"):
+            self.video_view.refresh()
+
+    def _install_shortcuts(self) -> None:
+        sc = QtGui.QShortcut
+        ks = QtGui.QKeySequence
+        sc(ks("Ctrl+O"), self, activated=lambda: (self.goto_tab("extract"), self._pick_source()))
+        sc(ks("Ctrl+E"), self, activated=self._start)
+        sc(ks("Escape"), self, activated=self._cancel_all)
+        for n, name in enumerate(("start", "extract", "video", "analyze", "editor", "docs", "system"), start=1):
+            sc(ks(f"Ctrl+{n}"), self, activated=lambda nm=name: self.goto_tab(nm))
+
+    def _cancel_all(self) -> None:
+        if self._running:
+            self._cancel_requested = True
+            if hasattr(self, "video_view"):
+                self.video_view.stop()
+
     def closeEvent(self, e: Any) -> None:  # noqa: N802
+        # v2.1: quitting mid-run used to kill the daemon worker threads in
+        # the middle of a file; ask, then cancel and give them a moment
+        busy_batch = getattr(self, "_batch_win", None) is not None and getattr(self._batch_win, "_running", False)
+        if self._running or busy_batch:
+            r = QtWidgets.QMessageBox.question(
+                self, "opngx", "Work is still running (extraction, video or batch).\n\nStop it and quit?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+            if r != QtWidgets.QMessageBox.Yes:
+                e.ignore()
+                return
+            self._cancel_all()
+            if busy_batch:
+                try:
+                    self._batch_win.cancel()
+                except Exception:  # noqa: BLE001
+                    pass
+            t0 = time.perf_counter()
+            while (self._running or (busy_batch and getattr(self._batch_win, "_running", False))) \
+                    and time.perf_counter() - t0 < 5:
+                QtWidgets.QApplication.processEvents()
+                time.sleep(0.02)
         try:
             self._settings.setValue("win/geometry", self.saveGeometry())
             self._settings.setValue("split/main", self.split.sizes())
@@ -1956,10 +2042,33 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ------------------------------------------------------------- actions
     def _fmt_changed(self, fmt: str) -> None:
-        extmap = {"png": ".Png", "jpg": ".jpg", "bmp": ".bmp", "tif": ".tif"}
+        from opngx import formats as _formats
+
+        extmap = {k: f.ext for k, f in _formats.FORMATS.items()}
         cur = self.ext_edit.text()
         if cur in extmap.values():
             self.ext_edit.setText(extmap.get(fmt, ".Png"))
+        # one quality slider, its meaning follows the format (v2.1)
+        q = getattr(self, "_quality_by_fmt", None)
+        if q is None:
+            q = self._quality_by_fmt = {"jpg": 90, "webp": 100}
+        prev = getattr(self, "_quality_fmt", "jpg")
+        if prev in q:
+            q[prev] = int(self.jpg_slider.value())
+        self._quality_fmt = fmt
+        if fmt in q:
+            self.jpg_slider.setEnabled(True)
+            self.jpg_slider.setRange(40 if fmt == "jpg" else 1, 100)
+            self.jpg_slider.setValue(q[fmt])
+            self.jpg_qlabel.setText("webp q" if fmt == "webp" else "jpeg q")
+        else:
+            self.jpg_slider.setEnabled(False)
+            self.jpg_qlabel.setText("quality")
+        info = _formats.FORMATS.get(fmt)
+        if info is not None and hasattr(self, "depth_combo"):
+            if 16 not in info.bit_depths:
+                self.depth_combo.setCurrentText("8")
+            self.depth_combo.setEnabled(16 in info.bit_depths)
 
     def _log(self, msg: str, tag: str = "info") -> None:
         from opngx.ui import themes
@@ -1977,7 +2086,7 @@ class MainWindow(QtWidgets.QMainWindow):
         path field adapt to the scope (v1.6.2: batch picks a FOLDER)."""
         for w in (self.w_spin, self.h_spin):
             w.setEnabled(not batch)
-        self._browse_btn.setText("Choose folder…" if batch else " Open…")
+        self._browse_btn.setText("Choose folder…" if batch else "Open…")
         self.bin_edit.setPlaceholderText(
             "path to the mother folder that contains one folder per "
             "recording … or just drop it here"
@@ -2088,7 +2197,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if self._batch_win is not None:
             try:
+                if getattr(self._batch_win, "_running", False):
+                    self._batch_win.show()
+                    self._batch_win.raise_()
+                    QtWidgets.QMessageBox.information(
+                        self, "opngx", "A batch is still running in the batch window. Wait for it or "
+                        "cancel it there before starting another.")
+                    return
                 self._batch_win.close()
+                self._batch_win.deleteLater()  # v2.1: was only hidden, kept forever
             except RuntimeError:
                 pass
         win = BatchWindow(
@@ -2283,6 +2400,16 @@ class MainWindow(QtWidgets.QMainWindow):
         ]
         self._fill_info(rows)
         self._log(f"probed {os.path.basename(m.bin_path)}")
+        try:
+            from opngx.ui.home_ui import remember_recent
+
+            remember_recent(m.bin_path)
+            if hasattr(self, "home_view"):
+                self.home_view.refresh_recent()
+            if hasattr(self, "video_view"):
+                self.video_view.refresh()
+        except Exception:  # noqa: BLE001 - convenience only
+            pass
         self.frame_slider.blockSignals(True)
         self.frame_slider.setRange(0, max(0, m.capacity_frames - 1))
         start_at = int(self.start_spin.value())
@@ -2308,7 +2435,10 @@ class MainWindow(QtWidgets.QMainWindow):
             bit_depth=int(self.depth_combo.currentText()),
             channels=0 if self.chan_combo.currentText() == "gray" else 6,
             fmt=self.fmt_combo.currentText(),
-            jpeg_quality=int(self.jpg_slider.value()),
+            jpeg_quality=int(self.jpg_slider.value()) if self.fmt_combo.currentText() == "jpg"
+            else int(getattr(self, "_quality_by_fmt", {}).get("jpg", 90)),
+            webp_quality=int(self.jpg_slider.value()) if self.fmt_combo.currentText() == "webp"
+            else int(getattr(self, "_quality_by_fmt", {}).get("webp", 100)),
             jobs=int(self.jobs_slider.value()),
             level=int(self.level_slider.value()),
             prefix=self.prefix_edit.text(),
@@ -2574,6 +2704,8 @@ class MainWindow(QtWidgets.QMainWindow):
         box.exec()
 
     def _set_state(self, running: bool) -> None:
+        if hasattr(self, "logo_mark"):
+            self.logo_mark.set_animated(bool(running))
         self.extract_btn.setEnabled(not running)
         self.cancel_btn.setEnabled(running)
 
@@ -2587,11 +2719,40 @@ def main() -> int:
         )
     app = QtWidgets.QApplication([])
     install_crash_handlers()
+    _windows_app_identity()
+    app.setWindowIcon(_app_icon())
+    splash = None
+    try:
+        from opngx.ui.logo import Splash
+
+        splash = Splash(opngx.__version__)
+        splash.show_centered()
+    except Exception:  # noqa: BLE001 - the splash is decoration
+        splash = None
     apply_theme(app)
+    if splash:
+        splash.message("copying sample modules…")
     seed_user_samples()
+    if splash:
+        splash.message("building the studio…")
     win = MainWindow()
     win.show()
+    if splash:
+        QtCore.QTimer.singleShot(350, splash.close)
     return app.exec()
+
+
+def _windows_app_identity() -> None:
+    """Windows: give the process its own taskbar identity, so the studio
+    groups under its own icon instead of python's / the launcher's."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("opngx.studio")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def seed_user_samples() -> list[str]:

@@ -9,6 +9,7 @@ batches on a thread pool (numpy releases the GIL in its kernels);
 
 from __future__ import annotations
 
+import copy as _copy
 import os
 import time
 import traceback
@@ -185,7 +186,16 @@ def analyze(
     def frames_for(idx: np.ndarray) -> np.ndarray:
         px = mm[idx, 8 : 8 + W * H].reshape(-1, H, W)
         win = np.ascontiguousarray(px[:, cy : cy + ch, cx : cx + cw])
-        return np.take(lut, win) if lut is not None else win
+        out = np.take(lut, win) if lut is not None else win
+        # every module of the pass gets this SAME array: read-only, so one
+        # module modifying it in place cannot corrupt the others' input
+        # (v2.1; it raises "assignment destination is read-only" instead)
+        out.setflags(write=False)
+        return out
+
+    def first(k: int) -> np.ndarray:
+        k = max(1, min(int(k), n))
+        return frames_for(idx_all[:k])
 
     def sampler(k: int) -> np.ndarray:
         k = max(1, min(int(k), n))
@@ -208,6 +218,7 @@ def analyze(
             crop=(cx, cy, cw, ch),
             source=source,
             _sampler=sampler,
+            _first=first,
             log=log,
         )
         try:
@@ -225,7 +236,8 @@ def analyze(
     par = [m for m in live if getattr(m, "parallel", True)]
     seq = [m for m in live if not getattr(m, "parallel", True)]
     parts: dict[str, list[dict[str, np.ndarray]]] = {type(m).name: [] for m in live}
-    chunks = [(s, min(s + batch, n)) for s in range(0, n, max(1, int(batch)))]
+    batch = max(1, int(batch))  # batch <= 0 used to give empty / negative chunks
+    chunks = [(s, min(s + batch, n)) for s in range(0, n, batch)]
     jobs = jobs or os.cpu_count() or 1
 
     def call(m: Module, frames: np.ndarray, sl: slice) -> dict[str, np.ndarray]:
@@ -233,7 +245,11 @@ def analyze(
         base = ctxs[name]
         # a shallow per-batch view of the context: parallel batches must
         # not see each other's frame_index
-        ctx = Context(**{**base.__dict__, "frame_index": idx_all[sl], "timestamp_raw": ts_all[sl]})
+        # copy.copy keeps attributes a module set on ctx in begin() (the
+        # constructor rejected them: "unexpected keyword argument")
+        ctx = _copy.copy(base)
+        ctx.frame_index = idx_all[sl]
+        ctx.timestamp_raw = ts_all[sl]
         ctx.summary = base.summary
         ctx.state = base.state
         return _coerce_output(name, m.process(frames, ctx), len(frames))
@@ -339,6 +355,7 @@ def analyze(
             new = m.finish(table, ctx)
             if new is not None:
                 table = dict(new)
+            _check_finished(name, table, rows)
             tables = _check_tables(name, ctx.tables)
         except Exception as exc:  # noqa: BLE001
             err = ModuleError(name, f"finish() failed: {exc}", traceback.format_exc())
@@ -400,6 +417,19 @@ def analyze(
     run.frames = rows
     run.seconds = time.perf_counter() - t0
     return run
+
+
+def _check_finished(name: str, table: dict, rows: int) -> None:
+    """The table finish() returns: the time columns kept, every column 1-D
+    and one value per analysed frame (v2.1 - the dry run checked this, the
+    real run did not, so saving crashed or silently truncated)."""
+    for req in ("frame", "timestamp_raw", "time_s"):
+        if req not in table:
+            raise ModuleError(name, f"finish() dropped the '{req}' column")
+    for k, v in table.items():
+        a = np.asarray(v)
+        if a.ndim != 1 or len(a) != rows:
+            raise ModuleError(name, f"finish(): column '{k}' has shape {a.shape}, expected ({rows},)")
 
 
 def _check_tables(name: str, tables: dict) -> dict:

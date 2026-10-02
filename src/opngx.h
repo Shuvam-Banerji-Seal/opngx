@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define OPNGX_VERSION "2.0.4"
+#define OPNGX_VERSION "2.1.0"
 
 /* Default DEFLATE level (v2.0.4: was 6). Measured on all five project
  * recordings with libdeflate: level 1 is 2.8-4.3x faster than 6 for files
@@ -31,7 +31,8 @@ typedef enum {
     OPNGX_FMT_PNG = 0,
     OPNGX_FMT_BMP = 1,
     OPNGX_FMT_TIF = 2,
-    OPNGX_FMT_JPG = 3
+    OPNGX_FMT_JPG = 3,
+    OPNGX_FMT_PGM = 4           /* v2.1: Netpbm P5, 8 or 16 bit */
 } opngx_format;
 
 /* Quality modes */
@@ -162,6 +163,23 @@ int opngx_track(const uint8_t *frames, int64_t k, int h, int w,
 
 /* k frames of npx pixels -> k x 256 int64 histograms. Returns 0 / -1. */
 int opngx_hist256(const uint8_t *frames, int64_t k, int64_t npx, int64_t *out);
+
+/* Focus measures (v2.1), per frame of k contiguous (h, w) uint8 images:
+ * variance of the 4-neighbour Laplacian and mean squared Sobel gradient
+ * over the interior (h-2)x(w-2) pixels, and pixel variance / mean over
+ * all pixels. Frames smaller than 3x3 give 0. Returns 0 / -1. */
+int opngx_focus(const uint8_t *frames, int64_t k, int h, int w,
+                double *laplacian_var, double *tenengrad, double *norm_variance);
+
+/* Blobs (v2.1): per frame, connected regions of pixels > thr (dark == 0)
+ * or < thr (dark != 0), 8-connected if conn8 else 4-connected. Regions of
+ * at least min_area pixels are counted. Outputs (k-long): count, total
+ * area, mean area, largest area and the centroid of the largest region
+ * (frame coordinates; NaN when there is none). 0 ok, -1 bad args,
+ * -2 allocation failure. */
+int opngx_blobs(const uint8_t *frames, int64_t k, int h, int w, int thr, int dark,
+                int min_area, int conn8, int32_t *count, double *total_area,
+                double *mean_area, double *max_area, double *cx, double *cy);
 
 /* Utilities */
 const char *opngx_version(void);

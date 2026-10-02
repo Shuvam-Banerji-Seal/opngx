@@ -20,7 +20,7 @@ from .video import (
     resolve_transform,
 )
 
-__version__ = "2.0.4"
+__version__ = "2.1.0"
 
 
 def engine_diagnostics() -> list[str]:

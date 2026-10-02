@@ -116,7 +116,7 @@ def _render_frame(args):
     else:
         src_w, crop_x, crop_y = w, 0, 0
 
-    ext = {"png": ".Png", "bmp": ".bmp", "tif": ".tif", "jpg": ".jpg"}[fmt]
+    ext = {"png": ".Png", "bmp": ".bmp", "tif": ".tif", "jpg": ".jpg", "pgm": ".pgm"}[fmt]
     absolute = start + frame_index
     lut = build_lut(brightness, contrast, gamma)
     with open(bin_path, "rb") as f:
@@ -128,11 +128,23 @@ def _render_frame(args):
         rows = np.frombuffer(f.read(src_w * h), dtype=np.uint8).reshape(h, src_w)
     gray = rows[:, crop_x : crop_x + w]
     mapped = lut[gray]
+    if fmt == "pgm":  # Netpbm P5, as the engine writes it (v2.1)
+        if bit_depth == 16:
+            body = (mapped.astype(np.uint16) * 257).astype(">u2").tobytes()
+            return absolute, (ext, f"P5\n{w} {h}\n65535\n".encode() + body)
+        return absolute, (ext, f"P5\n{w} {h}\n255\n".encode() + mapped.tobytes())
+    if fmt == "tif" and bit_depth == 16:
+        from io import BytesIO
+        from PIL import Image as PILImage
+
+        buf = BytesIO()
+        PILImage.fromarray(np.ascontiguousarray(mapped.astype(np.uint16) * 257)).save(buf, format="TIFF")
+        return absolute, (ext, buf.getvalue())
     if fmt != "png":
         from io import BytesIO
         from PIL import Image as PILImage
 
-        im = PILImage.fromarray(mapped, mode="L")
+        im = PILImage.fromarray(np.ascontiguousarray(mapped, dtype=np.uint8))
         buf = BytesIO()
         if fmt == "jpg":
             im.convert("RGB").save(buf, format="JPEG", quality=jpeg_quality)
@@ -176,8 +188,8 @@ def extract_frames(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     fmt = {"jpeg": "jpg", "tiff": "tif"}.get(fmt, fmt)
-    if fmt != "png":
-        bit_depth = 8  # 16-bit container is PNG-only, as in the engine
+    if fmt in ("bmp", "jpg"):
+        bit_depth = 8  # 8-bit containers, as in the engine
     # same rule as the native path: the ".Png" default follows the format
     user_ext = "" if (ext == ".Png" and fmt != "png") else (ext or "")
     jobs = jobs or os.cpu_count() or 1

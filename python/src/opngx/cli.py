@@ -10,7 +10,10 @@ from pathlib import Path
 import opngx
 
 # default extension per container, matching the C engine and the studio
-_DEFAULT_EXT = {"png": ".Png", "jpg": ".jpg", "bmp": ".bmp", "tif": ".tif"}
+from . import formats as _formats
+from .video import CODECS as _CODECS
+
+_DEFAULT_EXT = {k: f.ext for k, f in _formats.FORMATS.items()}
 
 
 def _add_engine_args(p: argparse.ArgumentParser) -> None:
@@ -32,7 +35,8 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
         help="in reference mode take B/C/G from the .footage instead of the "
         "values above (cycle 22)",
     )
-    p.add_argument("--bit-depth", type=int, default=8, choices=(8, 16))
+    p.add_argument("--bit-depth", type=int, default=8, choices=(8, 16),
+                   help="16 for png, tif, pgm, npy (others are 8-bit containers)")
     p.add_argument(
         "--channels",
         choices=["rgba", "gray"],
@@ -42,11 +46,14 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "-F",
         "--format",
-        choices=["png", "jpg", "bmp", "tif"],
+        choices=list(_formats.FORMATS),
         default="png",
-        help="output container (default: png)",
+        help="output format (default: png). Lossless: png tif pgm bmp webp jp2 npy; "
+        "lossy: jpg. See `opngx formats`.",
     )
     p.add_argument("-q", "--jpeg-quality", type=int, default=90)
+    p.add_argument("--webp-quality", type=int, default=100,
+                   help="100 = lossless WebP (default); lower = lossy, smaller")
     p.add_argument(
         "--crop",
         default=None,
@@ -123,11 +130,16 @@ def main(argv: list[str] | None = None) -> int:
         help="require identical name sets",
     )
 
-    pv2 = sub.add_parser("video", help="render an MP4 straight from a .bin")
+    pv2 = sub.add_parser("video", help="render a video (H.264, H.265, VP9, AV1, lossless FFV1, ProRes, ...) from a .bin")
     pv2.add_argument("bin")
     pv2.add_argument("-o", "--out", required=True)
     pv2.add_argument("--fps", type=int, default=30)
-    pv2.add_argument("--crf", type=int, default=18)
+    pv2.add_argument("-c", "--codec", choices=list(_CODECS), default="h264",
+                     help="see `opngx formats` (ffv1 = bit-exact lossless)")
+    pv2.add_argument("--crf", "--quality", dest="crf", type=int, default=None,
+                     help="the codec's quality value (CRF / q / QP); default per codec")
+
+    sub.add_parser("formats", help="list image formats and video codecs, with what each one keeps")
     pv2.add_argument("--start", type=int, default=0)
     pv2.add_argument("--frames", type=int, default=None)
     pv2.add_argument("--footage", default=None)
@@ -354,6 +366,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "analyze":
         return _cmd_analyze(args)
 
+    if args.cmd == "formats":
+        from .video import available_codecs
+
+        print("Image formats (opngx extract -F ...):")
+        for k, f in _formats.FORMATS.items():
+            bits = "/".join(str(b) for b in f.bit_depths)
+            print(f"  {k:5} {('lossless' if f.lossless else 'LOSSY'):8} {bits:>5}-bit  "
+                  f"{'C engine' if f.engine == 'native' else 'Pillow/numpy':12} {f.summary}")
+        print("\nVideo codecs (opngx video -c ...):")
+        av = available_codecs()
+        for k, c in _CODECS.items():
+            knob = f"{c['knob'][0]} {c['knob'][1]}" if c["knob"] else "-"
+            print(f"  {k:9} {('lossless' if c['lossless'] else 'lossy'):8} {knob:7} "
+                  f"{'ok' if av.get(k) else 'unavailable':11} {c['label']}")
+        return 0
+
     if args.cmd == "video":
         st = opngx.render_video(
             args.bin,
@@ -368,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
             count=args.frames,
             fps=args.fps,
             crf=args.crf,
+            codec=args.codec,
         )
         print(
             f"opngx: wrote {st['frames_written']:,} frames → {st['output']} "
@@ -401,6 +430,7 @@ def main(argv: list[str] | None = None) -> int:
             bit_depth=args.bit_depth,
             channels=0 if args.channels == "gray" else 6,
             jpeg_quality=args.jpeg_quality,
+            webp_quality=getattr(args, "webp_quality", 100),
             crop=_parse_crop(getattr(args, "crop", None)),
             jobs=args.jobs,
             level=args.level,

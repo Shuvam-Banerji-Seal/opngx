@@ -130,11 +130,10 @@ def discover() -> list[ModuleInfo]:
                 continue
             for info in load_file(os.path.join(d, fn)):
                 if info.cls is not None and info.name in names:
-                    info.error = (
-                        f"a module named '{info.name}' is already loaded "
-                        f"({'built-in' if info.name in _builtin_names() else 'another file'}); "
-                        "rename it"
-                    )
+                    owner = next((x for x in infos if x.ok and x.name == info.name), None)
+                    where = "built in" if owner and owner.origin == "builtin" else (
+                        f"in {os.path.basename(owner.path)}" if owner else "elsewhere")
+                    info.error = f"a module named '{info.name}' already exists ({where}); rename it"
                     info.cls = None
                 elif info.cls is not None and not info.error:
                     names.add(info.name)
@@ -153,12 +152,14 @@ def list_modules(include_broken: bool = False) -> list[ModuleInfo]:
 
 
 def get_module(name: str) -> type:
-    for i in discover():
-        if i.name == name:
-            if not i.ok:
-                raise ValueError(f"module '{name}' cannot be used: {i.error}")
+    infos = discover()
+    matches = [i for i in infos if i.name == name]
+    for i in matches:  # a working module wins over a broken namesake (v2.1)
+        if i.ok:
             return i.cls  # type: ignore[return-value]
-    avail = ", ".join(i.name for i in discover() if i.ok)
+    if matches:
+        raise ValueError(f"module '{name}' cannot be used: {matches[0].error}")
+    avail = ", ".join(i.name for i in infos if i.ok)
     raise KeyError(f"no analysis module named '{name}' (available: {avail})")
 
 
@@ -238,6 +239,9 @@ def validate_file(path: str, dry_run: bool = True) -> Validation:
     infos = load_file(path)
     names = []
     all_ok = True
+    # names already taken by OTHER files or built-ins (v2.1: such a module
+    # validated fine, then was silently never used)
+    taken = {i.name: i for i in discover() if i.ok and os.path.abspath(i.path or "") != os.path.abspath(path)}
     for info in infos:
         if info.cls is None:
             return Validation(False, [f"✗ {info.error.strip()}"], [])
@@ -245,6 +249,13 @@ def validate_file(path: str, dry_run: bool = True) -> Validation:
         if info.error:
             all_ok = False
             msgs.append(f"✗ {info.name}: {info.error}")
+            continue
+        if info.name in taken:
+            other = taken[info.name]
+            all_ok = False
+            msgs.append(f"✗ {info.name}: this name is already used by "
+                        f"{'a built-in module' if other.origin == 'builtin' else os.path.basename(other.path)}"
+                        " - change `name = ...` so both can be used")
             continue
         msgs.append(f"✓ {info.name}: class loads ({info.cls.title or 'no title'})")
         if dry_run:
@@ -274,17 +285,26 @@ def dry_run_module(cls: type, _depth: int = 0) -> tuple[bool, list[str]]:
             return False, [f"✗ {cls.name}: required module '{req}' failed its dry run"]
         inputs[req] = table
 
-    class _Meta:
-        bin_path, footage_path, camera_name = "<synthetic>", None, "synthetic"
-        width, height, capacity_frames, framerate = w, h, k, 500.0
-        brightness, contrast, gamma = 49.0, 18.0, 1.0
+    # a REAL metadata object with plausible values (v2.1): the old stand-in
+    # had ten attributes, so a valid module reading e.g. exposure_us failed
+    # Validate while working on real recordings
+    from opngx.footage import FootageMetadata
+
+    _Meta = FootageMetadata(
+        bin_path="<synthetic>", footage_path=None, width=w, height=h, num_images=k, framerate=500.0,
+        framerate_real=500.0, exposure_us=1998.0, camera_name="synthetic", brightness=49.0, contrast=18.0,
+        gamma=1.0, has_processing=True, file_size=k * (8 + w * h), frame_stride=8 + w * h, capacity_frames=k,
+        verified_operating_point=True, first_tick=1_000_000, last_tick=1_000_000 + 2000 * (k - 1),
+        span_s=0.002 * (k - 1), effective_fps_us=500.0, frames_match=True,
+    )
 
     try:
         params = cls.resolve_params()
         m = cls()
         ctx = Context(
-            meta=_Meta(), params=params, width=w, height=h, crop=(0, 0, w, h),
+            meta=_Meta, params=params, width=w, height=h, crop=(0, 0, w, h),
             _sampler=lambda n: frames[np.linspace(0, k - 1, max(1, min(n, k))).astype(int)],
+            _first=lambda n: frames[: max(1, min(int(n), k))],
             log=lambda s: msgs.append(f"  log: {s}"),
         )
         m.begin(ctx)
@@ -292,7 +312,9 @@ def dry_run_module(cls: type, _depth: int = 0) -> tuple[bool, list[str]]:
         for s, e in ((0, k // 2), (k // 2, k)):
             ctx.frame_index = np.arange(s, e)
             ctx.timestamp_raw = (1_000_000 + 2000 * np.arange(s, e)).astype(np.uint64)
-            parts.append(_coerce_output(cls.name, m.process(frames[s:e], ctx), e - s))
+            batch_frames = frames[s:e].copy()
+            batch_frames.setflags(write=False)  # as in a real run (v2.1)
+            parts.append(_coerce_output(cls.name, m.process(batch_frames, ctx), e - s))
         keys = list(parts[0])
         if [list(p) for p in parts] != [keys, keys]:
             raise RuntimeError("batches returned different columns")

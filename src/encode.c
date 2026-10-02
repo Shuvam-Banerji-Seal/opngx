@@ -138,6 +138,66 @@ size_t opngx_encode_tiff(const uint8_t *pixels, uint32_t w, uint32_t h,
     return need;
 }
 
+/* 16-bit grey TIFF (v2.1): same layout as the 8-bit writer, BitsPerSample
+ * 16, little-endian samples (the "II" byte order of the header). */
+size_t opngx_encode_tiff16_gray(const uint16_t *px, uint32_t w, uint32_t h,
+                                uint8_t *out, size_t cap) {
+    const size_t data_len = (size_t)w * h * 2;
+    const size_t ifd_off  = 8;
+    const size_t ntags    = 10;
+    const size_t ifd_len  = 2 + ntags * 12 + 4;
+    const size_t data_off = ifd_off + ifd_len;
+    const size_t need     = data_off + data_len;
+    if (cap < need) return 0;
+    memcpy(out, "II\x2a\x00", 4);
+    put32(out + 4, (uint32_t)ifd_off);
+    const tiff_tag t[10] = {
+        { 256, 4, 1, w }, { 257, 4, 1, h },
+        { 258, 3, 1, 16 },                    /* BitsPerSample = 16 (inline) */
+        { 259, 3, 1, 1 },                     /* Compression = none          */
+        { 262, 3, 1, 1 },                     /* Photometric = BlackIsZero   */
+        { 273, 4, 1, (uint32_t)data_off },
+        { 277, 3, 1, 1 },                     /* SamplesPerPixel = 1         */
+        { 278, 4, 1, h },
+        { 279, 4, 1, (uint32_t)data_len },
+        { 296, 3, 1, 2 },
+    };
+    uint8_t *ifd = out + ifd_off;
+    put16(ifd, (uint16_t)ntags);
+    for (int k = 0; k < 10; k++) {
+        uint8_t *e = ifd + 2 + (size_t)k * 12;
+        put16(e, t[k].id); put16(e + 2, t[k].typ); put32(e + 4, t[k].cnt);
+        if (t[k].typ == 3) { put16(e + 8, (uint16_t)t[k].val); put16(e + 10, 0); }
+        else put32(e + 8, t[k].val);
+    }
+    put32(ifd + 2 + ntags * 12, 0);
+    uint8_t *d = out + data_off;
+    for (size_t i = 0; i < (size_t)w * h; i++) put16(d + 2 * i, px[i]);
+    return need;
+}
+
+/* ------------------------------- PGM -------------------------------- */
+/* Netpbm binary greymap (P5). 8-bit: maxval 255; 16-bit: maxval 65535 with
+ * big-endian samples, as the format requires. Read natively by ImageJ/Fiji,
+ * numpy (imageio), OpenCV, GIMP and every Netpbm tool. */
+size_t opngx_encode_pgm(const uint8_t *px8, const uint16_t *px16,
+                        uint32_t w, uint32_t h, uint8_t *out, size_t cap) {
+    char hdr[64];
+    int hl = snprintf(hdr, sizeof hdr, "P5\n%u %u\n%u\n", w, h, px16 ? 65535u : 255u);
+    if (hl <= 0) return 0;
+    const size_t n = (size_t)w * h, data_len = px16 ? 2 * n : n;
+    const size_t need = (size_t)hl + data_len;
+    if (cap < need) return 0;
+    memcpy(out, hdr, (size_t)hl);
+    uint8_t *d = out + hl;
+    if (px16) {
+        for (size_t i = 0; i < n; i++) { d[2 * i] = (uint8_t)(px16[i] >> 8); d[2 * i + 1] = (uint8_t)px16[i]; }
+    } else {
+        memcpy(d, px8, n);
+    }
+    return need;
+}
+
 /* ------------------------------- JPEG ------------------------------- */
 typedef struct { uint8_t *buf; size_t cap, len; } jpg_sink;
 

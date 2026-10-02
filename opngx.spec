@@ -21,6 +21,13 @@ hidden = collect_submodules("opngx") + [
     "opngx.analysis.builtin.luminosity", "opngx.analysis.builtin.contrast",
     "opngx.analysis.builtin.brownian", "opngx.analysis.native",
     "opngx.ui.themes", "opngx.ui.editor", "opngx.ui.docs_ui", "opngx.ui.audit", "opngx.docs",
+    # v2.1: new modules, formats, tabs, icons, logo
+    "opngx.analysis.builtin.focus", "opngx.analysis.builtin.drift", "opngx.analysis.builtin.particles",
+    "opngx.analysis.builtin.flicker", "opngx.analysis.builtin.roi_stats",
+    "opngx.formats", "opngx._proc", "opngx.ui.icons", "opngx.ui.logo", "opngx.ui.video_ui",
+    "opngx.ui.system_ui", "opngx.ui.home_ui",
+    # crisp vector icons (QSvgRenderer); the qsvg image plugin is the fallback
+    "PySide6.QtSvg",
 ]
 
 # bundle an ffmpeg binary so Render-video works out of the box
@@ -70,6 +77,8 @@ _datas += [(f, "opngx/analysis/builtin") for f in sorted(_glob.glob(os.path.join
 # sample modules + docs copied into the user's empty folders on first start
 _datas += [(f, "opngx/analysis/examples") for f in sorted(_glob.glob(os.path.join(_pkg, "analysis", "examples", "*.*")))]
 _datas += [(f, "opngx/analysis/examples/docs") for f in sorted(_glob.glob(os.path.join(_pkg, "analysis", "examples", "docs", "*.md")))]
+# logo assets shipped with the package (the in-app logo is drawn in code)
+_datas += [(f, "opngx/ui/assets") for f in sorted(_glob.glob(os.path.join(_pkg, "ui", "assets", "*.*")))]
 if os.path.exists(os.path.join(root, "assets", "logo", "icon.png")):
     _datas.append((os.path.join(root, "assets", "logo", "icon.png"), "assets/logo"))
 
@@ -112,7 +121,11 @@ a = Analysis(
 _DROP = ("opengl32sw", "qt6quick", "qt6qml", "qt6pdf", "qt6quick3d", "qt6shadertools",
          "qt6virtualkeyboard", "qt6webengine", "qt6designer", "qt6multimedia", "avcodec",
          "avformat", "avutil", "swresample", "swscale", "tcl86", "tk86", "_avif", "qt6network",
-         "qt6opengl")
+         "qt6opengl",
+         # plugins whose Qt library is dropped above: they could never load
+         # (v2.1 bug hunt - qpdf needs Qt6Pdf, the virtual keyboard and
+         # touch plugins need Qt6VirtualKeyboard / Qt6Network)
+         "qpdf.dll", "qtvirtualkeyboardplugin", "qtuiotouchplugin", "_imagingtk")
 
 
 def _keep(entry):

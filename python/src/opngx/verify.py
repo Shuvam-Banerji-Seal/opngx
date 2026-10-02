@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+
+from ._proc import TEXT_UTF8, no_window
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -133,7 +135,7 @@ def verify_against_bin(
     args.append(str(out_dir))
     args += ["--json"]
 
-    proc = subprocess.run(args, capture_output=True, text=True)
+    proc = subprocess.run(args, capture_output=True, **TEXT_UTF8, **no_window())
     import json
 
     try:
@@ -181,7 +183,7 @@ def verify(
             args.append("--subset")
         # ADD-5: structured report — no more scraping 'key: value' lines
         args.append("--json")
-        proc = subprocess.run(args, capture_output=True, text=True)
+        proc = subprocess.run(args, capture_output=True, **TEXT_UTF8, **no_window())
         import json
 
         try:

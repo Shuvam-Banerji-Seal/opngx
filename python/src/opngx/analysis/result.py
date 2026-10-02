@@ -15,6 +15,8 @@ RESERVED = ("frame", "timestamp_raw", "time_s")
 
 
 def _jsonable(v: Any) -> Any:
+    if isinstance(v, (bool, np.bool_)):  # np.bool_ is not JSON (v2.1)
+        return bool(v)
     if isinstance(v, (np.integer,)):
         return int(v)
     if isinstance(v, (np.floating,)):
@@ -28,6 +30,8 @@ def _jsonable(v: Any) -> Any:
         return {str(k): _jsonable(x) for k, x in v.items()}
     if isinstance(v, (list, tuple)):
         return [_jsonable(x) for x in v]
+    if isinstance(v, np.generic):
+        return _jsonable(v.item())
     return v
 
 
@@ -95,29 +99,39 @@ class AnalysisResult:
                 "run": self.run,
                 "summary": self.summary,
                 "columns": [
-                    {"key": k, "unit": self.units.get(k, ""), "help": self.help.get(k, "")}
-                    for k in self.columns
+                    {"key": k, "unit": self.units.get(k, ""), "help": self.help.get(k, ""),
+                     "dtype": str(np.asarray(v).dtype)}
+                    for k, v in self.columns.items()
                 ],
+                # display hints, so a reloaded result plots like the original (v2.1)
+                "overlay": dict(self.overlay or {}),
+                "plot": list(self.plot or ()),
+                "trajectory": bool(self.trajectory),
+                "table_plots": self.table_plots or {},
                 "rows": len(self),
                 "tables": {
                     name: {"rows": len(next(iter(tb.values()), [])),
-                           "columns": [{"key": k, "unit": self.table_units.get(name, {}).get(k, "")} for k in tb]}
+                           "columns": [{"key": k, "unit": self.table_units.get(name, {}).get(k, ""),
+                                        "dtype": str(np.asarray(v).dtype)} for k, v in tb.items()]}
                     for name, tb in self.tables.items()
                 },
                 "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             }
         )
 
-    def to_csv(self, path: str, *, header_comments: bool = True) -> str:
-        """Write the table as CSV. With `header_comments`, a few `# key: v`
-        lines describe the run first (pandas: `read_csv(p, comment="#")`)."""
+    def to_csv(self, path: str, *, header_comments: bool = True, delimiter: str = ",") -> str:
+        """Write the table as CSV (or TSV with delimiter="\t"). With
+        `header_comments`, a few `# key: v` lines describe the run first
+        (pandas: `read_csv(p, comment="#")`); extra tables go next to it as
+        <name>.<table>.csv; NaN is an empty cell."""
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
         keys = list(self.columns)
         cols = [self.columns[k] for k in keys]
         for name, tb in self.tables.items():
             root, ext = os.path.splitext(path)
             _write_table_csv(f"{root}.{name}{ext or '.csv'}", tb, self.table_units.get(name, {}),
-                             f"# opngx analysis: {self.module} — table '{name}'\n" if header_comments else "")
+                             f"# opngx analysis: {self.module} — table '{name}'\n" if header_comments else "",
+                             delimiter=delimiter)
         with open(path, "w", newline="", encoding="utf-8") as fh:
             if header_comments:
                 md = self.metadata()
@@ -129,14 +143,16 @@ class AnalysisResult:
                 units = ", ".join(f"{k}[{self.units[k]}]" for k in keys if self.units.get(k))
                 if units:
                     fh.write(f"# units: {units}\n")
-            w = csv.writer(fh)
+            w = csv.writer(fh, delimiter=delimiter)
             w.writerow(keys)
             fmt = []
             for c in cols:
                 if c.dtype.kind in "iub":
                     fmt.append(lambda v: str(int(v)))
                 else:
-                    fmt.append(lambda v: "" if not np.isfinite(v) else f"{float(v):.6g}")
+                    # 10 significant digits: .6g quantised time_s to 1 ms
+                    # beyond 100 s (duplicate times at >= 2 kHz)
+                    fmt.append(lambda v: "" if not np.isfinite(v) else f"{float(v):.10g}")
             for i in range(len(self)):
                 w.writerow([f(c[i]) for f, c in zip(fmt, cols)])
         return path
@@ -151,11 +167,26 @@ class AnalysisResult:
         return path
 
     def to_npz(self, path: str) -> str:
+        """Neutral array keys plus a name map in the metadata (v2.1): a
+        column named "file" collided with savez's own argument, and table
+        names containing "__" were split wrongly on load."""
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-        extra = {f"tbl__{n}__{k}": v for n, tb in self.tables.items() for k, v in tb.items()}
-        np.savez_compressed(
-            path, **self.columns, **extra, _metadata=np.array(json.dumps(self.metadata()))
-        )
+        arrays: dict[str, np.ndarray] = {}
+        cmap: dict[str, str] = {}
+        tmap: dict[str, dict[str, str]] = {}
+        for i, (k, v) in enumerate(self.columns.items()):
+            cmap[k] = f"c{i}"
+            arrays[f"c{i}"] = np.asarray(v)
+        for j, (n, tb) in enumerate(self.tables.items()):
+            tmap[n] = {}
+            for i, (k, v) in enumerate(tb.items()):
+                tmap[n][k] = f"t{j}_{i}"
+                arrays[f"t{j}_{i}"] = np.asarray(v)
+        md = self.metadata()
+        md["npz_keys"] = {"columns": cmap, "tables": tmap}
+        arrays["_metadata"] = np.array(json.dumps(md))
+        with open(path, "wb") as fh:
+            np.savez_compressed(fh, **arrays)
         return path
 
     def save(self, path: str) -> str:
@@ -170,12 +201,10 @@ class AnalysisResult:
         return self.to_csv(path)
 
     def _to_tsv(self, path: str) -> str:
-        keys = list(self.columns)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write("\t".join(keys) + "\n")
-            for i in range(len(self)):
-                fh.write("\t".join(f"{self.columns[k][i]}" for k in keys) + "\n")
-        return path
+        # the CSV writer with tabs: same comments, extra tables and empty
+        # NaN cells (v2.0 wrote only the main table, NaN as "nan", and
+        # failed when the folder did not exist yet)
+        return self.to_csv(path, delimiter="\t")
 
 
 def load_result(path: str) -> AnalysisResult:
@@ -183,21 +212,25 @@ def load_result(path: str) -> AnalysisResult:
     if path.lower().endswith(".npz"):
         z = np.load(path, allow_pickle=False)
         md = json.loads(str(z["_metadata"]))
-        cols = {k: z[k] for k in z.files if k != "_metadata" and not k.startswith("tbl__")}
+        keys = md.get("npz_keys")
         tables: dict = {}
-        for k in z.files:
-            if k.startswith("tbl__"):
-                _, n, c = k.split("__", 2)
-                tables.setdefault(n, {})[c] = z[k]
+        if keys:  # v2.1 layout
+            cols = {k: z[a] for k, a in keys["columns"].items()}
+            tables = {n: {k: z[a] for k, a in tb.items()} for n, tb in keys["tables"].items()}
+        else:  # v2.0 layout: names as keys
+            cols = {k: z[k] for k in z.files if k != "_metadata" and not k.startswith("tbl__")}
+            for k in z.files:
+                if k.startswith("tbl__"):
+                    _, n, c = k.split("__", 2)
+                    tables.setdefault(n, {})[c] = z[k]
     else:
         with open(path, encoding="utf-8") as fh:
             md = json.load(fh)
-        cols = {
-            k: np.asarray([np.nan if x is None else x for x in v])
-            for k, v in md["data"].items()
-        }
+        dts = {c["key"]: c.get("dtype") for c in md.get("columns", [])}
+        cols = {k: _typed([np.nan if x is None else x for x in v], dts.get(k)) for k, v in md["data"].items()}
+        tdts = {n: {c["key"]: c.get("dtype") for c in v.get("columns", [])} for n, v in md.get("tables", {}).items()}
         tables = {
-            n: {k: np.asarray([np.nan if x is None else x for x in v]) for k, v in tb.items()}
+            n: {k: _typed([np.nan if x is None else x for x in v], tdts.get(n, {}).get(k)) for k, v in tb.items()}
             for n, tb in md.get("table_data", {}).items()
         }
     return AnalysisResult(
@@ -214,10 +247,28 @@ def load_result(path: str) -> AnalysisResult:
         tables=tables,
         table_units={n: {c["key"]: c.get("unit", "") for c in v.get("columns", [])}
                      for n, v in md.get("tables", {}).items()},
+        overlay=dict(md.get("overlay") or {}),
+        plot=tuple(md.get("plot") or ()),
+        trajectory=bool(md.get("trajectory", False)),
+        table_plots=md.get("table_plots") or {},
     )
 
 
-def _write_table_csv(path: str, tb: dict, units: dict, head: str) -> None:
+def _typed(values, dtype) -> np.ndarray:
+    """JSON numbers back to the saved dtype (uint64 timestamps, int8 flags)."""
+    a = np.asarray(values)
+    if dtype:
+        try:
+            dt = np.dtype(dtype)
+            if dt.kind in "iub" and a.dtype.kind == "f" and not np.isfinite(a).all():
+                return a  # NaN cannot be an integer: keep float
+            return a.astype(dt)
+        except (TypeError, ValueError):
+            pass
+    return a
+
+
+def _write_table_csv(path: str, tb: dict, units: dict, head: str, delimiter: str = ",") -> None:
     keys = list(tb)
     n = len(next(iter(tb.values()), []))
     with open(path, "w", newline="", encoding="utf-8") as fh:
@@ -225,14 +276,14 @@ def _write_table_csv(path: str, tb: dict, units: dict, head: str) -> None:
         u = ", ".join(f"{k}[{units[k]}]" for k in keys if units.get(k))
         if u and head:
             fh.write(f"# units: {u}\n")
-        w = csv.writer(fh)
+        w = csv.writer(fh, delimiter=delimiter)
         w.writerow(keys)
         for i in range(n):
             row = []
             for k in keys:
                 v = tb[k][i]
                 if isinstance(v, (float, np.floating)):
-                    row.append("" if not np.isfinite(v) else f"{float(v):.6g}")
+                    row.append("" if not np.isfinite(v) else f"{float(v):.10g}")
                 else:
                     row.append(str(v))
             w.writerow(row)

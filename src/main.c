@@ -52,9 +52,9 @@ static void usage(void) {
 "      --crop X,Y,W,H     region of interest; W/H of 0 mean 'to the frame\n"
 "                         edge'. Output is exactly this source window,\n"
 "                         with no resampling.\n"
-"      --bit-depth N      8 or 16                      (default 8)\n"
+"      --bit-depth N      8 or 16 (png, tif, pgm)      (default 8)\n"
 "      --channels C       rgba (6, default) or gray (0 fast path)\n"
-"      -F, --format F     png | bmp | tif | jpg                (default: png)\n"
+"      -F, --format F     png | tif | pgm | bmp | jpg          (default: png)\n"
 "      -q, --jpeg-quality N                                (default: 90)\n"
 "      --prefix S         output filename prefix       (default: brow_)\n"
 "      --ext S            output extension             (default: .Png)\n"
@@ -195,6 +195,7 @@ static int cmd_extract(int argc, char **argv) {
             else if (!strcasecmp(f, "bmp")) p.format = OPNGX_FMT_BMP;
             else if (!strcasecmp(f, "tif") || !strcasecmp(f, "tiff")) p.format = OPNGX_FMT_TIF;
             else if (!strcasecmp(f, "jpg") || !strcasecmp(f, "jpeg")) p.format = OPNGX_FMT_JPG;
+            else if (!strcasecmp(f, "pgm")) p.format = OPNGX_FMT_PGM;
             else { fprintf(stderr, "bad format: %s\n", f); return 2; }
             if (!p.ext || !p.ext[0] || !ext_given) { ext_given = 1; }
             p.ext = "";   /* sentinel: derive per-format default */
@@ -341,6 +342,8 @@ static int cmd_batch(int argc, char **argv) {
         fmt = OPNGX_FMT_BMP; fmt_dir = "BMP"; fmt_ext = ".bmp";
     } else if (!strcasecmp(fmt_s, "tif") || !strcasecmp(fmt_s, "tiff")) {
         fmt = OPNGX_FMT_TIF; fmt_dir = "TIF"; fmt_ext = ".tif";
+    } else if (!strcasecmp(fmt_s, "pgm")) {
+        fmt = OPNGX_FMT_PGM; fmt_dir = "PGM"; fmt_ext = ".pgm";
     } else if (!strcasecmp(fmt_s, "png")) {
         /* defaults above */
     } else { fprintf(stderr, "bad format: %s\n", fmt_s); return 2; }

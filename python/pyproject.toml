@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opngx"
-version = "2.0.4"
+version = "2.1.0"
 description = "Pixel-exact Optronis .bin high-speed-camera footage extraction, motion tracking and Brownian/optical-trap analysis - C engine, Python API, Qt studio"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -57,4 +57,4 @@ where = ["src"]
 # docs for the studio's Docs tab; _native/ holds the C engine library + CLI
 # in the platform wheels (scripts/build_wheel.py) and is empty in the sdist
 # analysis/examples: sample modules + docs seeded into the user's folders
-opngx = ["py.typed", "docs/*.md", "_native/*", "analysis/examples/*.md", "analysis/examples/docs/*.md"]
+opngx = ["py.typed", "docs/*.md", "_native/*", "analysis/examples/*.md", "analysis/examples/docs/*.md", "ui/assets/*"]

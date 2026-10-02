@@ -262,7 +262,7 @@ def test_an7_registry_user_modules_template_and_validation(recs, tmp_path):
     assert not infos["broken"].ok and "SyntaxError" in infos["broken"].error
     usable = [i for i in oa.discover() if i.name == "luminosity" and i.ok]
     assert [i.origin for i in usable] == ["builtin"], "a user file must not replace a built-in"
-    assert any(i.origin == "user" and "already loaded" in i.error for i in oa.discover())
+    assert any(i.origin == "user" and "already exists (built in)" in i.error for i in oa.discover())
     # the template is a working module end to end
     v = oa.validate_file(str(mods / "peak.py"))
     assert v.ok, v.messages
@@ -795,3 +795,262 @@ def test_an21_windows_exe_bundles_module_sources_samples_and_docs():
     toml = (REPO / "python" / "pyproject.toml").read_text(encoding="utf-8")
     assert "analysis/examples/*.md" in toml and "analysis/examples/docs/*.md" in toml
     assert "--selftest-speed" in (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+
+def _tiny_recording(tmp_path, k=40, h=40, w=48, seed=3):
+    frames = oa.synthetic_frames(k=k, h=h, w=w, seed=seed)
+    binp = tmp_path / "rec.bin"
+    with open(binp, "wb") as f:
+        for i, fr in enumerate(frames):
+            f.write(struct.pack("<Q", 1_000_000 + 2000 * i) + fr.tobytes())
+    (tmp_path / "rec.footage").write_text(
+        f"<x><ResolutionX>{w}</ResolutionX><ResolutionY>{h}</ResolutionY><NumberOfImages>{k}</NumberOfImages></x>",
+        encoding="utf-8")
+    return str(binp)
+
+
+def test_an22_bug_hunt_regressions_runner_registry_results(tmp_path, monkeypatch):
+    """v2.1 bug hunt: every reproduced defect of the analysis framework."""
+    from opngx.analysis.base import Column, Module, Param
+
+    binp = _tiny_recording(tmp_path)
+
+    # 1. frames are read-only: one module can no longer zero another's input
+    class Mutator(Module):
+        name = "mutator"
+        columns = [Column("z")]
+
+        def process(self, f, ctx):
+            f[:] = 0
+            return {"z": np.zeros(len(f))}
+
+    class Reader(Module):
+        name = "reader"
+        columns = [Column("m")]
+
+        def process(self, f, ctx):
+            return {"m": f.reshape(len(f), -1).mean(1)}
+
+    run = oa.analyze(binp, [Mutator, Reader], jobs=1)
+    alone = oa.analyze(binp, [Reader], jobs=1)["reader"].columns["m"]
+    assert np.allclose(run["reader"].columns["m"], alone) and alone.mean() > 1
+    assert "mutator" in run.errors and "read-only" in str(run.errors["mutator"])
+    assert not oa.dry_run_module(Mutator)[0]  # Validate agrees with the real run
+
+    # 2. finish() returning a ragged table is an error, not a crash at save
+    class Ragged(Module):
+        name = "ragged"
+        columns = [Column("v")]
+
+        def process(self, f, ctx):
+            return {"v": np.ones(len(f))}
+
+        def finish(self, table, ctx):
+            table["v_short"] = table["v"][:3]
+            return table
+
+    assert "ragged" in oa.analyze(binp, [Ragged]).errors
+
+    # 3. numpy bools in summary save in every format; 4. attributes set on ctx
+    class Flags(Module):
+        name = "flags"
+        columns = [Column("v")]
+
+        def begin(self, ctx):
+            ctx.bg = ctx.sample(4).mean(0)
+
+        def process(self, f, ctx):
+            return {"v": (f - ctx.bg).reshape(len(f), -1).mean(1)}
+
+        def finish(self, table, ctx):
+            ctx.summary["bright"] = table["v"].mean() > -1e9
+            ctx.tables["speed__hist"] = {"a": np.arange(3.0), "b": np.arange(3)}
+            return table
+
+    r = oa.analyze(binp, [Flags])
+    assert not r.errors, r.errors
+    res = r["flags"]
+    for ext in ("csv", "json", "npz", "tsv"):
+        assert os.path.getsize(res.save(str(tmp_path / "out" / f"flags.{ext}"))) > 0
+    assert (tmp_path / "out" / "flags.speed__hist.tsv").exists()  # TSV keeps extra tables
+    back = oa.load_result(str(tmp_path / "out" / "flags.npz"))
+    assert set(back.tables) == {"speed__hist"} and set(back.tables["speed__hist"]) == {"a", "b"}
+
+    # 5. a column named "file" saves to NPZ; JSON keeps dtypes and display hints
+    tr = oa.analyze(binp, "motion_tracking")["motion_tracking"]
+    tr.columns["file"] = np.arange(len(tr), dtype=np.int32)
+    for ext in ("npz", "json"):
+        p = tr.save(str(tmp_path / f"tr.{ext}"))
+        b = oa.load_result(p)
+        assert b.columns["timestamp_raw"].dtype == np.uint64 and b.columns["found"].dtype == tr.columns["found"].dtype
+        assert b.overlay == tr.overlay and tuple(b.plot) == tuple(tr.plot) and b.trajectory == tr.trajectory
+        assert np.array_equal(b.columns["file"], tr.columns["file"])
+
+    # 6. batch <= 0 cannot produce an empty "successful" run
+    assert len(oa.analyze(binp, "luminosity", batch=0)["luminosity"]) == 40
+
+    # 7. parameters: NaN / inf / fractional ints are rejected
+    p_ = Param("n", int, 3, min=1)
+    for bad in ("nan", "inf", "47.9"):
+        with pytest.raises(ValueError):
+            p_.coerce(bad)
+    assert p_.coerce("47") == 47 and p_.coerce("4,0") == 4
+    with pytest.raises(ValueError):
+        Param("x", float, 0.5, min=0.05, max=0.95).coerce("nan")
+
+    # 8. dry run uses real metadata (exposure_us etc.)
+    class UsesMeta(Module):
+        name = "uses_meta"
+        columns = [Column("e")]
+
+        def process(self, f, ctx):
+            return {"e": np.full(len(f), ctx.meta.exposure_us)}
+
+    assert oa.dry_run_module(UsesMeta)[0]
+
+    # 9. registry: a broken namesake does not hide a working module, and
+    # Validate reports a name that is already taken
+    mods = tmp_path / "mods"
+    mods.mkdir()
+    monkeypatch.setenv("OPNGX_MODULES_DIR", str(mods))
+    (mods / "a_broken.py").write_text(
+        "from opngx.analysis import Module\nclass D(Module):\n    name='dup'\n", encoding="utf-8")
+    (mods / "b_good.py").write_text(
+        "import numpy as np\nfrom opngx.analysis import Module, Column\n"
+        "class D(Module):\n    name='dup'\n    columns=[Column('v')]\n"
+        "    def process(self, f, ctx):\n        return {'v': np.zeros(len(f))}\n", encoding="utf-8")
+    assert oa.get_module("dup").__module__.endswith(tuple(["b_good_" + x for x in "0123456789abcdef"])) or \
+        oa.get_module("dup").columns[0].key == "v"
+    (mods / "c_clash.py").write_text(
+        "import numpy as np\nfrom opngx.analysis import Module, Column\n"
+        "class B(Module):\n    name='brownian_motion'\n    columns=[Column('v')]\n"
+        "    def process(self, f, ctx):\n        return {'v': np.zeros(len(f))}\n", encoding="utf-8")
+    v = oa.validate_file(str(mods / "c_clash.py"))
+    assert not v.ok and any("already used" in m for m in v.messages)
+
+
+def test_an23_psd_fit_unbiased_on_simulated_trap():
+    """v2.1: the PSD fit weighted bins by the MEASURED spectrum (1/P^2),
+    which biased D low (-7.5 % at 16 segments, -30 % at 4) and the PSD
+    stiffness high. Model weights remove it."""
+    from opngx.analysis.builtin import brownian as br
+
+    dt, tau, D, noise, N = 0.002, 0.020, 0.05, 0.01, 50000
+    a = np.exp(-dt / tau)
+    var = D * tau
+    q = var * (1 - a * a)
+    for segs in (4, 16):
+        ratios = []
+        for seed in range(4):
+            rng = np.random.default_rng(seed)
+            e = rng.normal(0, np.sqrt(q), N)
+            x = np.empty(N)
+            x[0] = rng.normal(0, np.sqrt(var))
+            for i in range(1, N):
+                x[i] = a * x[i - 1] + e[i]
+            x += rng.normal(0, noise, N)
+            f, p = br._welch(x, 1 / dt, segs)
+            _t, Dpsd, _s, _c = br._fit_psd_ou(f, p, dt, f[1], 0.25 / dt)
+            ratios.append(Dpsd / D)
+        assert abs(np.mean(ratios) - 1) < 0.03, (segs, ratios)
+
+
+def _rec(tmp_path, frames, fs=500.0, name="r"):
+    k, h, w = frames.shape
+    p = tmp_path / f"{name}.bin"
+    with open(p, "wb") as f:
+        for i, fr in enumerate(frames):
+            f.write(struct.pack("<Q", 1_000_000 + int(round(1e6 / fs)) * i) + fr.astype(np.uint8).tobytes())
+    (tmp_path / f"{name}.footage").write_text(
+        f"<x><ResolutionX>{w}</ResolutionX><ResolutionY>{h}</ResolutionY><NumberOfImages>{k}</NumberOfImages></x>",
+        encoding="utf-8")
+    return str(p)
+
+
+def test_an24_new_modules_against_ground_truth(tmp_path):
+    """v2.1 modules: particles (counts/areas exact, C == numpy), focus
+    (monotonic with blur), drift (sub-pixel on non-circular drift), flicker
+    (finds a 37 Hz line and its amplitude), roi_stats (== direct numpy)."""
+    from opngx.analysis import native
+    from opngx.analysis.builtin import focus as F
+    from opngx.analysis.builtin import particles as P
+
+    rng = np.random.default_rng(0)
+    # particles
+    h, w, k = 60, 90, 8
+    yy, xx = np.mgrid[0:h, 0:w]
+    frames = np.full((k, h, w), 40, np.uint8)
+    areas = []
+    for i in range(k):
+        n = 1 + i % 4
+        for j in range(n):
+            frames[i][(xx - 12 - 20 * j) ** 2 + (yy - 30) ** 2 <= (2 + j) ** 2] = 210
+        areas.append(max(np.sum((xx - 12 - 20 * j) ** 2 + (yy - 30) ** 2 <= (2 + j) ** 2) for j in range(n)))
+    r = oa.analyze(_rec(tmp_path, frames, name="p"), "particles", params={"particles": {"threshold": 120, "min_area": 1}})
+    c = r["particles"].columns
+    assert list(c["count"]) == [1 + i % 4 for i in range(k)] and list(c["max_area"]) == areas
+    rf = rng.integers(0, 256, (6, 31, 47), dtype=np.uint8)
+    for args in ((128, False, 1, True), (90, True, 3, False)):
+        a, b = native.blobs(rf, *args), P._blobs_numpy(rf, *args)
+        if a is not None:
+            for key in ("count", "total_area", "mean_area", "max_area", "cx", "cy"):
+                assert np.allclose(a[key], b[key], equal_nan=True, atol=1e-9), key
+    # focus
+    base = rng.integers(0, 256, (48, 48)).astype(np.float32)
+
+    def blur(img, s):
+        x = np.arange(-6, 7)
+        g = np.exp(-x ** 2 / (2 * s * s))
+        g /= g.sum()
+        out = np.apply_along_axis(lambda r_: np.convolve(r_, g, "same"), 1, img)
+        return np.apply_along_axis(lambda c_: np.convolve(c_, g, "same"), 0, out)
+
+    st = np.stack([base.astype(np.uint8)] + [np.clip(blur(base, s), 0, 255).astype(np.uint8) for s in (0.8, 1.5, 3)])
+    fm = F.focus_measures(st)
+    assert np.all(np.diff(fm["laplacian_var"]) < 0) and np.all(np.diff(fm["tenengrad"]) < 0)
+    # drift: crops of a larger moving scene
+    H, W = 96, 112
+    scene = blur(rng.normal(0, 1, (H + 30, W + 30)), 1.5)
+    scene = 128 + 40 * scene / scene.std()
+    S = np.fft.fft2(scene)
+    ky, kx = np.fft.fftfreq(H + 30)[:, None], np.fft.fftfreq(W + 30)[None, :]
+    shifts = [(0.0, 0.0)] * 4 + [(0.43 * i, -0.29 * i) for i in range(1, 13)]
+    fr = np.stack([np.clip(np.real(np.fft.ifft2(S * np.exp(-2j * np.pi * (kx * dx + ky * dy))))[15:15 + H, 15:15 + W]
+                           + rng.normal(0, 1.0, (H, W)), 0, 255).astype(np.uint8) for dx, dy in shifts])
+    d = oa.analyze(_rec(tmp_path, fr, name="d"), "drift", params={"drift": {"reference_frames": 4}})["drift"].columns
+    err = np.hypot(d["dx"] - [s[0] for s in shifts], d["dy"] - [s[1] for s in shifts])
+    assert err.max() < 0.15, err
+    # flicker
+    n = 2048
+    t = np.arange(n) / 500.0
+    lvl = 120 * (1 + 0.02 * np.sin(2 * np.pi * 37 * t))
+    ff = np.clip(lvl[:, None, None] + rng.normal(0, 4, (n, 8, 8)), 0, 255).round().astype(np.uint8)
+    fl = oa.analyze(_rec(tmp_path, ff, name="f"), "flicker")["flicker"]
+    assert abs(fl.summary["dominant_hz"] - 37) < 0.6
+    assert abs(fl.summary["lines"][0]["amplitude_pct"] - 2.0) < 0.2
+    assert "spectrum" in fl.tables
+    # roi_stats
+    rr = rng.integers(0, 256, (5, 40, 50), dtype=np.uint8)
+    ro = oa.analyze(_rec(tmp_path, rr, name="o"), "roi_stats",
+                    params={"roi_stats": {"regions": "5,6,10,12; 30,20,15,15"}})["roi_stats"].columns
+    assert np.allclose(ro["r1_mean"], rr[:, 6:18, 5:15].reshape(5, -1).mean(1))
+    assert np.array_equal(ro["r2_max"], rr[:, 20:35, 30:45].reshape(5, -1).max(1))
+    # every built-in passes Validate's dry run
+    for info in oa.discover():
+        if info.origin == "builtin":
+            assert oa.dry_run_module(info.cls)[0], info.name
+
+
+def test_an25_native_focus_equals_numpy():
+    from opngx.analysis import native
+    from opngx.analysis.builtin import focus as F
+
+    rng = np.random.default_rng(5)
+    for shape in ((5, 3, 3), (7, 37, 53), (4, 2, 9), (2, 1, 1), (3, 64, 80)):
+        a = rng.integers(0, 256, shape, dtype=np.uint8)
+        c = native.focus(a)
+        if c is None:
+            pytest.skip("native engine without opngx_focus")
+        p = F.focus_measures(a)
+        for key in c:
+            assert np.allclose(c[key], p[key], rtol=1e-9, atol=1e-6), (shape, key)

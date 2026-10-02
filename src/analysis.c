@@ -336,3 +336,137 @@ int opngx_track(const uint8_t *frames, int64_t k, int H, int W,
     free(sub);
     return 0;
 }
+
+
+/* ---------------------------------------------------------------- blobs -- */
+/* Two-pass connected-component labelling with union-find (path halving).
+ * Mirrors opngx/analysis/builtin/particles.py _blobs_numpy() exactly:
+ * labels are provisional per pixel; stats are accumulated per root. */
+static int32_t uf_find(int32_t *par, int32_t a) {
+    while (par[a] != a) {
+        par[a] = par[par[a]];
+        a = par[a];
+    }
+    return a;
+}
+
+static void uf_union(int32_t *par, int32_t a, int32_t b) {
+    a = uf_find(par, a);
+    b = uf_find(par, b);
+    if (a < b) par[b] = a;
+    else if (b < a) par[a] = b;
+}
+
+int opngx_blobs(const uint8_t *frames, int64_t k, int h, int w, int thr, int dark,
+                int min_area, int conn8, int32_t *count, double *total_area,
+                double *mean_area, double *max_area, double *cx, double *cy) {
+    if (!frames || k < 0 || h <= 0 || w <= 0 || !count || !total_area || !mean_area ||
+        !max_area || !cx || !cy)
+        return -1;
+    const size_t npx = (size_t)h * (size_t)w;
+    int32_t *lab = (int32_t *)malloc(npx * sizeof(int32_t));
+    /* at most one new provisional label per pixel; label 0 = background */
+    int32_t *par = (int32_t *)malloc((npx + 1) * sizeof(int32_t));
+    int64_t *area = (int64_t *)malloc((npx + 1) * sizeof(int64_t));
+    double *sx = (double *)malloc((npx + 1) * sizeof(double));
+    double *sy = (double *)malloc((npx + 1) * sizeof(double));
+    if (!lab || !par || !area || !sx || !sy) {
+        free(lab); free(par); free(area); free(sx); free(sy);
+        return -2;
+    }
+    for (int64_t f = 0; f < k; f++) {
+        const uint8_t *fr = frames + (size_t)f * npx;
+        int32_t next = 1;
+        par[0] = 0;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                const size_t i = (size_t)y * w + x;
+                const int on = dark ? (fr[i] < thr) : (fr[i] > thr);
+                if (!on) { lab[i] = 0; continue; }
+                /* already-labelled neighbours: W, N (+ NW, NE if 8-conn) */
+                int32_t nb[4];
+                int nn = 0;
+                if (x > 0 && lab[i - 1]) nb[nn++] = lab[i - 1];
+                if (y > 0 && lab[i - w]) nb[nn++] = lab[i - w];
+                if (conn8 && y > 0) {
+                    if (x > 0 && lab[i - w - 1]) nb[nn++] = lab[i - w - 1];
+                    if (x + 1 < w && lab[i - w + 1]) nb[nn++] = lab[i - w + 1];
+                }
+                if (!nn) {
+                    par[next] = next;
+                    lab[i] = next++;
+                } else {
+                    int32_t m = nb[0];
+                    for (int q = 1; q < nn; q++) if (nb[q] < m) m = nb[q];
+                    lab[i] = m;
+                    for (int q = 0; q < nn; q++) uf_union(par, m, nb[q]);
+                }
+            }
+        }
+        for (int32_t l = 0; l < next; l++) { area[l] = 0; sx[l] = 0.0; sy[l] = 0.0; }
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                const size_t i = (size_t)y * w + x;
+                if (!lab[i]) continue;
+                const int32_t r = uf_find(par, lab[i]);
+                area[r]++;
+                sx[r] += x;
+                sy[r] += y;
+            }
+        }
+        int32_t n = 0;
+        int64_t tot = 0, best = 0;
+        int32_t bestl = -1;
+        for (int32_t l = 1; l < next; l++) {
+            if (par[l] != l || area[l] < (int64_t)(min_area > 0 ? min_area : 1)) continue;
+            n++;
+            tot += area[l];
+            if (area[l] > best) { best = area[l]; bestl = l; }
+        }
+        count[f] = n;
+        total_area[f] = (double)tot;
+        mean_area[f] = n ? (double)tot / n : 0.0;
+        max_area[f] = (double)best;
+        cx[f] = bestl > 0 ? sx[bestl] / (double)area[bestl] : NAN;
+        cy[f] = bestl > 0 ? sy[bestl] / (double)area[bestl] : NAN;
+    }
+    free(lab); free(par); free(area); free(sx); free(sy);
+    return 0;
+}
+
+
+/* ---------------------------------------------------------------- focus -- */
+int opngx_focus(const uint8_t *frames, int64_t k, int h, int w,
+                double *laplacian_var, double *tenengrad, double *norm_variance) {
+    if (!frames || k < 0 || h <= 0 || w <= 0 || !laplacian_var || !tenengrad || !norm_variance)
+        return -1;
+    const size_t npx = (size_t)h * (size_t)w;
+    for (int64_t f = 0; f < k; f++) {
+        const uint8_t *p = frames + (size_t)f * npx;
+        /* pixel mean / variance over the whole frame (exact integer sums) */
+        uint64_t s = 0, s2 = 0;
+        for (size_t i = 0; i < npx; i++) { s += p[i]; s2 += (uint64_t)p[i] * p[i]; }
+        const double mean = (double)s / (double)npx;
+        const double var = (double)s2 / (double)npx - mean * mean;
+        norm_variance[f] = mean > 0 ? var / (mean > 1e-9 ? mean : 1e-9) : 0.0;
+        if (h < 3 || w < 3) { laplacian_var[f] = 0.0; tenengrad[f] = 0.0; continue; }
+        int64_t ls = 0;
+        double ls2 = 0.0, g2 = 0.0;
+        const size_t m = (size_t)(h - 2) * (size_t)(w - 2);
+        for (int y = 1; y < h - 1; y++) {
+            const uint8_t *r0 = p + (size_t)(y - 1) * w, *r1 = p + (size_t)y * w, *r2 = p + (size_t)(y + 1) * w;
+            for (int x = 1; x < w - 1; x++) {
+                const int lap = r0[x] + r2[x] + r1[x - 1] + r1[x + 1] - 4 * r1[x];
+                ls += lap;
+                ls2 += (double)lap * lap;
+                const int gx = (r0[x + 1] + 2 * r1[x + 1] + r2[x + 1]) - (r0[x - 1] + 2 * r1[x - 1] + r2[x - 1]);
+                const int gy = (r2[x - 1] + 2 * r2[x] + r2[x + 1]) - (r0[x - 1] + 2 * r0[x] + r0[x + 1]);
+                g2 += (double)gx * gx + (double)gy * gy;
+            }
+        }
+        const double lm = (double)ls / (double)m;
+        laplacian_var[f] = ls2 / (double)m - lm * lm;
+        tenengrad[f] = g2 / (double)m;
+    }
+    return 0;
+}

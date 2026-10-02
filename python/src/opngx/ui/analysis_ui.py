@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
+from opngx.ui import icons as _icons
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 
 import opngx
@@ -433,7 +434,9 @@ class ParamForm(QtWidgets.QWidget):
             if p.choices:
                 w = QtWidgets.QComboBox()
                 w.addItems([str(c) for c in p.choices])
-                if str(v) in p.choices:
+                # compare as text: numeric choices (e.g. 4, 8) never matched "8"
+                # and the drop-down silently showed the first option (v2.1)
+                if str(v) in [str(c) for c in p.choices]:
                     w.setCurrentText(str(v))
                 w.currentIndexChanged.connect(lambda *_: self.changed.emit())
             elif p.type is bool:
@@ -625,12 +628,15 @@ class AnalyzeView(QtWidgets.QWidget):
         self.run_bar.setObjectName("card")
         rb_lay = QtWidgets.QVBoxLayout(self.run_bar)
         b1 = QtWidgets.QHBoxLayout()
-        self.btn_run = QtWidgets.QPushButton("▶  Run selected")
+        self.btn_run = QtWidgets.QPushButton("Run selected")
+        _icons.set_icon(self.btn_run, "play", "on_accent")
         self.btn_run.setObjectName("accent")
         self.btn_run.clicked.connect(lambda: self.run(only_selected=True))
-        self.btn_run_all = QtWidgets.QPushButton("▶▶ Run all ticked")
+        self.btn_run_all = QtWidgets.QPushButton("Run all ticked")
+        _icons.set_icon(self.btn_run_all, "play-all", "text")
         self.btn_run_all.clicked.connect(lambda: self.run(only_selected=False))
-        self.btn_cancel = QtWidgets.QPushButton("■  Cancel")
+        self.btn_cancel = QtWidgets.QPushButton("Cancel")
+        _icons.set_icon(self.btn_cancel, "stop", "on_danger")
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self.cancel)
@@ -678,7 +684,8 @@ class AnalyzeView(QtWidgets.QWidget):
         self.cmb_result.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
         self.cmb_result.currentIndexChanged.connect(self._on_pick_result)
         top.addWidget(self.cmb_result, 1)
-        self.btn_export = QtWidgets.QPushButton("⤓  Export data file…")
+        self.btn_export = QtWidgets.QPushButton("Export data file…")
+        _icons.set_icon(self.btn_export, "download", "text")
         self.btn_export.setObjectName("accent")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self.export_current)

@@ -13,39 +13,63 @@ import sys  # noqa: E402
 
 
 def _selftest_video() -> int:
-    """Prove the BUNDLED ffmpeg works inside this exe: synthesize a tiny
-    recording, render 10 frames, verify the MP4. Exit code 0 = pass."""
-    import struct, tempfile, os
+    """Prove the BUNDLED ffmpeg works inside this exe for every codec the
+    studio offers: synthesize a tiny recording, render it with each codec,
+    and check the lossless ones (FFV1, GIF) decode back bit-exact.
+    Exit code 0 = pass."""
+    import struct, tempfile
     from pathlib import Path
     import numpy as np
-    from opngx.video import render_video
 
-    w, h, n = 64, 48, 10
-    d = Path(tempfile.mkdtemp(prefix="opngx_selftest_"))
-    rng = np.random.default_rng(7)
-    binp = d / "st.bin"
-    with open(binp, "wb") as f:
-        for i in range(n):
-            f.write(struct.pack("<Q", 1_000_000 + i * 2000))
-            f.write(rng.integers(0, 256, size=(h * w), dtype=np.uint8).tobytes())
-    out = d / "selftest.mp4"
-    st = render_video(
-        str(binp),
-        str(out),
-        mode="raw",
-        width=w,
-        height=h,
-        start=0,
-        count=n,
-        fps=10,
-        crf=30,
-    )
-    ok = st["frames_written"] == n and out.exists() and out.stat().st_size > 1024
-    print(
-        f"SELFTEST {'PASS' if ok else 'FAIL'} "
-        f"({st['frames_written']} frames, {out.stat().st_size} bytes)"
-    )
-    return 0 if ok else 1
+    logf = _selftest_log()
+    print("SELFTEST-VIDEO start")
+    try:
+        from opngx import video as _video
+
+        ff = _video.resolve_ffmpeg()
+        print(f"ffmpeg: {ff}")
+        assert ff, "no ffmpeg"
+        w, h, n = 64, 48, 12
+        d = Path(tempfile.mkdtemp(prefix="opngx_selftest_"))
+        rng = np.random.default_rng(7)
+        binp = d / "st.bin"
+        frames = rng.integers(0, 256, size=(n, h, w), dtype=np.uint8)
+        with open(binp, "wb") as f:
+            for i in range(n):
+                f.write(struct.pack("<Q", 1_000_000 + i * 2000))
+                f.write(frames[i].tobytes())
+        av = _video.available_codecs()
+        print("codecs:", av)
+        bad = []
+        for codec, c in _video.CODECS.items():
+            if codec == "h264_gpu":
+                continue  # needs a GPU; reported, not required
+            if not av.get(codec):
+                bad.append(f"{codec}: not available")
+                continue
+            out = d / f"st_{codec}{c['ext']}"
+            st = _video.render_video(str(binp), str(out), mode="raw", width=w, height=h, start=0,
+                                     count=n, fps=10, codec=codec)
+            ok = st["frames_written"] == n and out.exists() and out.stat().st_size > 100
+            if ok and c["lossless"]:
+                dec = _video.decode_video_gray(str(out), w, h)
+                ok = len(dec) == n and np.array_equal(dec, frames)  # raw mode: identity
+            print(f"  {codec:8} {'ok' if ok else 'FAIL'}  {out.stat().st_size if out.exists() else 0} bytes")
+            if not ok:
+                bad.append(codec)
+        if bad:
+            print("SELFTEST-VIDEO FAIL", bad)
+            return 1
+        print(f"SELFTEST-VIDEO PASS ({len(_video.CODECS) - 1} codecs; FFV1 and GIF bit-exact)")
+        return 0
+    except Exception:  # noqa: BLE001
+        import traceback
+
+        traceback.print_exc()
+        print("SELFTEST-VIDEO FAIL")
+        return 1
+    finally:
+        logf.flush()
 
 
 def _debug_ffmpeg():
@@ -413,6 +437,36 @@ def _selftest_analysis() -> int:
         logf.flush()
 
 
+def _startup_failure(exc: BaseException) -> None:
+    """The windowed exe has no console: a start-up exception used to vanish.
+    Write it next to the crash log and show it in a native message box."""
+    import os
+    import traceback
+
+    text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    path = ""
+    try:
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        d = os.path.join(base, "opngx")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "startup-error.log")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError:
+        pass
+    msg = (f"opngx studio could not start.\n\n{type(exc).__name__}: {exc}\n\n"
+           + (f"Details were written to:\n{path}" if path else ""))
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, msg, "opngx studio", 0x10)
+        else:
+            sys.stderr.write(msg + "\n" + text)
+    except Exception:  # noqa: BLE001
+        sys.stderr.write(msg + "\n" + text)
+
+
 def _proc_cpu_seconds(handle=None) -> float:
     """User+kernel CPU seconds of this process (or of a child's handle on
     Windows, where os.times() never reports children)."""
@@ -640,6 +694,12 @@ if __name__ == "__main__":
         raise SystemExit(_selftest_ui())
     if "--selftest-engine" in sys.argv:
         raise SystemExit(_selftest_engine())
-    from opngx.ui import main  # noqa: E402
+    try:
+        from opngx.ui import main  # noqa: E402
 
-    raise SystemExit(main())
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - last line of defence of a windowed exe
+        _startup_failure(exc)
+        raise SystemExit(1)
