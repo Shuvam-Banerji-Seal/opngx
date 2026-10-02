@@ -149,7 +149,7 @@ jobs:
       - name: Build one-click setup.exe
         shell: pwsh
         run: |
-          Compress-Archive -Path README.md, docs/FORMAT.md, docs/BENCHMARKS.md `
+          Compress-Archive -Path README.md, docs/STUDIO.md, docs/OUTPUTS.md, docs/ANALYSIS.md, docs/FORMAT.md, docs/BENCHMARKS.md `
             -DestinationPath installer/docs.zip -Force
           Copy-Item build-win/opngx-engine.exe installer/
           Copy-Item dist/opngx-studio.exe installer/
