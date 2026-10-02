@@ -4,6 +4,8 @@
 *.Png
 *.png
 !docs/**/*.png
+!assets/logo/*.png
+!python/src/opngx/ui/assets/*.png
 sbs/
 
 # --- build ---
