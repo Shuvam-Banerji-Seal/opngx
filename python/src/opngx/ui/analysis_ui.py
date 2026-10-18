@@ -30,6 +30,7 @@ import opngx
 import opngx.analysis as oa
 from opngx.ui import scaling, themes
 from opngx.ui.frameview import FrameView, gray_to_qimage
+from opngx.videosrc import VIDEO_EXTS, VideoFrameReader, is_video, probe_video, video_meta
 
 class _Series:
     """Plot series colours of the current theme (indexable like a tuple)."""
@@ -537,6 +538,62 @@ class AnalyzeView(QtWidgets.QWidget):
         left.setObjectName("leftcol")
         lv = QtWidgets.QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 6, 0)
+        # v2.2: WHAT to analyse comes first, above the modules
+        scard = QtWidgets.QFrame()
+        scard.setObjectName("card")
+        sv = QtWidgets.QVBoxLayout(scard)
+        t = QtWidgets.QLabel("SOURCE")
+        t.setObjectName("cardtitle")
+        sv.addWidget(t)
+        self.rb_current = QtWidgets.QRadioButton("the loaded recording")
+        self.rb_file = QtWidgets.QRadioButton("a file: a recording (.bin) or a video")
+        self.rb_batch = QtWidgets.QRadioButton("every recording in the batch folder")
+        self.rb_current.setChecked(True)
+        sv.addWidget(self.rb_current)
+        sv.addWidget(self.rb_file)
+        # v2.2: analyse any .bin or video (mp4, mkv, …) without loading it in Extract
+        frow = QtWidgets.QHBoxLayout()
+        self.file_edit = QtWidgets.QLineEdit()
+        self.file_edit.setPlaceholderText("choose a .bin or a video (mp4, mkv, mov, avi, webm, gif)…")
+        self.file_edit.setToolTip("The file to analyse when 'a file' is chosen: a recording's .bin, or a video.")
+        self.file_edit.editingFinished.connect(self._update_file_info)
+        self.btn_browse = QtWidgets.QPushButton("Browse…")
+        _icons.set_icon(self.btn_browse, "folder", "text")
+        self.btn_browse.setToolTip("Pick a .bin recording or a video file to analyse")
+        self.btn_browse.clicked.connect(self._browse_file)
+        frow.addWidget(self.file_edit, 1)
+        frow.addWidget(self.btn_browse)
+        sv.addLayout(frow)
+        self.file_info = QtWidgets.QLabel("")
+        self.file_info.setObjectName("hint")
+        self.file_info.setWordWrap(True)
+        sv.addWidget(self.file_info)
+        self.fps_row = QtWidgets.QWidget()
+        fr_l = QtWidgets.QHBoxLayout(self.fps_row)
+        fr_l.setContentsMargins(0, 0, 0, 0)
+        lb = QtWidgets.QLabel("time axis: frames per second")
+        lb.setObjectName("fieldlabel")
+        self.sp_fps = QtWidgets.QDoubleSpinBox()
+        self.sp_fps.setRange(0.001, 10_000_000.0)
+        self.sp_fps.setDecimals(3)
+        self.sp_fps.setValue(30.0)
+        self.sp_fps.setToolTip(
+            "A video has no camera clock: time_s = frame / this rate.\n"
+            "Videos exported by opngx carry the CAMERA rate and it is filled in;\n"
+            "for other videos it is the playback rate - enter the camera's."
+        )
+        fr_l.addWidget(lb)
+        fr_l.addWidget(self.sp_fps, 1)
+        sv.addWidget(self.fps_row)
+        self.fps_row.setVisible(False)
+        self._info_path = None
+        self.rb_file.toggled.connect(lambda on: on and self._update_file_info())
+        sv.addWidget(self.rb_batch)
+        last = self.qs.value("analysis/file", "") or ""
+        if isinstance(last, str) and last and os.path.isfile(last):
+            self.file_edit.setText(last)
+        lv.addWidget(scard)
+
         card = QtWidgets.QFrame()
         card.setObjectName("card")
         cv = QtWidgets.QVBoxLayout(card)
@@ -589,11 +646,6 @@ class AnalyzeView(QtWidgets.QWidget):
         t = QtWidgets.QLabel("RUN")
         t.setObjectName("cardtitle")
         rv.addWidget(t)
-        self.rb_current = QtWidgets.QRadioButton("the loaded recording")
-        self.rb_batch = QtWidgets.QRadioButton("every recording in the batch folder")
-        self.rb_current.setChecked(True)
-        rv.addWidget(self.rb_current)
-        rv.addWidget(self.rb_batch)
         grid = QtWidgets.QGridLayout()
         self.sp_start = QtWidgets.QSpinBox()
         self.sp_start.setRange(0, 10**9)
@@ -890,10 +942,63 @@ class AnalyzeView(QtWidgets.QWidget):
             ed.open_path(info.path)
         self.studio.tabs.setCurrentWidget(ed)
 
+    # ------------------------------------------------------------ source --
+    def _browse_file(self) -> None:
+        cur = self.file_edit.text().strip()
+        start = os.path.dirname(cur) if cur else (os.path.dirname(self.studio.bin_edit.text().strip()) or "")
+        exts = " ".join("*" + e for e in VIDEO_EXTS)
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Analyse a recording or a video", start,
+            f"Recordings and videos (*.bin {exts});;Recordings (*.bin);;Videos ({exts});;All files (*)",
+        )
+        if path:
+            self.file_edit.setText(path)
+            self.rb_file.setChecked(True)
+            self._update_file_info()
+
+    def _update_file_info(self) -> None:
+        """Describe the chosen file; for a video, fill in the time-axis rate."""
+        path = self.file_edit.text().strip()
+        self._info_path = path
+        self.fps_row.setVisible(False)
+        if not path:
+            self.file_info.setText("")
+            return
+        if not os.path.isfile(path):
+            self.file_info.setText("file not found")
+            return
+        self.qs.setValue("analysis/file", path)
+        QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            if is_video(path):
+                vi = probe_video(path)
+                self.sp_fps.setValue(vi.fps if vi.fps > 0 else 30.0)
+                self.fps_row.setVisible(True)
+                rate = (f"camera {vi.camera_fps:g} fps (from opngx's export tag)" if vi.camera_fps
+                        else f"{vi.container_fps:g} fps is the PLAYBACK rate: enter the camera's below")
+                quality = ("lossless: exact pixel values" if vi.lossless
+                           else "lossy: pixel values differ from the recording, use the .bin to measure")
+                self.file_info.setText(f"video · {vi.codec} ({quality}) · {vi.width}×{vi.height} · "
+                                       f"{vi.frames:,} frames · {rate}")
+            else:
+                m = opngx.probe(path)
+                fps = f" · {m.framerate:g} fps" if m.framerate and m.framerate > 0 else ""
+                self.file_info.setText(f"recording · {m.width}×{m.height} · {m.capacity_frames:,} frames{fps}"
+                                       + ("" if m.footage_path else " · no .footage sidecar found"))
+        except Exception as exc:  # noqa: BLE001
+            self.file_info.setText(f"cannot read this file: {exc}")
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
     # --------------------------------------------------------------- run --
     def _targets(self) -> list[tuple[str, Any]]:
         """[(bin_path, meta or None)] for the chosen scope."""
         st = self.studio
+        if self.rb_file.isChecked():
+            path = self.file_edit.text().strip()
+            if path != self._info_path:  # typed, not confirmed: describe it (and set the video rate) first
+                self._update_file_info()
+            return ([(path, None)] if path and os.path.isfile(path) else []), ""
         if self.rb_batch.isChecked():
             root = st.bin_edit.text().strip()
             if not os.path.isdir(root):
@@ -920,8 +1025,9 @@ class AnalyzeView(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(
                 self,
                 "opngx",
+                "Choose a .bin recording or a video file first (Browse…)." if self.rb_file.isChecked() else
                 "Load a recording in the Extract tab first (or choose a batch folder "
-                "and pick 'every recording in the batch folder').",
+                "and pick 'every recording in the batch folder', or 'a file').",
             )
             return
         params = {}
@@ -942,6 +1048,7 @@ class AnalyzeView(QtWidgets.QWidget):
         out_root = self.studio.out_edit.text().strip()
         save = self.cb_save.isChecked() and bool(out_root)
         fmt = self.cmb_fmt.currentText()
+        fps = self.sp_fps.value() if self.rb_file.isChecked() and self.fps_row.isVisible() else None
         self._cancel = False
         self._set_running(True)
         self._log(
@@ -958,7 +1065,7 @@ class AnalyzeView(QtWidgets.QWidget):
                     tag = f"{bi + 1}/{len(targets)} {os.path.basename(b)}"
                     try:
                         if meta is None:
-                            meta = opngx.probe(b)
+                            meta = video_meta(b, fps) if is_video(b) else opngx.probe(b)
                         c = crop
                         if c is not None:
                             try:
@@ -969,6 +1076,7 @@ class AnalyzeView(QtWidgets.QWidget):
                         run = oa.analyze(
                             b, names, params=params, meta=meta, start=start, count=count,
                             stride=stride, crop=c, source=source, transform=transform,
+                            fps=fps if is_video(b) else None,
                             progress=lambda d, t_, tag=tag: self.sig.progress.emit(d, t_, tag),
                             should_cancel=lambda: self._cancel,
                             log=lambda s, tag=tag: self.sig.log.emit(f"{tag}: {s}"),
@@ -1190,6 +1298,9 @@ class AnalyzeView(QtWidgets.QWidget):
 
     def _reader_for(self, bin_path: str):
         r = self._readers.get(bin_path)
+        if r is None and is_video(bin_path):
+            r = VideoFrameReader(bin_path)
+            self._readers = {bin_path: r}
         if r is None:
             st = self.studio
             meta = st.meta if (st.meta is not None and st.meta.bin_path == bin_path) else opngx.probe(bin_path)

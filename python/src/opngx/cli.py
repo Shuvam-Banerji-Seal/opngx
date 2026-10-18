@@ -161,7 +161,8 @@ def main(argv: list[str] | None = None) -> int:
         "analyze",
         help="run analysis modules (e.g. motion tracking) and write data files",
     )
-    pa.add_argument("source", help="a .bin, or a batch mother folder with --batch")
+    pa.add_argument("source", help="a .bin, a video (mp4, mkv, mov, avi, webm, gif, ...), "
+                    "or a batch mother folder with --batch")
     pa.add_argument(
         "-m", "--module", action="append", required=True, dest="modules",
         help="module name (repeatable); see `opngx modules`",
@@ -180,6 +181,11 @@ def main(argv: list[str] | None = None) -> int:
     pa.add_argument("--start", type=int, default=0)
     pa.add_argument("--frames", type=int, default=None)
     pa.add_argument("--stride", type=int, default=1, help="analyse every Nth frame")
+    pa.add_argument(
+        "--fps", type=float, default=None,
+        help="videos: the camera frame rate for time_s (default: the rate opngx tagged "
+        "on export, else the video's playback rate)",
+    )
     pa.add_argument("--crop", default=None, metavar="X,Y,W,H")
     pa.add_argument(
         "--source", dest="pixels", choices=["raw", "display"], default="raw",
@@ -605,8 +611,9 @@ def _cmd_analyze(args) -> int:
                 transform=dict(mode=args.mode, brightness=args.brightness,
                                contrast=args.contrast, gamma=args.gamma),
                 jobs=args.jobs, progress=prog, log=lambda s: print(f"opngx: {s}", file=sys.stderr),
+                fps=args.fps,
             )
-        except (ValueError, KeyError) as exc:
+        except (ValueError, KeyError, RuntimeError, OSError) as exc:
             print(f"opngx: {b}: {exc}", file=sys.stderr)
             rc = 1
             continue

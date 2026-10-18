@@ -20,11 +20,13 @@ the data file, and write your own.
 
 **Analyze** tab:
 
-1. Load a recording in **Extract** (or choose a batch folder).
+1. Load a recording in **Extract**, choose a batch folder, or pick **a file**:
+   any `.bin`, or a **video** (MP4, MKV, MOV, AVI, WebM, GIF, …; see
+   *Analysing a video* below) with **Browse…**.
 2. Tick the modules you want switched in. Select one to edit its
    parameters; values are remembered.
-3. Choose the scope: the loaded recording, or every recording in the batch
-   folder. Choose the frame range (start, count, every Nth frame), and whether to
+3. Choose the scope: the loaded recording, a file, or every recording in the
+   batch folder. Choose the frame range (start, count, every Nth frame), and whether to
    analyse only the **crop** (region of interest). Choose the input: raw sensor
    values (right for measurement) or the display curve (B/C/G).
 4. **Run selected** runs the highlighted module. **Run all ticked** runs every
@@ -67,6 +69,12 @@ opngx analyze Footages/ --batch -m motion_tracking -m luminosity \
       -p motion_tracking.window=40 -o Results/ --format csv
 ```
 
+```bash
+# a video works the same way (--fps: the camera rate, for videos without opngx's tag)
+opngx analyze clip.mp4 -m luminosity -o lum.csv
+opngx analyze phone.mov -m motion_tracking --fps 240 -o traj.csv
+```
+
 `-p KEY=VALUE` sets a parameter. With several modules, write
 `-p MODULE.KEY=VALUE`. A misspelt parameter is an error, never silently
 ignored.
@@ -84,7 +92,42 @@ traj.columns["x"], traj.columns["y"], traj.columns["time_s"]   # numpy arrays
 traj.summary                   # method used, mean/std, path length, radius, …
 traj.save("trajectory.csv")    # .csv .json .npz .tsv
 back = oa.load_result("trajectory.npz")
+
+run = oa.analyze("clip.mkv", ["luminosity"], fps=5000)   # a video (v2.2)
 ```
+
+### Analysing a video (v2.2)
+
+Every module also runs on a video. The video is decoded once with the bundled
+ffmpeg, and only the frames you analyse are kept (in a temporary file that is
+removed afterwards). Frame numbers are the video's own (start / every Nth frame
+work as for a recording). Positions are in the video's pixels.
+
+Three things differ from a `.bin`:
+
+| | `.bin` | video |
+|---|---|---|
+| **time** (`time_s`) | the camera clock in every frame header | a frame rate: see below |
+| **pixel values** | the sensor's, exact | exact only for **lossless** codecs (FFV1, GIF, PNG/raw video); H.264, H.265, VP9, AV1, ProRes and JPEG change them |
+| **curve** | raw or display (B/C/G) | as decoded: the curve was applied when the video was made |
+
+- **Time.** A video only knows its playback rate (often 25–60 fps), not the
+  camera's (thousands of fps). Videos exported by opngx carry the camera rate and
+  the true picture size in their metadata, so they get real seconds back
+  automatically. For any other video, enter the camera's rate (studio: *time axis:
+  frames per second*; CLI: `--fps`; Python: `fps=`). GIF cannot hold that
+  metadata.
+- **Exactness, measured** (5,000 frames of a real recording):
+  - an **FFV1** video gives exactly the same luminosity results as the `.bin`
+    with the same curve;
+  - **H.264** differs by up to 0.10 grey levels in the mean (5 in the minimum);
+  - the time axis agrees with the camera clock to 1 µs.
+
+  Measure on the `.bin` or an FFV1 video. A lossy video is fine for a look,
+  not for numbers, and the log says so.
+- **Odd crops.** The padding column/row that H.264 needs for odd sizes is removed
+  again when the video was exported by opngx.
+- **Colour videos** are analysed as their brightness (luma).
 
 ---
 

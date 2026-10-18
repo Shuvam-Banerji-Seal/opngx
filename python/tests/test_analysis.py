@@ -1054,3 +1054,116 @@ def test_an25_native_focus_equals_numpy():
         p = F.focus_measures(a)
         for key in c:
             assert np.allclose(c[key], p[key], rtol=1e-9, atol=1e-6), (shape, key)
+
+
+# ----------------------------------------------------------- AN-video (v2.2) ---
+def _need_ffmpeg():
+    from opngx.video import ffmpeg_available
+
+    if not ffmpeg_available():
+        pytest.skip("ffmpeg not available")
+
+
+def test_an_video_source_matches_the_recording(recs, tmp_path):
+    """v2.2: analysis reads videos. A lossless video gives exactly the .bin's
+    numbers (and time axis, from opngx's camera-rate tag); a lossy one stays
+    close; frame numbers follow start/stride; an odd crop's padding is
+    removed; the preview reader returns the exact frame."""
+    _need_ffmpeg()
+    from opngx import video as V
+    from opngx.videosrc import VideoFrameReader, probe_video
+
+    _d, (ring_bin, ring_t), _spot = recs
+    ref = oa.analyze(ring_bin, ["motion_tracking"], start=2, stride=3)["motion_tracking"]
+    for codec in ("ffv1", "gif", "h264"):
+        out = tmp_path / f"ring_{codec}{V.CODECS[codec]['ext']}"
+        V.render_video(ring_bin, str(out), mode="raw", codec=codec, fps=25)
+        vi = probe_video(str(out))
+        assert (vi.width, vi.height, vi.frames) == (140, 120, 120)
+        logs = []
+        run = oa.analyze(str(out), ["motion_tracking"], start=2, stride=3, log=logs.append)
+        assert not run.errors
+        res = run["motion_tracking"]
+        assert np.array_equal(res.columns["frame"], ref.columns["frame"])
+        if codec == "gif":  # GIF cannot carry the tag: playback rate unless given
+            assert vi.camera_fps is None
+            t = oa.analyze(str(out), ["luminosity"], start=2, stride=3, fps=500)["luminosity"].columns["time_s"]
+            assert np.allclose(t, ref.columns["time_s"])
+        else:
+            assert vi.camera_fps == 500
+            assert np.allclose(res.columns["time_s"], ref.columns["time_s"])
+        if vi.lossless:
+            for k in ("x", "y"):
+                assert np.array_equal(res.columns[k], ref.columns[k], equal_nan=True), (codec, k)
+        else:
+            assert any("lossy" in m for m in logs)
+            assert _err(res, ring_t[2::3])[2] < 0.5
+    # odd crop: H.264 pads one row/column; the tag removes it again
+    out = tmp_path / "ring_crop.mp4"
+    V.render_video(ring_bin, str(out), mode="raw", codec="h264", crop=(5, 4, 61, 59))
+    vi = probe_video(str(out))
+    assert (vi.coded_width, vi.coded_height, vi.width, vi.height) == (62, 60, 61, 59)
+    res = oa.analyze(str(out), ["luminosity"], stride=7)["luminosity"]
+    assert len(res) == len(range(0, 120, 7))
+    # preview reader: exact frames of a lossless video, anywhere in it
+    out = tmp_path / "ring_ffv1.mkv"
+    rd = VideoFrameReader(str(out))
+    with open(ring_bin, "rb") as fh:
+        raw = fh.read()
+    for i in (0, 1, 59, 119, 3):
+        want = np.frombuffer(raw, np.uint8, 140 * 120, i * (8 + 140 * 120) + 8).reshape(120, 140)
+        assert np.array_equal(rd.gray(i), want), i
+
+
+def test_an_video_in_the_analyze_tab(recs, tmp_path):
+    """v2.2: the Analyze tab's 'a file' source takes a video: it is
+    described, its camera rate fills the time axis, the run works and the
+    result rows show their frames."""
+    _need_ffmpeg()
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        pytest.skip("PySide6 not installed")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import time as _time
+
+    from PySide6 import QtWidgets
+
+    from opngx import video as V
+    from opngx.ui import qt_app
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    _d, (ring_bin, ring_t), _spot = recs
+    vid = tmp_path / "ring.mkv"
+    V.render_video(ring_bin, str(vid), mode="raw", codec="ffv1", fps=25)
+    w = qt_app.MainWindow()
+
+    def wait(cond, sec=60):
+        t = _time.time()
+        while not cond() and _time.time() - t < sec:
+            app.processEvents()
+            _time.sleep(0.01)
+
+    try:
+        av = w.analyze_view
+        av.file_edit.setText(str(vid))
+        av.rb_file.setChecked(True)
+        assert av.fps_row.isVisible() or not av.isVisible()
+        assert av.sp_fps.value() == 500 and "ffv1" in av.file_info.text() and "lossless" in av.file_info.text()
+        names = [av.mod_list.item(i).data(0x0100) for i in range(av.mod_list.count())]
+        av.mod_list.setCurrentRow(names.index("motion_tracking"))
+        av.run(only_selected=True)
+        wait(lambda: not av._running)
+        res = av.results.get((str(vid), "motion_tracking"))
+        assert res is not None and len(res) == 120
+        assert _err(res, ring_t)[2] < 0.1
+        assert np.isclose(res.columns["time_s"][-1], 119 / 500)
+        av.row_slider.setValue(60)
+        assert av.preview.image() is not None
+        # a .bin through the same field
+        av.file_edit.setText(ring_bin)
+        av._update_file_info()
+        assert not av.fps_row.isVisibleTo(av) and "recording" in av.file_info.text()
+    finally:
+        w.close()
+        app.processEvents()

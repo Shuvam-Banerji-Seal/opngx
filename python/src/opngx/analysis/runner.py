@@ -105,8 +105,61 @@ def analyze(
     should_cancel: Optional[Callable[[], bool]] = None,
     log: Optional[Callable[[str], None]] = None,
     raise_errors: bool = False,
+    fps: Optional[float] = None,
 ) -> AnalysisRun:
     """Run `modules` over frames start, start+stride, … of a recording.
+
+    `bin_path` is a recording's `.bin`, or a video (.mp4, .mkv, .mov, .avi,
+    .webm, .gif, ...; v2.2), decoded with the bundled ffmpeg.
+    `params` maps module name → {param: value}. `source="raw"` analyses the
+    sensor bytes (the right choice for measurement); `"display"` applies
+    the quality curve in `transform` (mode/brightness/contrast/gamma, same
+    meaning as extraction). `crop` restricts analysis to a region; reported
+    positions are always FULL-FRAME pixel coordinates.
+
+    A video has no camera clock: `time_s` uses `fps`, else the camera rate
+    opngx writes into its exported videos, else the container's (playback)
+    rate. Its frames are analysed as decoded (the curve was applied when it
+    was made), and only lossless codecs keep exact pixel values.
+    """
+    kw = dict(locals())
+    from opngx.videosrc import is_video
+
+    if not is_video(bin_path):
+        return _analyze(**kw)
+    import shutil
+    import tempfile
+
+    td = tempfile.mkdtemp(prefix="opngx_video_")
+    try:
+        return _analyze(**kw, _video_tmp=os.path.join(td, "frames.bin"))
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def _analyze(
+    bin_path: str,
+    modules: Sequence[ModuleRef] | ModuleRef,
+    *,
+    params: Optional[dict[str, dict[str, Any]]] = None,
+    footage: Optional[str] = None,
+    meta: Any = None,
+    start: int = 0,
+    count: Optional[int] = None,
+    stride: int = 1,
+    crop: Optional[tuple[int, int, int, int]] = None,
+    source: str = "raw",
+    transform: Optional[dict[str, Any]] = None,
+    batch: int = 256,
+    jobs: int = 0,
+    progress: Optional[Callable[[int, int], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+    log: Optional[Callable[[str], None]] = None,
+    raise_errors: bool = False,
+    fps: Optional[float] = None,
+    _video_tmp: Optional[str] = None,
+) -> AnalysisRun:
+    """analyze() for a recording, or for a video decoded to `_video_tmp`.
 
     `params` maps module name → {param: value}. `source="raw"` analyses the
     sensor bytes (the right choice for measurement); `"display"` applies
@@ -121,7 +174,20 @@ def analyze(
 
     t0 = time.perf_counter()
     log = log or (lambda _m: None)
-    if meta is None:
+    video = None
+    if _video_tmp is not None:
+        from opngx.videosrc import probe_video, video_meta
+
+        video = probe_video(bin_path)
+        if meta is None or fps:
+            meta = video_meta(bin_path, fps, video)
+        if source == "display":
+            log("a video is analysed as decoded: its curve was applied when it was made")
+            source = "raw"
+        if not video.lossless:
+            log(f"{video.codec} is a lossy codec: pixel values differ from the recording's; "
+                "use the .bin (or an FFV1 video) for measurements")
+    elif meta is None:
         meta = probe(bin_path, footage)
     W, H = int(meta.width), int(meta.height)
     if not W or not H or not meta.capacity_frames:
@@ -178,13 +244,28 @@ def analyze(
     elif source != "raw":
         raise ValueError(f"source must be 'raw' or 'display', got {source!r}")
 
-    mm = np.memmap(
-        meta.bin_path, dtype=np.uint8, mode="r", shape=(meta.capacity_frames, meta.frame_stride)
-    )
-    ts_all = np.ascontiguousarray(mm[idx_all, :8]).view("<u8").reshape(-1).astype(np.uint64)
+    if video is not None:
+        # decode only the analysed frames, in order: position k of the
+        # temporary file is frame idx_all[k] of the video
+        from opngx.videosrc import decode_range
 
-    def frames_for(idx: np.ndarray) -> np.ndarray:
-        px = mm[idx, 8 : 8 + W * H].reshape(-1, H, W)
+        log(f"decoding {n:,} frame(s) of the video ({video.codec}, {W}x{H})")
+        got = decode_range(video, start, stride, n, _video_tmp, progress=progress, should_cancel=should_cancel)
+        if got < n:
+            log(f"the video delivered {got:,} of {n:,} frames")
+            n, idx_all = got, idx_all[:got]
+        read_idx = np.arange(n, dtype=np.int64)
+        mm = np.memmap(_video_tmp, dtype=np.uint8, mode="r", shape=(n, 8 + W * H))
+    else:
+        read_idx = idx_all
+        mm = np.memmap(
+            meta.bin_path, dtype=np.uint8, mode="r", shape=(meta.capacity_frames, meta.frame_stride)
+        )
+    ts_all = np.ascontiguousarray(mm[read_idx, :8]).view("<u8").reshape(-1).astype(np.uint64)
+
+    def frames_for(pos) -> np.ndarray:
+        """Frames at positions `pos` of idx_all."""
+        px = mm[read_idx[pos], 8 : 8 + W * H].reshape(-1, H, W)
         win = np.ascontiguousarray(px[:, cy : cy + ch, cx : cx + cw])
         out = np.take(lut, win) if lut is not None else win
         # every module of the pass gets this SAME array: read-only, so one
@@ -195,12 +276,11 @@ def analyze(
 
     def first(k: int) -> np.ndarray:
         k = max(1, min(int(k), n))
-        return frames_for(idx_all[:k])
+        return frames_for(slice(0, k))
 
     def sampler(k: int) -> np.ndarray:
         k = max(1, min(int(k), n))
-        pick = idx_all[np.linspace(0, n - 1, k).round().astype(np.int64)]
-        return frames_for(pick)
+        return frames_for(np.linspace(0, n - 1, k).round().astype(np.int64))
 
     run = AnalysisRun(frames=n)
     ctxs: dict[str, Context] = {}
@@ -258,7 +338,7 @@ def analyze(
         s, e = chunks[ci]
         if should_cancel is not None and should_cancel():
             return ci, None, {}
-        fr = frames_for(idx_all[s:e])
+        fr = frames_for(slice(s, e))
         out: dict[str, Any] = {}
         for m in par:
             name = type(m).name

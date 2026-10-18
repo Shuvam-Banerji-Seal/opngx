@@ -431,7 +431,16 @@ def render_video(
     # 4:2:0 codecs need even dimensions; a hand-dragged crop is odd half the
     # time and ffmpeg refused it outright (cycle 23): codec_args pads ONE
     # black column/row rather than trimming, so every selected pixel is kept.
-    cmd += codec_args(codec, crf, cw, ch, preset) + [str(out)]
+    cmd += codec_args(codec, crf, cw, ch, preset)
+    # v2.2: the camera rate and the true picture size travel with the video,
+    # so analysing it later gets real seconds (not the playback rate) and
+    # drops the padding row/column of an odd crop
+    from .videosrc import export_tag
+
+    cam = next((float(v) for v in (meta.framerate, meta.framerate_real) if v and v > 0), 0.0)
+    if cam > 0:
+        cmd += ["-metadata", "comment=" + export_tag(cam, cw, ch, start)]
+    cmd += [str(out)]
     # stderr goes to a temp file: a PIPE nobody reads until the end blocks
     # ffmpeg (and so this writer) once it holds ~64 KB of messages
     import tempfile as _tf

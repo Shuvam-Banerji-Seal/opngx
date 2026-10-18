@@ -41,6 +41,10 @@ C engine on every core · Windows studio · Python package · Linux &amp; Window
 - **luminosity**, **contrast** and **ROI statistics**;
 - **your own Python modules**, written and tested in the studio.
 
+Analyse a recording's `.bin`, or a **video** (MP4, MKV, MOV, AVI, WebM, GIF, …). Videos
+exported by opngx keep the camera's time axis, and lossless ones (FFV1) give exactly the
+`.bin`'s numbers.
+
 | | |
 |---|---|
 | <img src="docs/img/studio-start.png" alt="Start tab" width="440"> | <img src="docs/img/studio-video.png" alt="Video tab" width="440"> |
@@ -50,38 +54,38 @@ C engine on every core · Windows studio · Python package · Linux &amp; Window
 
 ## Install
 
-**Windows:** download `opngx-setup-v2.1.2.exe` from the
+**Windows:** download `opngx-setup-v2.2.0.exe` from the
 [latest release](https://github.com/Shuvam-Banerji-Seal/opngx/releases/latest) and run it.
 - **What you get:** the studio, the `opngx-engine` command-line tool, ffmpeg, the
   docs and the sample modules.
 - **Where it goes:** your user only, so no admin rights are needed. It adds a
   Start-menu entry and is removable from *Settings → Apps*.
-- **No install:** run `opngx-studio-portable-v2.1.2.exe` instead.
+- **No install:** run `opngx-studio-portable-v2.2.0.exe` instead.
 
-**Linux:** download `opngx-studio-linux-x86_64-v2.1.2` from the same release.
+**Linux:** download `opngx-studio-linux-x86_64-v2.2.0` from the same release.
 It is the whole studio in one file, with the engine, Qt and ffmpeg inside.
 It runs on any x86-64 distro with glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+,
 Fedora, Arch, …), on Wayland and X11. Nothing to install:
 
 ```bash
-chmod +x opngx-studio-linux-x86_64-v2.1.2
-./opngx-studio-linux-x86_64-v2.1.2                    # start the studio
-./opngx-studio-linux-x86_64-v2.1.2 --install-desktop  # optional: app-menu entry + icon (~/.local, no root)
+chmod +x opngx-studio-linux-x86_64-v2.2.0
+./opngx-studio-linux-x86_64-v2.2.0                    # start the studio
+./opngx-studio-linux-x86_64-v2.2.0 --install-desktop  # optional: app-menu entry + icon (~/.local, no root)
 ```
 
 `--uninstall-desktop` removes the menu entry again. If you move the file, run
 `--install-desktop` again. For the command line only, use the static engine in
-`opngx-2.1.2-linux-x86_64.tar.gz` (or the `.deb`).
+`opngx-2.2.0-linux-x86_64.tar.gz` (or the `.deb`).
 
 **Python (Linux x86_64 / Windows amd64, Python ≥ 3.9):** the wheels contain the compiled engine:
 
 ```bash
-pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.1.2/opngx-2.1.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
-pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.1.2/opngx-2.1.2-py3-none-win_amd64.whl"   # + the studio
+pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.2.0/opngx-2.2.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.2.0/opngx-2.2.0-py3-none-win_amd64.whl"   # + the studio
 ```
 
 The Linux wheel runs on any distro with glibc ≥ 2.17. The sdist
-(`opngx-2.1.2.tar.gz`) installs anywhere and runs on numpy, producing the same
+(`opngx-2.2.0.tar.gz`) installs anywhere and runs on numpy, producing the same
 pixels more slowly.
 
 **From source:**

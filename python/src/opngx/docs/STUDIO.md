@@ -82,7 +82,11 @@ window full screen and **F10** the preview pane.
 ## Analyze
 Run analysis modules, such as motion tracking, Brownian/trap analysis, luminosity,
 contrast, or your own. Tick modules to switch them in, set their parameters, and run
-them on the loaded recording or on the whole batch. The result shows:
+them on the loaded recording, on **a file** you pick (any `.bin`, or a video:
+MP4, MKV, MOV, AVI, WebM, GIF, …), or on the whole batch. For a video, the tab
+shows its codec, size and frame count. It also says whether its pixels are exact
+(lossless) and fills in the frame rate for the time axis: the camera's for videos
+opngx exported, otherwise enter it. The result shows:
 - the tracked point and trajectory on the frame;
 - plots vs time or x–y, and log-log plots for the extra tables (MSD, PSD, steps);
 - the data table, the summary, with warnings when a model doesn't fit, and the log.

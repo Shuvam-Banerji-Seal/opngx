@@ -422,9 +422,25 @@ def _selftest_analysis() -> int:
         assert need <= docs, f"missing docs: {need - docs}"
         assert any(x.startswith("RELEASE-NOTES-") for x in docs), "no release notes bundled"
         print(f"editor sources OK; samples {pys}; {len(docs)} docs")
+        # v2.2: a video (bundled ffmpeg) analyses like its .bin: FFV1 exact,
+        # with the camera time axis from opngx's export tag
+        from opngx import video as _video  # noqa: PLC0415
+
+        (rec / "rec.footage").write_text(
+            f"<x><ResolutionX>{W}</ResolutionX><ResolutionY>{H}</ResolutionY>"
+            f"<NumberOfImages>{n}</NumberOfImages><Framerate>500</Framerate></x>"
+        )
+        vid = d / "rec.mkv"
+        _video.render_video(str(rec / "rec.bin"), str(vid), mode="raw", codec="ffv1", fps=25)
+        rv = oa.analyze(str(vid), ["motion_tracking"])
+        assert rv.ok, rv.errors
+        vt = rv["motion_tracking"]
+        assert np.array_equal(vt.columns["x"], tr.columns["x"]) and np.array_equal(vt.columns["y"], tr.columns["y"])
+        assert np.allclose(vt.columns["time_s"], 0.002 * np.arange(n)), vt.columns["time_s"][:3]
+        print("video source OK (FFV1 = .bin, camera time axis)")
         print(
             f"SELFTEST-ANALYSIS PASS ({len(names)} built-in modules; tracking RMS "
-            f"{np.sqrt(np.mean(err**2)):.4f} px over {n} frames; user module OK)"
+            f"{np.sqrt(np.mean(err**2)):.4f} px over {n} frames; user module OK; video OK)"
         )
         return 0
     except Exception:

@@ -30,6 +30,8 @@ hidden = collect_submodules("opngx") + [
     "opngx.analysis.builtin.flicker", "opngx.analysis.builtin.roi_stats",
     "opngx.formats", "opngx._proc", "opngx.ui.icons", "opngx.ui.logo", "opngx.ui.video_ui",
     "opngx.ui.system_ui", "opngx.ui.home_ui",
+    # v2.2: videos as an analysis source
+    "opngx.videosrc",
     # crisp vector icons (QSvgRenderer); the qsvg image plugin is the fallback
     "PySide6.QtSvg",
 ]
