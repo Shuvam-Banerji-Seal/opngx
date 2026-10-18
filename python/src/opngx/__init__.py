@@ -10,6 +10,7 @@ Public API:
 from .footage import FootageMetadata, probe, read_timestamps
 from .timing import analyze_timestamps
 from .extractor import ExtractStats, Extractor, extract, normalize_crop
+from ._naming import MixedOutputError
 from .quality import QualityMode
 from .verify import VerifyReport, verify, verify_against_bin
 from .video import (
@@ -20,7 +21,7 @@ from .video import (
     resolve_transform,
 )
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 
 
 def engine_diagnostics() -> list[str]:
@@ -46,6 +47,7 @@ def detect_gpus() -> list[str]:
 
 
 __all__ = [
+    "MixedOutputError",
     "FootageMetadata",
     "probe",
     "read_timestamps",

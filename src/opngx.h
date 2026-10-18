@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define OPNGX_VERSION "2.1.0"
+#define OPNGX_VERSION "2.1.1"
 
 /* Default DEFLATE level (v2.0.4: was 6). Measured on all five project
  * recordings with libdeflate: level 1 is 2.8-4.3x faster than 6 for files
@@ -180,6 +180,13 @@ int opngx_focus(const uint8_t *frames, int64_t k, int h, int w,
 int opngx_blobs(const uint8_t *frames, int64_t k, int h, int w, int thr, int dark,
                 int min_area, int conn8, int32_t *count, double *total_area,
                 double *mean_area, double *max_area, double *cx, double *cy);
+
+/* Output-folder guard (v2.1.1): every run records which recording and
+ * which settings produced the frames of its folder (opngx-run.txt). A run
+ * into a folder holding frames of ANOTHER recording or other settings is
+ * refused - mixed folders silently contaminated sequences - unless this is
+ * set before opngx_job_run(). */
+void opngx_job_allow_mixed(opngx_job *job, int allow);
 
 /* Utilities */
 const char *opngx_version(void);

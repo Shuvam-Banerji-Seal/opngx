@@ -27,6 +27,12 @@ footage, and which one to pick.
 | a short clip in a chat or slide | **GIF** | lossless for this 8-bit footage; files grow fast |
 | small previews | **JPEG** or **WebP** below 100 | lossy - never for measurements |
 
+Every image format names its frames so that **name order = frame order**, for
+any number of frames (5 digits up to 100,000 frames, then wider, the same width
+for the whole recording). File dates follow frame order as well. An output
+folder never silently mixes two recordings or two settings (see FORMAT.md,
+*Frame order and the output folder*).
+
 ## Image formats
 
 Measured on 1,000 full frames (256×300) of `brow_2_0`, reference transform,

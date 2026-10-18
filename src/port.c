@@ -132,7 +132,18 @@ void port_unmap_file(opngx_mapped_file *m) {
     memset(m, 0, sizeof *m);
 }
 
-int port_write_whole_file(const char *path, const void *buf, size_t n) {
+void port_set_hidden(const char *path, int hidden) {
+    wchar_t *wp = win_wpath(path);
+    if (!wp) return;
+    DWORD a = GetFileAttributesW(wp);
+    if (a != INVALID_FILE_ATTRIBUTES) {
+        a = hidden ? (a | FILE_ATTRIBUTE_HIDDEN) : (a & ~(DWORD)FILE_ATTRIBUTE_HIDDEN);
+        SetFileAttributesW(wp, a ? a : FILE_ATTRIBUTE_NORMAL);
+    }
+    free(wp);
+}
+
+int port_write_whole_file_t(const char *path, const void *buf, size_t n, int64_t mtime_ms) {
     wchar_t *wp = win_wpath(path);
     if (!wp) return -1;
     /* NOT_CONTENT_INDEXED: in an indexed folder (Documents, Desktop, ...)
@@ -153,8 +164,19 @@ int port_write_whole_file(const char *path, const void *buf, size_t n) {
         }
         off += written;
     }
+    if (mtime_ms >= 0) {   /* FILETIME: 100 ns ticks since 1601-01-01 */
+        ULONGLONG t = (ULONGLONG)mtime_ms * 10000ULL + 116444736000000000ULL;
+        FILETIME ft;
+        ft.dwLowDateTime = (DWORD)t;
+        ft.dwHighDateTime = (DWORD)(t >> 32);
+        SetFileTime(fh, NULL, NULL, &ft);         /* best effort */
+    }
     CloseHandle(fh);
     return 0;
+}
+
+int port_write_whole_file(const char *path, const void *buf, size_t n) {
+    return port_write_whole_file_t(path, buf, n, -1);
 }
 
 int port_mkdir_p(const char *path) {
@@ -521,7 +543,9 @@ void port_unmap_file(opngx_mapped_file *m) {
     memset(m, 0, sizeof *m);
 }
 
-int port_write_whole_file(const char *path, const void *buf, size_t n) {
+void port_set_hidden(const char *path, int hidden) { (void)path; (void)hidden; }
+
+int port_write_whole_file_t(const char *path, const void *buf, size_t n, int64_t mtime_ms) {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) return -1;
     size_t off = 0;
@@ -534,8 +558,20 @@ int port_write_whole_file(const char *path, const void *buf, size_t n) {
         }
         off += (size_t)w;
     }
+    if (mtime_ms >= 0) {
+        struct timespec ts[2];
+        ts[0].tv_sec = 0;
+        ts[0].tv_nsec = UTIME_OMIT;              /* keep the access time */
+        ts[1].tv_sec = (time_t)(mtime_ms / 1000);
+        ts[1].tv_nsec = (long)(mtime_ms % 1000) * 1000000L;
+        futimens(fd, ts);                         /* best effort */
+    }
     close(fd);
     return 0;
+}
+
+int port_write_whole_file(const char *path, const void *buf, size_t n) {
+    return port_write_whole_file_t(path, buf, n, -1);
 }
 
 FILE *port_fopen_u8(const char *path, const char *mode) {

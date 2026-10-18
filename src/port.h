@@ -42,6 +42,14 @@ FILE *port_fopen_u8(const char *path, const char *mode);
 
 /* Write the entire buffer to a new/truncated file. Returns 0 on success. */
 int port_write_whole_file(const char *path, const void *buf, size_t n);
+/* Same, then set the file's modification time to mtime_ms (milliseconds
+ * since the Unix epoch; < 0 = leave it). v2.1.1: frames are written by many
+ * threads at once, so their natural mtimes were out of frame order and any
+ * tool sorting by date mixed the sequence up. */
+/* Mark a file hidden (Windows attribute; no-op elsewhere: a leading dot
+ * already hides it). Best effort. */
+void port_set_hidden(const char *path, int hidden);
+int port_write_whole_file_t(const char *path, const void *buf, size_t n, int64_t mtime_ms);
 
 /* mkdir -p equivalent. Returns 0 on success (or already exists). */
 int port_mkdir_p(const char *path);

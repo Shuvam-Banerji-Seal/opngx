@@ -67,6 +67,8 @@ static void usage(void) {
 "      --timestamps       export per-frame timestamps CSV\n"
 "      --metadata         export metadata.json\n"
 "  -v, --verbose          progress output\n"
+"      --allow-mixed      write into a folder that holds frames of another\n"
+"                         recording / other settings (normally refused)\n"
 "  -h, --help\n", stderr);
 }
 
@@ -139,7 +141,7 @@ static int cmd_extract(int argc, char **argv) {
     p.use_sidecar_transform = 1 | 2 | 4;
     const char *bin = NULL, *footage = NULL, *outdir = NULL;
     range_t rng = {0, -1};
-    int verbose = 0;
+    int verbose = 0, allow_mixed = 0;
     int ext_given = 0;   /* set when --ext/--format provided */
 
     for (int i = 0; i < argc; i++) {
@@ -205,6 +207,7 @@ static int cmd_extract(int argc, char **argv) {
         else if (!strcmp(a, "--timestamps")) p.export_timestamps = 1;
         else if (!strcmp(a, "--metadata")) p.export_metadata = 1;
         else if (!strcmp(a, "--verbose") || !strcmp(a, "-v")) verbose = 1;
+        else if (!strcmp(a, "--allow-mixed")) allow_mixed = 1;
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(); return 0; }
         else { fprintf(stderr, "unknown option: %s\n", a); return 2; }
         #undef NEXTSTR
@@ -231,6 +234,7 @@ static int cmd_extract(int argc, char **argv) {
     if (rng.start > 0 || rng.frames >= 0)
         opngx__set_range(job, rng.start, rng.frames);
 
+    opngx_job_allow_mixed(job, allow_mixed);
     int rc = opngx_job_run(job);
     print_stats(opngx_job_stats(job));
     const char *joberr = opngx_job_errstr(job);
@@ -258,7 +262,7 @@ static int cmd_batch(int argc, char **argv) {
     const char *indir = NULL, *outroot = NULL, *prefix = NULL;
     const char *ext = NULL;
     int jobs = opngx_cpu_count(), level = OPNGX_DEFAULT_LEVEL;
-    int timestamps = 0, metadata = 0, verbose = 0;
+    int timestamps = 0, metadata = 0, verbose = 0, allow_mixed = 0;
     int channels = 6, jpeg_quality = 90;
     int ext_given = 0;
     int32_t w_override = 0, h_override = 0;
@@ -322,6 +326,7 @@ static int cmd_batch(int argc, char **argv) {
         else if (!strcmp(a, "--timestamps")) timestamps = 1;
         else if (!strcmp(a, "--metadata")) metadata = 1;
         else if (!strcmp(a, "--verbose") || !strcmp(a, "-v")) verbose = 1;
+        else if (!strcmp(a, "--allow-mixed")) allow_mixed = 1;
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(); return 0; }
         else { fprintf(stderr, "unknown option: %s\n", a); return 2; }
         #undef NEXTSTR
@@ -419,6 +424,7 @@ static int cmd_batch(int argc, char **argv) {
                 opngx_job_free(job); rc_all = 1; continue;
             }
         }
+        opngx_job_allow_mixed(job, allow_mixed);
         int rc = opngx_job_run(job);
         print_stats(opngx_job_stats(job));
         if (rc != 0 && rc != 2) {

@@ -68,12 +68,49 @@ what opngx proves in verification.
 | Item | Rule | Example |
 |---|---|---|
 | output dir | camera name, `.` → `_` | `brow_1.2` → `brow_1_2` |
-| file names | `{prefix}%05d{ext}` (widens to 6 digits after 99999) | `brow_00000.Png` → `brow_100000.Png` |
+| file names | `{prefix}{frame}{ext}`, the frame number zero-padded to one width for the whole recording (below) | `brow_00000.Png`; `brow_000000.Png` … `brow_123455.Png` |
 | extension case | capital P | `.Png` |
 
-> **Rollover note:** `%05d` zero-pads to 5 digits; frame 100 000 becomes `brow_100000.Png` (6 digits, no truncation, no wrap). The verifier sorts **numerically** by the embedded index, so `100000` correctly follows `99999` (lexicographic would misorder). Current footage is 50 000 frames, so no existing recording hits the boundary; the tool is future-proof for ≥100k runs.
+> **Frame-number width (v2.1.1).** The width is `max(5, digits of the last
+> possible frame index)`, taken from the `.bin` size. It is the same for every
+> frame and for every partial or resumed run of that recording. Up to 100,000
+> frames (indices 0…99,999) this gives TimeViewer's 5 digits. 100,001 frames to
+> 1,000,000 get 6 digits, and so on, with no upper limit. So **sorting by name
+> is sorting by frame**, in every tool (`ls`, Explorer, `sorted(glob(...))`,
+> ImageJ, MATLAB `dir`).
+>
+> Before v2.1.1, `%05d` made frame 100,000 `brow_100000.Png`. A plain name sort
+> put it between `brow_10000.Png` and `brow_10001.Png`, so a recording longer
+> than 100,000 frames was analysed out of order.
 
 opngx defaults reproduce these exactly (`--prefix brow_ --ext .Png`).
+
+## Frame order and the output folder (v2.1.1)
+
+Analysis that reads a folder of frames must see them in recording order and
+only from one recording. opngx guarantees three things:
+
+1. **Names sort in frame order**, with the fixed width above.
+2. **File dates sort in frame order.** Frames are written in parallel, so their
+   natural modification times are out of order. opngx sets frame *i* of a run to
+   `start + i` milliseconds. "Sort by date modified" therefore equals frame order
+   too.
+3. **One folder, one sequence.** The hidden file `.opngx-run` in the output
+   folder records which recording (first timestamp, frame count, size) and which
+   settings (curve, bit depth, channels, format, quality, crop, naming) made
+   the frames there. A later run into the same folder is allowed only if both
+   match, as when you re-run or extend the same extraction. Anything else is
+   refused, because it would leave frames of two recordings, or two brightness
+   curves, side by side under one numbering. The refusal names the folder and
+   the source.
+   - The **studio** asks whether to use a new folder (`…_2`) or delete the old
+     frames. It deletes only the files of the earlier opngx run; other files stay.
+   - The **CLI and Python API** refuse. `--allow-mixed` / `allow_mixed=True`
+     overrides this when mixing really is intended.
+
+   Frames extracted before v2.1.1 have no `.opngx-run`, so the guard cannot
+   know where they came from. Extract them again into an empty folder if a
+   folder might hold more than one run.
 
 ## Region of interest (v1.7.0)
 

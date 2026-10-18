@@ -21,6 +21,9 @@ C engine on every core · Windows studio · Python package · Linux &amp; Window
 - **Curve:** `reference` (the recording's own brightness/contrast/gamma), `raw`
   sensor values, or your own curve. Add a pixel-exact crop, and work on one
   recording or a whole folder of them.
+- **Frame order you can rely on:** file names and file dates sort in frame
+  order for recordings of any length, and an output folder never silently mixes
+  two recordings or two settings.
 
 **Render video** with the bundled ffmpeg:
 - H.264, H.265, VP9, AV1, ProRes, Motion-JPEG, GIF, or H.264 on the GPU.
@@ -47,23 +50,23 @@ C engine on every core · Windows studio · Python package · Linux &amp; Window
 
 ## Install
 
-**Windows:** download `opngx-setup-v2.1.0.exe` from the
+**Windows:** download `opngx-setup-v2.1.1.exe` from the
 [latest release](https://github.com/Shuvam-Banerji-Seal/opngx/releases/latest) and run it.
 - **What you get:** the studio, the `opngx-engine` command-line tool, ffmpeg, the
   docs and the sample modules.
 - **Where it goes:** your user only, so no admin rights are needed. It adds a
   Start-menu entry and is removable from *Settings → Apps*.
-- **No install:** run `opngx-studio-portable-v2.1.0.exe` instead.
+- **No install:** run `opngx-studio-portable-v2.1.1.exe` instead.
 
 **Python (Linux x86_64 / Windows amd64, Python ≥ 3.9):** the wheels contain the compiled engine:
 
 ```bash
-pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.1.0/opngx-2.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
-pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.1.0/opngx-2.1.0-py3-none-win_amd64.whl"   # + the studio
+pip install https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.1.1/opngx-2.1.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+pip install "opngx[qt] @ https://github.com/Shuvam-Banerji-Seal/opngx/releases/download/v2.1.1/opngx-2.1.1-py3-none-win_amd64.whl"   # + the studio
 ```
 
 The Linux wheel runs on any distro with glibc ≥ 2.17. The sdist
-(`opngx-2.1.0.tar.gz`) installs anywhere and runs on numpy, producing the same
+(`opngx-2.1.1.tar.gz`) installs anywhere and runs on numpy, producing the same
 pixels more slowly.
 
 **From source:**

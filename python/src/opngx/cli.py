@@ -52,6 +52,9 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
         "lossy: jpg. See `opngx formats`.",
     )
     p.add_argument("-q", "--jpeg-quality", type=int, default=90)
+    p.add_argument("--allow-mixed", action="store_true",
+                   help="write into a folder that already holds frames of another recording or "
+                   "other settings (normally refused: it would mix two sequences)")
     p.add_argument("--webp-quality", type=int, default=100,
                    help="100 = lossless WebP (default); lower = lossy, smaller")
     p.add_argument(
@@ -431,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
             channels=0 if args.channels == "gray" else 6,
             jpeg_quality=args.jpeg_quality,
             webp_quality=getattr(args, "webp_quality", 100),
+            allow_mixed=getattr(args, "allow_mixed", False),
             crop=_parse_crop(getattr(args, "crop", None)),
             jobs=args.jobs,
             level=args.level,

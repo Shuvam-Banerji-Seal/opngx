@@ -622,7 +622,7 @@ def test_every_format_is_what_it_claims(fixture_dir, native_available, tmp_path,
             out = tmp_path / f"{key}{bits}{int(force_fallback)}"
             opngx.extract(binp, str(out), fmt=key, bit_depth=bits, frames=6, start=2, crop=crop,
                           prefix="cam_", channels=0 if key == "png" else 6)
-            files = sorted(p for p in out.iterdir() if p.suffix not in (".csv", ".json"))
+            files = sorted(p for p in out.iterdir() if p.suffix not in (".csv", ".json") and not p.name.startswith("."))
             dec = list(formats.read_frame(str(files[0]))) if key == "npy" else [formats.read_frame(str(p)) for p in files]
             assert len(dec) == 6, (key, bits, len(dec))
             for i, a in enumerate(dec):
@@ -705,3 +705,113 @@ def test_studio_v21_tabs_icons_and_no_hang(tmp_path, monkeypatch):
                                         "<NumberOfImages>10</NumberOfImages></x>", encoding="utf-8")
     st = opngx.extract(binp, str(tmp_path / "j"), fmt="jp2", mode="raw")
     assert st.frames_written == 10
+
+
+def _tiny_long_recording(tmp_path, n=100_004, w=2, h=1):
+    """A recording with more than 100,000 frames, kept tiny (2x1 pixels)."""
+    d = tmp_path / "long"
+    d.mkdir()
+    st = 8 + w * h
+    buf = np.zeros((n, st), np.uint8)
+    buf[:, :8] = (np.arange(n, dtype="<u8") * 200 + 1_000_000).view(np.uint8).reshape(n, 8)
+    buf[:, 8:] = (np.arange(n) % 251)[:, None].astype(np.uint8)
+    (d / "long.bin").write_bytes(buf.tobytes())
+    (d / "long.footage").write_text(
+        f"<x><Footage><ResolutionX>{w}</ResolutionX><ResolutionY>{h}</ResolutionY>"
+        f"<NumberOfImages>{n}</NumberOfImages></Footage><SettingsProcessing><Brightness>49</Brightness>"
+        "<Contrast>18</Contrast><Gamma>1</Gamma></SettingsProcessing></x>", encoding="utf-8")
+    return str(d / "long.bin")
+
+
+@pytest.mark.parametrize("path", ["native", "fallback", "webp"])
+def test_output_files_sort_in_frame_order_by_name_and_by_date(tmp_path, native_available, monkeypatch, path):
+    """v2.1.1 field report: extracted frames 'not sequential'. (1) names
+    used a fixed 5 digits, so in a 500,000-frame recording brow_100000
+    sorted between brow_10000 and brow_10001; (2) parallel writers left the
+    file times out of order. Both orders must now equal frame order."""
+    import glob
+    import os
+    import re
+
+    if path == "native" and not native_available:
+        pytest.skip("native engine not built")
+    binp = _tiny_long_recording(tmp_path)
+    if path == "fallback":
+        import opngx.extractor as ex_mod
+
+        monkeypatch.setattr(ex_mod, "load_library", lambda: None)
+    out = tmp_path / "o"
+    fmt = "webp" if path == "webp" else "png"
+    # across the 5 -> 6 digit boundary, then an early range into the same run
+    opngx.extract(binp, str(out), fmt=fmt, start=99_990, frames=14, jobs=4)
+    opngx.extract(binp, str(out), fmt=fmt, start=9_995, frames=10, jobs=4)
+    files = [f for f in glob.glob(str(out / "brow_*")) if re.search(r"_\d+\.\w+$", f)]
+    num = {f: int(re.search(r"_(\d+)\.\w+$", f).group(1)) for f in files}
+    assert {len(re.search(r"_(\d+)\.", os.path.basename(f)).group(1)) for f in files} == {6}
+    assert sorted(files) == sorted(files, key=num.get)  # name order == frame order
+    # within one run, file times follow frame order
+    run2 = sorted((f for f in files if num[f] < 20_000), key=lambda f: (os.stat(f).st_mtime_ns, f))
+    assert [num[f] for f in run2] == sorted(num[f] for f in run2)
+
+
+def test_short_recordings_keep_timeviewers_five_digit_names(fixture_dir, tmp_path):
+    out = tmp_path / "s"
+    opngx.extract(str(fixture_dir / "cam_9.9" / "cam_9.9.bin"), str(out), frames=3, prefix="cam_")
+    assert sorted(p.name for p in out.glob("cam_*.Png")) == ["cam_00000.Png", "cam_00001.Png", "cam_00002.Png"]
+
+
+@pytest.mark.parametrize("path", ["native", "fallback"])
+def test_output_folder_is_never_mixed_silently(fixture_dir, tmp_path, native_available, monkeypatch, path):
+    """v2.1.1: two recordings (or two settings) written into one folder
+    interleaved silently - e.g. a 5,000-frame run overwrote frames 0-4999 of
+    a 50,000-frame one. Now refused unless allow_mixed=True."""
+    if path == "native" and not native_available:
+        pytest.skip("native engine not built")
+    a = str(fixture_dir / "cam_9.9" / "cam_9.9.bin")
+    b = _tiny_long_recording(tmp_path, n=50)
+    if path == "fallback":
+        import opngx.extractor as ex_mod
+
+        monkeypatch.setattr(ex_mod, "load_library", lambda: None)
+    out = tmp_path / "mix"
+    opngx.extract(a, str(out), frames=5)
+    opngx.extract(a, str(out), frames=8)  # same recording + settings: fine
+    with pytest.raises(opngx.MixedOutputError, match="ANOTHER recording"):
+        opngx.extract(b, str(out), frames=5)
+    with pytest.raises(opngx.MixedOutputError, match="OTHER settings"):
+        opngx.extract(a, str(out), frames=5, mode="raw")
+    opngx.extract(b, str(out), frames=5, allow_mixed=True)
+    assert (out / ".opngx-run").read_text(encoding="utf-8").count("recording=") == 1
+
+
+@pytest.mark.parametrize("n_frames,width", [(10, 5), (99_999, 5), (100_000, 5), (100_001, 6), (1_000_001, 7)])
+def test_frame_number_width_follows_the_recording_for_any_length(tmp_path, native_available, monkeypatch,
+                                                                n_frames, width):
+    """Any number of frames: the width is the digits of the LAST frame index
+    (minimum 5, TimeViewer's), the same for every file of a recording and
+    identical on the engine and the Python paths, so sorting by name is
+    always sorting by frame."""
+    import re
+
+    from opngx import _naming
+
+    assert _naming.name_width(n_frames) == width
+    binp = _tiny_long_recording(tmp_path, n=n_frames)
+    first = max(0, n_frames - 12)
+    names = {}
+    for path in ("native", "fallback"):
+        if path == "native" and not native_available:
+            continue
+        if path == "fallback":
+            import opngx.extractor as ex_mod
+
+            monkeypatch.setattr(ex_mod, "load_library", lambda: None)
+        out = tmp_path / path
+        opngx.extract(binp, str(out), start=first, frames=12)
+        opngx.extract(binp, str(out), start=0, frames=3)
+        got = sorted(p.name for p in out.glob("brow_*.Png"))
+        assert all(len(re.search(r"_(\d+)\.", g).group(1)) == width for g in got), got
+        assert [int(g[5:5 + width]) for g in got] == sorted(int(g[5:5 + width]) for g in got)
+        names[path] = got
+    if len(names) == 2:
+        assert names["native"] == names["fallback"]

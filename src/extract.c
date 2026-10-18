@@ -8,6 +8,7 @@
  *  - writes are single-shot write() syscalls; kernel page cache absorbs bursts
  */
 #include "opngx.h"
+#include <time.h>
 #include "footage.h"
 #include "transform.h"
 #include "pngout.h"
@@ -61,6 +62,15 @@ struct opngx_job {
      * scattered disk reads between clicking Extract and the first frame. */
     uint64_t *ts_buf;
     uint8_t  *ts_have;
+
+    /* v2.1.1: frame-order file names and times. name_width = digits of the
+     * recording's last frame index (at least 5, TimeViewer's width): a
+     * 500,000-frame recording used 5-digit names, so name order put
+     * brow_100000 between brow_10000 and brow_10001. mtime_base_ms: file
+     * times follow frame order (the threads wrote them out of order). */
+    int      name_width;
+    int64_t  mtime_base_ms;
+    int      allow_mixed;     /* opngx_job_allow_mixed() */
 
     opngx_stats stats;
     char err[512];
@@ -173,6 +183,11 @@ opngx_job *opngx_job_create(const opngx_params *pin, char *err, size_t err_cap) 
     else if (have_ft && ft.num_images > 0) j->frames_total = ft.num_images < cap_frames ? ft.num_images : cap_frames;
     else j->frames_total = cap_frames;
     if (j->frames_total <= 0) { snprintf(j->err, sizeof j->err, "no frames to extract"); goto fail; }
+    {
+        int digits = 1;
+        for (int64_t v = cap_frames > 1 ? cap_frames - 1 : 0; v >= 10; v /= 10) digits++;
+        j->name_width = digits > 5 ? digits : 5;
+    }
 
     /* --- buffers sizing --- */
     if (j->p.format < 0 || j->p.format > 4) j->p.format = OPNGX_FMT_PNG;
@@ -415,9 +430,9 @@ static void extract_worker(const port_worker_ctx *w, void *ud) {
                     }
 encoded:
                     if (flen2 == 0) { atomic_fetch_add(&sh->hard, 16); continue; }
-                    snprintf(path, sizeof path, "%s/%s%05lld%s", j->out_dir,
-                             j->prefix, (long long)(base + i), j->ext);
-                    if (port_write_whole_file(path, filebuf, flen2)) {
+                    snprintf(path, sizeof path, "%s/%s%0*lld%s", j->out_dir,
+                             j->prefix, j->name_width, (long long)(base + i), j->ext);
+                    if (port_write_whole_file_t(path, filebuf, flen2, j->mtime_base_ms + i)) {
                         atomic_fetch_add(&sh->hard, 8);
                         continue;
                     }
@@ -445,9 +460,9 @@ encoded:
                                                  bits16 ? 16 : 8,
                                                  j->color_type, idat, zlen);
 
-                snprintf(path, sizeof path, "%s/%s%05lld%s", j->out_dir,
-                         j->prefix, (long long)(base + i), j->ext);
-                if (port_write_whole_file(path, filebuf, flen)) {
+                snprintf(path, sizeof path, "%s/%s%0*lld%s", j->out_dir,
+                         j->prefix, j->name_width, (long long)(base + i), j->ext);
+                if (port_write_whole_file_t(path, filebuf, flen, j->mtime_base_ms + i)) {
                     atomic_fetch_add(&sh->hard, 8);
                     continue;
                 }
@@ -493,9 +508,85 @@ progress_bump:;
 }
 
 
+void opngx_job_allow_mixed(opngx_job *j, int allow) { if (j) j->allow_mixed = allow ? 1 : 0; }
+
+static uint64_t fnv1a(const void *p, size_t n, uint64_t h) {
+    const uint8_t *b = (const uint8_t *)p;
+    for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ULL; }
+    return h;
+}
+
+/* The identity of what this run writes: the recording (first frame header,
+ * frames in the file, geometry) and every setting that changes pixels or
+ * names. Two runs with the same lines may share a folder (re-run, extend);
+ * anything else would mix two sequences. */
+static void run_identity(const opngx_job *j, char *rec, size_t rcap, char *set, size_t scap) {
+    uint64_t ts0 = 0;
+    if (j->map_len >= 8) memcpy(&ts0, j->map, 8);
+    snprintf(rec, rcap, "recording=first_timestamp %llu, frames %lld, %ux%u",
+             (unsigned long long)ts0, (long long)(j->map_len / (size_t)j->stride),
+             j->src_w, j->src_h);
+    uint64_t h = fnv1a(j->lut8, sizeof j->lut8, 1469598103934665603ULL);
+    snprintf(set, scap, "settings=curve %016llx, bits %d, channels %d, format %d, quality %d, "
+             "crop %u,%u,%ux%u, names %s#%s",
+             (unsigned long long)h, j->p.bit_depth, j->color_type, j->p.format,
+             j->p.format == OPNGX_FMT_JPG ? j->p.jpeg_quality : 0,
+             j->p.crop_x, j->p.crop_y, j->out_w, j->out_h, j->prefix, j->ext);
+}
+
+static int read_line(FILE *fp, const char *key, char *out, size_t cap) {
+    char line[1024];
+    rewind(fp);
+    size_t kl = strlen(key);
+    while (fgets(line, sizeof line, fp)) {
+        if (!strncmp(line, key, kl)) {
+            line[strcspn(line, "\r\n")] = 0;
+            snprintf(out, cap, "%s", line);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int output_guard(opngx_job *j) {
+    char path[1200], rec[256], set[512], old_rec[1024] = "", old_set[1024] = "", old_src[1024] = "";
+    /* a hidden dot-file: frame globbing (`*.png`, glob('*')) never sees it */
+    snprintf(path, sizeof path, "%s/.opngx-run", j->out_dir);
+    run_identity(j, rec, sizeof rec, set, sizeof set);
+    FILE *fp = port_fopen_u8(path, "r");
+    if (fp) {
+        read_line(fp, "recording=", old_rec, sizeof old_rec);
+        read_line(fp, "settings=", old_set, sizeof old_set);
+        read_line(fp, "source=", old_src, sizeof old_src);
+        fclose(fp);
+        int same = !strcmp(old_rec, rec) && !strcmp(old_set, set);
+        if (!same && !j->allow_mixed) {
+            /* the message is cut to fit j->err on purpose */
+            int n = snprintf(j->err, sizeof j->err,
+                     "the output folder already holds frames of %s (%.200s). Writing this run "
+                     "there would mix two sequences. Choose an empty folder, or allow mixing "
+                     "explicitly (--allow-mixed). Folder: %.200s",
+                     strcmp(old_rec, rec) ? "ANOTHER recording" : "the same recording with OTHER settings",
+                     old_src[0] ? old_src + 7 : "see .opngx-run", j->out_dir);
+            (void)n;
+            return -1;
+        }
+    }
+    port_set_hidden(path, 0);  /* a hidden file cannot be rewritten on Windows */
+    fp = port_fopen_u8(path, "w");
+    if (fp) {  /* best effort: the guard must never block a writable run */
+        fprintf(fp, "opngx-run 1 (written by opngx %s; identifies the frames in this folder)\n%s\n%s\nsource=%s\n",
+                OPNGX_VERSION, rec, set, j->bin_path ? j->bin_path : "");
+        fclose(fp);
+        port_set_hidden(path, 1);
+    }
+    return 0;
+}
+
 int opngx_job_run(opngx_job *j) {
     if (!j) return -1;
     if (port_mkdir_p(j->out_dir)) { snprintf(j->err, sizeof j->err, "mkdir %.300s failed", j->out_dir); return -1; }
+    if (output_guard(j)) return -1;
 
     /* timestamps: captured by the workers, written after the pool */
     free(j->ts_buf); free(j->ts_have);
@@ -521,6 +612,8 @@ int opngx_job_run(opngx_job *j) {
     }
 
     double t0 = port_now_s();
+    /* frame i of this run gets mtime base + i ms; the last one "now" */
+    j->mtime_base_ms = (int64_t)time(NULL) * 1000 - (N > 0 ? N - 1 : 0);
     atomic_store(&j->done, 0);
     atomic_store(&j->backend_seen, 0);
     atomic_store(&j->last_ms, 0);

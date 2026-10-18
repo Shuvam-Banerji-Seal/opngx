@@ -1220,8 +1220,9 @@ def test_ar25_fallback_honours_start_format_channels_and_crop(fixture_dir, tmp_p
         finally:
             _ext.load_library = orig
         assert st.backend == "python-fallback"
-        a = sorted(p.name for p in nat.iterdir())
-        b = sorted(p.name for p in fb.iterdir())
+        # the hidden run record (.opngx-run) is not a frame
+        a = sorted(p.name for p in nat.iterdir() if not p.name.startswith("."))
+        b = sorted(p.name for p in fb.iterdir() if not p.name.startswith("."))
         assert a == b, f"case {n}: file sets differ {a} vs {b}"
         for name in a:
             pa = np.asarray(Image.open(nat / name).convert("L"))
@@ -1329,7 +1330,7 @@ def _want(bin_p, idx, b, c, g, crop=None):
     return np.asarray(build_lut(b, c, g))[raw]
 
 
-def test_ar28_studio_uses_each_recordings_footage_and_live_batch_settings(tmp_path):
+def test_ar28_studio_uses_each_recordings_footage_and_live_batch_settings(tmp_path, monkeypatch):
     """cycle 23 field report: 'gamma and contrast settings not getting
     applied to batches, and not getting extracted from the project files'.
 
@@ -1395,14 +1396,37 @@ def test_ar28_studio_uses_each_recordings_footage_and_live_batch_settings(tmp_pa
         w.c_spin.setValue(40)
         w.g_spin.setValue(2.5)
         assert bw.settings["gamma"] == 2.5, "batch window did not see the change"
+        # v2.1.1: the folders hold the reference-curve frames, so this run is
+        # a conflict: it must ask, and "replace" must leave NO old frame (the
+        # old behaviour overwrote frame 2 and kept frames 0-1 of the other
+        # curve - a silently mixed sequence)
+        from opngx.ui import qt_app as _qa
+
+        asked = []
+        monkeypatch.setattr(_qa, "resolve_output_conflicts", lambda parent, c: asked.append(c) or "replace")
         loop = QEventLoop()
         bw.finished.connect(lambda _: loop.quit())
         bw.start()
         QTimer.singleShot(60000, loop.quit)
         loop.exec()
+        assert asked and len(asked[0]) == 2, asked
         for name in ("recA", "recB"):
-            got = _decode(tmp_path / "out" / name / "PNG" / "brow_00002.Png")
-            assert np.array_equal(got, _want(root / name / "rec.bin", 2, 5, 40, 2.5)), name
+            for k in (0, 1, 2):
+                got = _decode(tmp_path / "out" / name / "PNG" / f"brow_{k:05d}.Png")
+                assert np.array_equal(got, _want(root / name / "rec.bin", k, 5, 40, 2.5)), (name, k)
+        # ... and "new" writes to a fresh folder, the old one untouched
+        w.g_spin.setValue(1.9)
+        monkeypatch.setattr(_qa, "resolve_output_conflicts", lambda parent, c: "new")
+        loop = QEventLoop()
+        bw.finished.connect(lambda _: loop.quit())
+        bw.start()
+        QTimer.singleShot(60000, loop.quit)
+        loop.exec()
+        assert bw.out_root.endswith("out_2"), bw.out_root
+        got = _decode(tmp_path / "out_2" / "recA" / "PNG" / "brow_00001.Png")
+        assert np.array_equal(got, _want(root / "recA" / "rec.bin", 1, 5, 40, 1.9))
+        got = _decode(tmp_path / "out" / "recA" / "PNG" / "brow_00001.Png")
+        assert np.array_equal(got, _want(root / "recA" / "rec.bin", 1, 5, 40, 2.5))
     finally:
         if w._batch_win is not None:
             w._batch_win.close()
@@ -1546,11 +1570,20 @@ def test_ar31_batch_panes_collapse_float_fullscreen_and_compare(tmp_path):
         assert not p.isFloating()
 
         pv = bw.pane_preview
+        def settle(cond, ms=3000):
+            # window state changes are asynchronous; on a loaded machine one
+            # processEvents() is not always enough
+            import time
+            end = time.monotonic() + ms / 1000
+            while not cond() and time.monotonic() < end:
+                app.processEvents()
+                time.sleep(0.01)
+
         pv.toggle_fullscreen()
-        app.processEvents()
+        settle(lambda: pv.isFloating() and pv.isFullScreen())
         assert pv.isFloating() and pv.isFullScreen()
         pv.leave_fullscreen()
-        app.processEvents()
+        settle(lambda: not pv.isFullScreen() and not pv.isFloating())
         assert not pv.isFullScreen() and not pv.isFloating(), "Esc must re-dock"
 
         p.close()

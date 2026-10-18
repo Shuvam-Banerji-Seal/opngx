@@ -468,6 +468,63 @@ def _detect_gpus() -> list[str]:
         return []
 
 
+def next_free_root(root: str) -> str:
+    """<root>_2, <root>_3, ... : the first that does not exist yet."""
+    base = os.path.normpath(root)
+    k = 2
+    while os.path.exists(f"{base}_{k}"):
+        k += 1
+    return f"{base}_{k}"
+
+
+def resolve_output_conflicts(parent, conflicts: list) -> Optional[str]:
+    """Ask what to do when output folders already hold frames of another
+    recording or other settings (v2.1.1): "new" (a fresh output folder),
+    "replace" (delete those old frames first) or None (cancel). Writing
+    into them anyway would mix two sequences, so that is not offered.
+    Module-level so tests can answer instead of a user."""
+    n = len(conflicts)
+    shown = "\n".join(f"• {c}" for c in conflicts[:6]) + (f"\n… and {n - 6} more" if n > 6 else "")
+    box = QtWidgets.QMessageBox(parent)
+    box.setIcon(QtWidgets.QMessageBox.Warning)
+    box.setWindowTitle("opngx — output folder in use")
+    box.setText(f"{n} output folder(s) already hold frames from a different recording or with "
+                "different settings. Writing there would mix two sequences.")
+    box.setInformativeText(shown)
+    new = box.addButton("Use a new output folder", QtWidgets.QMessageBox.AcceptRole)
+    rep_ = box.addButton("Delete the old frames there", QtWidgets.QMessageBox.DestructiveRole)
+    box.addButton(QtWidgets.QMessageBox.Cancel)
+    box.setDefaultButton(new)
+    box.exec()
+    if box.clickedButton() is new:
+        return "new"
+    if box.clickedButton() is rep_:
+        return "replace"
+    return None
+
+
+def check_output_conflicts(targets: list, opts: dict, geom: Optional[dict] = None) -> list:
+    """targets: [(bin_path, out_dir, crop)]. Returns [(bin_path, out_dir,
+    message)] for every folder that would refuse this run."""
+    found = []
+    for b, od, crop in targets:
+        try:
+            msg = opngx.Extractor(b, **(geom or {})).output_conflict(od, crop=crop, **opts)
+        except Exception:  # noqa: BLE001 - unreadable recording: the run reports it
+            msg = None
+        if msg:
+            found.append((b, od, msg))
+    return found
+
+
+def clear_conflicting(found: list, opts: dict) -> int:
+    from opngx import _naming
+    from opngx.formats import effective_ext
+
+    ext = effective_ext(opts.get("fmt", "png"), opts.get("ext", ".Png"))
+    return sum(_naming.clear_frames(od, opts.get("prefix", "brow_"), ext) for _b, od, _m in found)
+
+
 def _app_icon() -> "QtGui.QIcon":
     """Window / taskbar icon, drawn from the logo geometry at every size
     (v2.1). v2.0 looked for <_MEIPASS>/icon.png while the spec bundled
@@ -2479,6 +2536,25 @@ class MainWindow(QtWidgets.QMainWindow):
                 self, "opngx", f"The crop {crop} does not fit this recording."
             )
             return
+        # v2.1.1: never mix two recordings / settings in one folder - ask
+        # BEFORE starting instead of failing per recording
+        def _targets(root):
+            if batch:
+                return [(b_, batch_out_dir(root, root_dir, b_, opts["fmt"]), crop) for b_ in bins]
+            return [(b_, run_out_dir(root, b_, opts["fmt"]), crop) for b_ in bins]
+
+        found = check_output_conflicts(_targets(out), opts, geom)
+        if found:
+            choice = resolve_output_conflicts(self, [m for _b, _o, m in found])
+            if choice is None:
+                return
+            if choice == "new":
+                out = next_free_root(out)
+                self.out_edit.setText(out)
+                self._log(f"output folder in use - writing to {out} instead", "warn")
+            else:
+                n_del = clear_conflicting(found, opts)
+                self._log(f"deleted {n_del} old file(s) in {len(found)} folder(s) before extracting", "warn")
         self._running = True
         self._cancel_requested = False
         self._sig.state.emit(True)

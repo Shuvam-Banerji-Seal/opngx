@@ -183,6 +183,9 @@ def engine_diagnostics() -> list[str]:
 
 
 def _wire_prototypes(lib: ctypes.CDLL) -> None:
+    if hasattr(lib, "opngx_job_allow_mixed"):  # v2.1.1, optional
+        lib.opngx_job_allow_mixed.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.opngx_job_allow_mixed.restype = None
     lib.opngx_version.restype = ctypes.c_char_p
     lib.opngx_abi_version.restype = ctypes.c_int
     lib.opngx_cpu_count.restype = ctypes.c_int

@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import struct
 import zlib
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -194,6 +194,10 @@ def extract_frames(
     user_ext = "" if (ext == ".Png" and fmt != "png") else (ext or "")
     jobs = jobs or os.cpu_count() or 1
     done = 0
+    from ._naming import frame_name, mtime_base_ms, name_width, stamp
+
+    width_n = name_width(os.path.getsize(bin_path) // max(1, stride))
+    base_ms = mtime_base_ms(num_frames)
     # width/height are the RECORDED frame; the crop selects a window of it
     # (0 = to the frame edge, as everywhere else).
     crop_x, crop_y, crop_w, crop_h = (int(v) for v in crop)
@@ -233,10 +237,18 @@ def extract_frames(
         )
         for i in range(num_frames)
     ]
+    from .formats import _processes_usable
+
     if jobs > 1 and num_frames > 32:
-        with ProcessPoolExecutor(max_workers=jobs) as ex:
+        # processes only when the workers can import __main__ (a frozen app or
+        # a script file); from stdin / -c the pool crashed (Python 3.14's
+        # forkserver), so use threads there - zlib releases the GIL anyway
+        pool_cls = ProcessPoolExecutor if _processes_usable() else ThreadPoolExecutor
+        with pool_cls(max_workers=jobs) as ex:
             for frame_index, (fext, blob) in ex.map(_render_frame, args, chunksize=16):
-                (out / f"{prefix}{frame_index:05d}{user_ext or fext}").write_bytes(blob)
+                fp = out / frame_name(prefix, frame_index, width_n, user_ext or fext)
+                fp.write_bytes(blob)
+                stamp(fp, base_ms, frame_index - start)
                 done += 1
                 if progress:
                     progress(done)
@@ -245,7 +257,9 @@ def extract_frames(
     else:
         for a in args:
             frame_index, (fext, blob) = _render_frame(a)
-            (out / f"{prefix}{frame_index:05d}{user_ext or fext}").write_bytes(blob)
+            fp = out / frame_name(prefix, frame_index, width_n, user_ext or fext)
+            fp.write_bytes(blob)
+            stamp(fp, base_ms, frame_index - start)
             done += 1
             if progress:
                 progress(done)

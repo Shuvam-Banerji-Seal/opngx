@@ -236,6 +236,7 @@ check "spaces in output path: verifybin PASS"
 
 echo "== T-19: Windows-style backslash + drive-letter output path =="
 W32OUT='C:\opngx_t19\SQ 100 out'
+rm -rf "$W32OUT"   # a fixed relative path: start clean every run
 "$ENGINE" extract --bin "$TMP/fix/cam_9.9/cam_9.9.bin" \
                   --footage "$TMP/fix/cam_9.9/cam_9.9.footage" \
                   --out "$W32OUT" --prefix SQ_100_ -j 4 2>"$TMP/t19err.txt"
@@ -249,6 +250,7 @@ else
   [ $RC -eq 0 ] && [ "$(ls "$W32OUT" | wc -l)" -eq 200 ]
 fi
 check "backslash+drive-letter output path (mkdir_p drive skip)"
+rm -rf "$W32OUT"
 
 
 echo "== T-20: non-ASCII (UTF-8) output directory =="

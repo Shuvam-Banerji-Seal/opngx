@@ -1673,6 +1673,23 @@ else:
                 return
             # the LIVE studio settings, not the ones from when we opened
             self.update_settings(self.current_settings())
+            # v2.1.1: folders holding another recording's / other settings'
+            # frames would be mixed - decide before anything is written
+            from opngx.ui import qt_app as _qa
+
+            s = self.settings
+            found = _qa.check_output_conflicts([(it.bin_path, it.out_dir, it.crop) for it in self.items], s)
+            if found:
+                choice = _qa.resolve_output_conflicts(self, [m for _b, _o, m in found])
+                if choice is None:
+                    return
+                if choice == "new":
+                    self.out_root = _qa.next_free_root(self.out_root)
+                    self.update_settings(s)  # recomputes every item's out_dir
+                    self.log.emit(f"output folder in use - writing to {self.out_root} instead")
+                else:
+                    n_del = _qa.clear_conflicting(found, s)
+                    self.log.emit(f"deleted {n_del} old file(s) in {len(found)} folder(s)")
             self._cancel = False
             self._t0 = time.perf_counter()
             self._set_running(True)

@@ -125,7 +125,9 @@ def _processes_usable() -> bool:
 def _proc_chunk(args) -> int:
     """Process-pool worker (JPEG 2000: Pillow holds the GIL while encoding
     it, so threads ran one at a time - measured 0.9x on 16 threads)."""
-    (bin_path, out_dir, key, width, height, stride, start, i0, i1, crop, lut8, prefix, suffix, quality) = args
+    (bin_path, out_dir, key, width, height, stride, start, i0, i1, crop, lut8, prefix, suffix, quality,
+     width_n, base_ms) = args
+    from ._naming import frame_name, stamp
     raw = np.memmap(bin_path, dtype=np.uint8, mode="r")
     cx, cy, cw, ch = crop
     info = FORMATS[key]
@@ -133,7 +135,9 @@ def _proc_chunk(args) -> int:
     for i in range(i0, i1):
         o = (start + i) * stride + 8
         f = raw[o : o + width * height].reshape(height, width)[cy : cy + ch, cx : cx + cw]
-        Path(out_dir, f"{prefix}{start + i:05d}{suffix}").write_bytes(_encode(lut8[f], info, quality))
+        fp = Path(out_dir, frame_name(prefix, start + i, width_n, suffix))
+        fp.write_bytes(_encode(lut8[f], info, quality))
+        stamp(fp, base_ms, i)
     return i1 - i0
 
 
@@ -173,6 +177,10 @@ def extract_python_format(
     frames = raw[: nframes_file * stride].reshape(nframes_file, stride)
     t0 = time.perf_counter()
     lut8 = np.asarray(lut8, dtype=np.uint8)
+    from ._naming import frame_name, mtime_base_ms, name_width, stamp
+
+    width_n = name_width(nframes_file)  # same names as the engine writes
+    base_ms = mtime_base_ms(count)
 
     def window(i0: int, i1: int) -> np.ndarray:
         px = frames[start + i0 : start + i1, 8 : 8 + width * height].reshape(-1, height, width)
@@ -210,7 +218,7 @@ def extract_python_format(
         workers = jobs or os.cpu_count() or 1
         chunk = 32
         args = [(bin_path, str(out), info.key, width, height, stride, start, i0, min(count, i0 + chunk),
-                 (cx, cy, cw, ch), lut8.tolist(), prefix, suffix, quality)
+                 (cx, cy, cw, ch), lut8.tolist(), prefix, suffix, quality, width_n, base_ms)
                 for i0 in range(0, count, chunk)]
         finished = set()
         pool = ProcessPoolExecutor(max_workers=workers)
@@ -249,7 +257,9 @@ def extract_python_format(
             i1 = min(count, i0 + chunk)
             w8 = window(i0, i1)
             for k in range(i1 - i0):
-                (out / f"{prefix}{start + i0 + k:05d}{suffix}").write_bytes(_encode(w8[k], info, quality))
+                fp = out / frame_name(prefix, start + i0 + k, width_n, suffix)
+                fp.write_bytes(_encode(w8[k], info, quality))
+                stamp(fp, base_ms, i0 + k)
             return i1 - i0
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -303,3 +313,10 @@ def quality_report(expected: np.ndarray, decoded: np.ndarray) -> dict:
         "mean_abs_error": float(np.mean(np.abs(diff))),
         "psnr_db": float("inf") if mse == 0 else float(10 * np.log10(peak**2 / mse)),
     }
+
+
+def effective_ext(fmt: str, ext: str) -> str:
+    """The extension a run really writes: the caller's, except that the
+    PNG default ".Png" follows the chosen format."""
+    f = get(fmt)
+    return ext if (ext and not (ext == ".Png" and f.key != "png")) else f.ext

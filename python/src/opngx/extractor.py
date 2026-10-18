@@ -113,6 +113,7 @@ class Extractor:
         fmt: str = "png",  # see opngx.formats.FORMATS: png tif pgm bmp jpg webp jp2 npy
         jpeg_quality: int = 90,
         webp_quality: int = 100,  # 100 = lossless WebP (default); below = lossy
+        allow_mixed: bool = False,  # write into a folder holding another run's frames
         backend: str = "auto",  # auto | libdeflate | zlib
         jobs: int = 0,
         level: int = 1,
@@ -144,22 +145,22 @@ class Extractor:
         # the file, in batch exactly as in single scope. Sidecar values are
         # now used only when the caller supplies none, which keeps
         # reference mode's vendor-parity purpose intact.
-        if mode is QualityMode.RAW:
-            brightness = contrast = 0.0
-            gamma = 1.0
-        elif mode is QualityMode.CUSTOM:
-            brightness = brightness if brightness is not None else 0.0
-            contrast = contrast if contrast is not None else 0.0
-            gamma = gamma if gamma is not None else 1.0
-        else:  # REFERENCE
-            brightness = self.meta.brightness if brightness is None else brightness
-            contrast = self.meta.contrast if contrast is None else contrast
-            gamma = self.meta.gamma if gamma is None else gamma
+        brightness, contrast, gamma = self._resolve_transform(mode, brightness, contrast, gamma)
 
         from . import formats as _formats
 
         finfo = _formats.get(fmt)  # ValueError for an unknown format
         fmt = finfo.key
+        self._allow_mixed = bool(allow_mixed)
+        lib = load_library() if finfo.engine == "native" else None
+        if lib is None:
+            # Python writers: the same output-folder guard as the engine's
+            # (v2.1.1) - never mix two recordings / settings in one folder
+            from . import _naming
+
+            rec, st_ = self._identity(finfo, brightness, contrast, gamma, bit_depth, channels,
+                                      jpeg_quality, webp_quality, prefix, ext, crop)
+            _naming.output_guard(str(out_dir), self.meta.bin_path, rec, st_, allow_mixed)
         if finfo.engine == "python":
             return self._run_python_format(
                 finfo, out_dir, mode, brightness, contrast, gamma, bit_depth,
@@ -167,7 +168,6 @@ class Extractor:
                 export_timestamps, export_metadata, progress, should_cancel, crop,
             )
 
-        lib = load_library()
         if lib is not None:
             return self._run_native(
                 lib,
@@ -217,6 +217,49 @@ class Extractor:
         )
 
     # ------------------------------------------------------------------ #
+    def _resolve_transform(self, mode, brightness, contrast, gamma):
+        """The curve a run really uses (one rule for extract() and the
+        output-folder pre-check)."""
+        mode = QualityMode(mode)
+        if mode is QualityMode.RAW:
+            return 0.0, 0.0, 1.0
+        if mode is QualityMode.CUSTOM:
+            return (brightness if brightness is not None else 0.0,
+                    contrast if contrast is not None else 0.0,
+                    gamma if gamma is not None else 1.0)
+        return (self.meta.brightness if brightness is None else brightness,
+                self.meta.contrast if contrast is None else contrast,
+                self.meta.gamma if gamma is None else gamma)
+
+    def _identity(self, finfo, brightness, contrast, gamma, bit_depth, channels,
+                  jpeg_quality, webp_quality, prefix, ext, crop):
+        """The (recording, settings) record a run writes - identical to the
+        C engine's for the same run (src/extract.c run_identity)."""
+        from . import _naming
+        from .quality import build_lut
+
+        eff_ext = ext if (ext and not (ext == ".Png" and finfo.key != "png")) else finfo.ext
+        bits_eff = bit_depth if 16 in finfo.bit_depths else 8
+        q = webp_quality if finfo.key == "webp" else jpeg_quality
+        return _naming.run_identity(
+            self.meta.bin_path, self.meta.frame_stride, self.meta.width, self.meta.height,
+            build_lut(brightness, contrast, gamma), bits_eff, channels, finfo.key, q, crop, prefix, eff_ext)
+
+    def output_conflict(self, out_dir, *, mode="reference", brightness=None, contrast=None, gamma=None,
+                        bit_depth=8, channels=6, fmt="png", jpeg_quality=90, webp_quality=100,
+                        prefix="brow_", ext=".Png", crop=None, **_ignored) -> Optional[str]:
+        """Why extract(out_dir, ...) with these settings would be refused -
+        the folder holds frames of another recording or other settings - or
+        None. Lets a UI ask the user BEFORE starting (v2.1.1)."""
+        from . import _naming
+        from . import formats as _formats
+
+        finfo = _formats.get(fmt)
+        b, c, g = self._resolve_transform(mode, brightness, contrast, gamma)
+        rec, st = self._identity(finfo, b, c, g, bit_depth, channels, jpeg_quality, webp_quality,
+                                 prefix, ext, self._resolve_crop(crop))
+        return _naming.conflict(str(out_dir), rec, st)
+
     def _resolve_crop(
         self, crop: Optional[tuple[int, int, int, int]]
     ) -> tuple[int, int, int, int]:
@@ -297,6 +340,8 @@ class Extractor:
         job = lib.opngx_job_create(ctypes.byref(p), err, len(err))
         if not job:
             raise RuntimeError(f"engine rejected job: {err.value.decode()}")
+        if hasattr(lib, "opngx_job_allow_mixed"):
+            lib.opngx_job_allow_mixed(job, int(getattr(self, "_allow_mixed", False)))
 
         try:
             total = lib.opngx_progress_total(job)
@@ -366,6 +411,10 @@ class Extractor:
                 if not job_err:
                     job_err = err.value.decode(errors="replace")
                 detail = f" (rc={rc})" if rc not in (0, 1) else ""
+                if "would mix two sequences" in job_err:
+                    from ._naming import MixedOutputError
+
+                    raise MixedOutputError(job_err)
                 raise RuntimeError(
                     f"native run failed{detail}: {job_err or 'no detail from engine'}"
                 )

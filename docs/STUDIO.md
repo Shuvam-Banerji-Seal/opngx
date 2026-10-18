@@ -32,6 +32,12 @@ JPEG (40–100) and WebP (100 = lossless, lower = lossy); the other formats are
 lossless and have no quality setting. The *level* slider is the PNG compression
 effort: 1 (default) is the fastest, and every level gives the same pixels.
 
+**Frame order:** frame names sort in frame order for recordings of any length,
+and so do their file dates. If the output folder already holds frames from
+another recording, or from other settings, Extract does not mix them in. It asks
+whether to use a new folder or delete the old frames first. See
+*Frame order and the output folder* in the format guide.
+
 ## Video
 One video file from the loaded recording, with the bundled ffmpeg:
 - **Codecs:** H.264 (plays everywhere), H.265, VP9, AV1, **FFV1 (lossless,
