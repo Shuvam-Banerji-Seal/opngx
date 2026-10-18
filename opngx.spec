@@ -1,13 +1,17 @@
-# PyInstaller spec — opngx studio for Windows.
-# Built inside CI's windows job AFTER the native engine is compiled:
+# PyInstaller spec — opngx studio for Windows and Linux.
+# Built in CI's release jobs AFTER the native engine is compiled:
 #   pyinstaller --noconfirm opngx.spec
-# Expects build-win/libopngx.dll and dist/opngx-engine.exe to exist.
+# Windows expects build-win/libopngx.dll + build-win/opngx-engine.exe,
+# Linux build-rel/libopngx.so + build-rel/opngx-engine. OPNGX_NATIVE_DIR
+# overrides the folder (v2.1.2: Linux studio).
 import os
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 root = os.path.abspath(".")
-dll = os.path.join(root, "build-win", "libopngx.dll")
+WIN = os.name == "nt"
+native_dir = os.environ.get("OPNGX_NATIVE_DIR") or os.path.join(root, "build-win" if WIN else "build-rel")
+dll = os.path.join(native_dir, "libopngx.dll" if WIN else "libopngx.so")
 
 hidden = collect_submodules("opngx") + [
     "opngx.ui.app", "opngx.ui.theme", "opngx.ui.widgets",
@@ -42,15 +46,14 @@ binaries = [(dll, ".")] if os.path.exists(dll) else []
 
 # bundle the CLI engine so the portable studio is self-contained:
 # verify_against_bin / verifybin work with zero external files
-engine_exe = os.path.join(root, "build-win", "opngx-engine.exe")
+engine_exe = os.path.join(native_dir, "opngx-engine.exe" if WIN else "opngx-engine")
 if os.path.exists(engine_exe):
     binaries.append((engine_exe, "."))
 if ffbin:
     # bundle under a flat, predictable name so resolve_ffmpeg can find it
     import shutil as _sh
     _dst = os.path.join(root, "_bundled_ffmpeg")
-    ext = ".exe" if os.name == "nt" or "win" in ffbin.lower() else ""
-    if ext and not _dst.endswith(".exe"):
+    if WIN:
         _dst += ".exe"
     _sh.copy2(ffbin, _dst)
     binaries.append((_dst, "."))

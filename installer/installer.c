@@ -57,8 +57,8 @@
 #define RES_ENGINE 101
 #define RES_STUDIO 102
 #define RES_DOCS   103
-#define APP_VERSION "2.1.1"
-#define APP_VERSION_W L"2.1.1"
+#define APP_VERSION "2.1.2"
+#define APP_VERSION_W L"2.1.2"
 #define APP_NAME_W  L"opngx"
 #define PUBLISHER_W L"opngx contributors"
 #define UNINST_KEY  L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\opngx"

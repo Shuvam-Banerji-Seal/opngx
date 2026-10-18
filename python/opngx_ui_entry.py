@@ -683,7 +683,69 @@ def _selftest_speed() -> int:
         logf.flush()
 
 
+def _desktop_paths():
+    import os
+    from pathlib import Path
+
+    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return (data / "applications" / "opngx-studio.desktop",
+            data / "icons" / "hicolor" / "256x256" / "apps" / "opngx-studio.png")
+
+
+def _install_desktop() -> int:
+    """Linux: add opngx studio to the application menu (per user, no root).
+    The entry starts THIS file where it is now; run it again after moving it."""
+    import os
+    import shutil
+    import subprocess
+
+    if os.name == "nt":
+        print("--install-desktop is for Linux; on Windows use opngx-setup.exe")
+        return 1
+    exe = os.path.abspath(sys.executable)
+    entry, icon = _desktop_paths()
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    icon.parent.mkdir(parents=True, exist_ok=True)
+    src = os.path.join(getattr(sys, "_MEIPASS", ""), "assets", "logo", "icon.png")
+    if os.path.isfile(src):
+        shutil.copyfile(src, icon)
+    q = '"' + exe.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$") + '"'
+    entry.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=opngx studio\n"
+        "Comment=Pixel-exact extraction, video and analysis of Optronis TimeViewer recordings\n"
+        f"Exec={q} %F\n"
+        f"TryExec={exe}\n"
+        f"Icon={icon if icon.exists() else 'image-x-generic'}\n"
+        "Terminal=false\n"
+        "Categories=Science;Physics;\n"
+        "StartupWMClass=opngx-studio\n",
+        encoding="utf-8",
+    )
+    os.chmod(entry, 0o755)
+    for cmd in (["update-desktop-database", str(entry.parent)], ["gtk-update-icon-cache", "-q", str(icon.parents[2])]):
+        try:
+            subprocess.run(cmd, check=False, capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    print(f"added to the application menu: {entry}\nstarts: {exe}")
+    return 0
+
+
+def _uninstall_desktop() -> int:
+    for p in _desktop_paths():
+        if p.exists():
+            p.unlink()
+            print(f"removed {p}")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--install-desktop" in sys.argv:
+        raise SystemExit(_install_desktop())
+    if "--uninstall-desktop" in sys.argv:
+        raise SystemExit(_uninstall_desktop())
     if "--selftest-speed" in sys.argv:
         raise SystemExit(_selftest_speed())
     if "--selftest-analysis" in sys.argv:

@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:  # build + test everything without publishing
 
 permissions:
   contents: write
@@ -251,11 +252,77 @@ jobs:
           name: lin-rel
           path: stage/*
 
+  linux-studio:
+    # the single-file Linux studio (v2.1.2). Built on the OLDEST supported
+    # runner on purpose: a PyInstaller binary needs the build machine's glibc
+    # or newer, so 22.04 (glibc 2.35) also covers Debian 12, Fedora, Arch...
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System libraries (bundled into the binary by PyInstaller)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-image0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-randr0 \
+            libxcb-xfixes0 libfontconfig1 libdbus-1-3 libwayland-client0 \
+            libwayland-cursor0 libwayland-egl1 desktop-file-utils
+      - name: Build libdeflate (static, PIC) + engine
+        run: |
+          git clone --depth 1 --branch v1.22 https://github.com/ebiggers/libdeflate.git /tmp/ld
+          cmake -S /tmp/ld -B /tmp/ldb -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_BUILD_SHARED_LIB=OFF -DLIBDEFLATE_BUILD_TESTS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build /tmp/ldb -j
+          mkdir -p vendor/linux vendor/inc
+          find /tmp/ldb -name 'libdeflate.a' -exec cp {} vendor/linux/ \;
+          cp /tmp/ld/libdeflate.h vendor/inc/
+          cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release \
+            -DLIBDEFLATE_LIB=$PWD/vendor/linux/libdeflate.a \
+            -DLIBDEFLATE_INC=$PWD/vendor/inc -DOPNGX_WITH_ZLIB=OFF
+          cmake --build build-rel -j
+          ./build-rel/opngx-engine --version
+          ldd build-rel/libopngx.so
+      - name: Build opngx-studio (Qt + engine + ffmpeg in one file)
+        run: |
+          python -m pip install --quiet pyinstaller numpy pillow PySide6 imageio-ffmpeg
+          pip install --quiet "./python[qt]"
+          OPNGX_NATIVE_DIR=$PWD/build-rel pyinstaller --noconfirm opngx.spec
+          ls -la dist/opngx-studio
+      - name: Selftests inside the binary (UI, engine, analysis, batch, video, speed)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          fail=0
+          for t in ui engine analysis batch video speed; do
+            OPNGX_SELFTEST_LOG=$PWD/selftest-$t.log ./dist/opngx-studio --selftest-$t || { echo "::error::selftest-$t failed"; fail=1; }
+            cat selftest-$t.log 2>/dev/null || true
+          done
+          exit $fail
+      - name: Desktop entry is valid
+        run: |
+          XDG_DATA_HOME=$PWD/xdg ./dist/opngx-studio --install-desktop
+          desktop-file-validate xdg/applications/opngx-studio.desktop
+      - name: Stage assets
+        run: |
+          mkdir -p stage
+          V="${GITHUB_REF_NAME}"
+          cp dist/opngx-studio stage/opngx-studio-linux-x86_64-$V
+          chmod +x stage/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lin-studio
+          path: stage/*
+
   wheels:
     uses: ./.github/workflows/wheels.yml
 
   publish:
-    needs: [windows, linux, wheels]
+    needs: [windows, linux, linux-studio, wheels]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -277,6 +344,9 @@ jobs:
             * opngx-studio-portable-*.exe - portable Windows GUI
 
             * opngx-engine-*.exe - raw Windows CLI
+
+            * opngx-studio-linux-x86_64-* - Linux studio, single file
+              (chmod +x, then run; --install-desktop adds a menu entry)
 
             * Linux tarball / .deb / arch package - static CLI, any distro
 
