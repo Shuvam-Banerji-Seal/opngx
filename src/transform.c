@@ -12,8 +12,14 @@
 #if defined(__GNUC__) && !defined(__clang__) && defined(__ELF__) && defined(__x86_64__)
    /* ifunc-based runtime dispatch: glibc/Linux x86-64 only.
     * Other platforms run the portable -O3 autovectorized version. */
-#  define OPNGX_MULTIVERSION(fn) \
-     __attribute__((target_clones("arch=x86-64-v4","arch=x86-64-v3","default")))
+#  if __GNUC__ >= 12
+#    define OPNGX_MULTIVERSION(fn) \
+       __attribute__((target_clones("arch=x86-64-v4","arch=x86-64-v3","default")))
+#  else
+     /* GCC < 12 has no dispatcher for arch=x86-64-vN: portable version.
+      * (The Linux studio is built on Ubuntu 22.04 with gcc-12 for this.) */
+#    define OPNGX_MULTIVERSION(fn)
+#  endif
 #else
 #  define OPNGX_MULTIVERSION(fn)
 #endif
